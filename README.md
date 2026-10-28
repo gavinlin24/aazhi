@@ -45,8 +45,10 @@ failure.
   interactions, so there is no always-on process to keep alive and no privileged
   Discord intents to request.
 - Cloudflare D1 for storage.
-- Gemini for receipt extraction.
+- Claude Haiku 5.5 on the Anthropic API for receipt extraction, at roughly $0.00083 per receipt.
 - Runs inside free tiers at friend-group volume.
+
+Why each piece was chosen: [docs/stack.md](docs/stack.md).
 
 ## Status
 

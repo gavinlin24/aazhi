@@ -438,13 +438,13 @@ after a quiet period.
 a daily row budget orders of magnitude above friend-group traffic. One
 platform, one deploy, one place for things to go wrong.
 
-**Gemini's free tier** for receipt extraction, currently around 1,500
-requests a day at no cost, which is roughly 1,500 dinners. The known
-cost: free-tier terms permit the provider to train on submitted content.
-Restaurant receipts are an acceptable thing to send under those terms,
-but the author should know it rather than discover it. Extraction asks
-for structured JSON against a fixed schema and retries on schema
-violation.
+**Claude Haiku 5.5 on the Anthropic API** for receipt extraction, at
+roughly $0.00083 per receipt, so a dollar covers about 1,200 dinners.
+Gemini's free tier was considered and rejected: Google no longer
+publishes its free-tier request limits in its documentation, and
+free-tier content is used to improve Google's products, with human
+review. Extraction asks for structured JSON against a fixed schema and
+retries on schema violation.
 
 **No image storage.** Discord already hosts the attachment. The bot fetches
 it at scan time, extracts, and persists only the parsed data. That
