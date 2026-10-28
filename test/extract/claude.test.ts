@@ -336,6 +336,48 @@ describe("extractReceipt", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("gives up with a model error, without retrying, once the caller's deadline passes", async () => {
+    // Behaves like a real fetch that never answers: it only ends when aborted.
+    fetchMock.mockImplementation(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))),
+    );
+    const deadline = new AbortController();
+
+    const result = extractReceipt([URL_ONE], "k", { signal: deadline.signal });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    deadline.abort(new DOMException("deadline", "TimeoutError"));
+
+    await expect(result).resolves.toEqual({ ok: false, reason: "model-error" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a malformed reply once the deadline has passed", async () => {
+    const deadline = new AbortController();
+    fetchMock.mockImplementationOnce(async () => {
+      deadline.abort(new DOMException("deadline", "TimeoutError"));
+      return toolUseResponse({ not: "the schema" });
+    });
+
+    await expect(extractReceipt([URL_ONE], "k", { signal: deadline.signal })).resolves.toEqual({
+      ok: false,
+      reason: "model-error",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still uses a good answer that arrived just as the deadline passed", async () => {
+    const deadline = new AbortController();
+    fetchMock.mockImplementationOnce(async () => {
+      deadline.abort(new DOMException("deadline", "TimeoutError"));
+      return toolUseResponse(SAIGON_TOOL_INPUT);
+    });
+
+    const result = await extractReceipt([URL_ONE], "k", { signal: deadline.signal });
+
+    expect(result).toMatchObject({ ok: true, reconciles: true });
+  });
+
   it("reports a model error when the network call itself fails", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
 

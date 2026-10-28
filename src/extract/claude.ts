@@ -32,11 +32,17 @@ type Attempt =
   | { kind: "malformed" }
   | { kind: "api-error" };
 
-async function callModel(imageUrls: string[], apiKey: string, onUsage: (usage: unknown) => void): Promise<Attempt> {
+async function callModel(
+  imageUrls: string[],
+  apiKey: string,
+  onUsage: (usage: unknown) => void,
+  signal: AbortSignal | undefined,
+): Promise<Attempt> {
   let response: Response;
   try {
     response = await fetch(MESSAGES_URL, {
       method: "POST",
+      signal,
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
@@ -82,7 +88,13 @@ async function callModel(imageUrls: string[], apiKey: string, onUsage: (usage: u
   return toolUse ? { kind: "tool-input", input: toolUse.input } : { kind: "malformed" };
 }
 
-export async function extractReceipt(imageUrls: string[], apiKey: string): Promise<ExtractionResult> {
+// `signal` is the caller's deadline. An aborted call surfaces as a model error
+// ("try again shortly") rather than hanging until the runtime kills the work.
+export async function extractReceipt(
+  imageUrls: string[],
+  apiKey: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ExtractionResult> {
   let usageLogged = false;
   // The plan's cost estimate assumes a photo hits the 4,784 visual-token cap;
   // this line is how we find out whether that is true.
@@ -93,7 +105,10 @@ export async function extractReceipt(imageUrls: string[], apiKey: string): Promi
   };
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await callModel(imageUrls, apiKey, logFirstUsage);
+    // A retry past the deadline would only be aborted; an answer that already
+    // arrived is still used.
+    if (attempt > 0 && options.signal?.aborted) break;
+    const result = await callModel(imageUrls, apiKey, logFirstUsage, options.signal);
     if (result.kind === "api-error") return { ok: false, reason: "model-error" };
     if (result.kind === "malformed") continue;
 

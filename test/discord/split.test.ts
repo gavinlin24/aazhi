@@ -75,7 +75,7 @@ interface Call {
 }
 
 let calls: Call[];
-let anthropic: () => Response | Promise<Response>;
+let anthropic: (init?: RequestInit) => Response | Promise<Response>;
 let discordFailures: number;
 
 function discordCalls(): Call[] {
@@ -115,7 +115,7 @@ beforeEach(async () => {
       auth: headers.get("authorization"),
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
-    if (url.startsWith("https://api.anthropic.com")) return anthropic();
+    if (url.startsWith("https://api.anthropic.com")) return anthropic(init);
     if (discordFailures > 0) {
       discordFailures--;
       return new Response("upstream sad", { status: 500 });
@@ -461,6 +461,24 @@ describe("/split", () => {
     const { results } = await db.prepare("SELECT id, status FROM bills").all();
     expect(results).toEqual([{ id: "old", status: "draft" }]);
     expect(discordCalls().some((c) => c.url.includes("msg-old"))).toBe(false);
+  });
+
+  it("gives up on a receipt reader that never answers, well inside the background time limit", async () => {
+    await seedDraft("old");
+    // Like a real fetch that hangs: it ends only when its signal aborts.
+    anthropic = (init) =>
+      new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+
+    const { background } = await invoke(slashSplit());
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(originalEdits()).toHaveLength(0);
+    await settle(background);
+
+    const [post] = originalEdits();
+    expect(post!.body.content).toMatch(/try again/i);
+    expect(anthropicCalls()).toHaveLength(1);
+    const { results } = await db.prepare("SELECT id, status FROM bills").all();
+    expect(results).toEqual([{ id: "old", status: "draft" }]);
   });
 
   it("says something went wrong rather than leaving the message thinking when the post fails", async () => {

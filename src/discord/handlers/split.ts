@@ -36,6 +36,13 @@ const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string
 
 const SAVE_FAILED = "Something went wrong saving this bill. Try again in a minute.";
 
+// Cloudflare cancels background work 30 s after the response, silently, so a
+// hung read would leave "thinking..." forever. Reading gets 20 s across both
+// attempts; saving and posting the bill fit easily in the 10 s left, and the
+// one wait after that (the superseded message's edit window) comes after the
+// new bill is already on screen.
+const READ_DEADLINE_MS = 20_000;
+
 function isImage(attachment: APIAttachment | undefined): attachment is APIAttachment {
   return attachment?.content_type?.startsWith("image/") ?? false;
 }
@@ -136,7 +143,13 @@ async function readAndPost(
   interactionToken: string,
   env: Env,
 ): Promise<void> {
-  const read = await extractReceipt(imageUrls, env.ANTHROPIC_API_KEY);
+  // A cleared timer rather than AbortSignal.timeout: nothing outlives a read
+  // that finished early, and tests can drive the deadline with fake timers.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new DOMException("receipt read timed out", "TimeoutError")), READ_DEADLINE_MS);
+  const read = await extractReceipt(imageUrls, env.ANTHROPIC_API_KEY, { signal: deadline.signal }).finally(() =>
+    clearTimeout(timer),
+  );
   // A failed read creates nothing and leaves any open draft here alone: a bad
   // rescan should not kill a good bill.
   if (!read.ok) {
