@@ -41,20 +41,54 @@ it("gives leftover cents to the lowest participant ids in a stable order", () =>
     .toEqual([334, 333, 333]);
 });
 
+// Each diner owes exactly 100.5 of a 201 total, so one cent decides the tie.
+const TIED: BillInput = {
+  items: [
+    { id: "b-dish", label: "Dish", cents: 100, claimedBy: ["b"] },
+    { id: "a-dish", label: "Dish", cents: 100, claimedBy: ["a"] },
+  ],
+  taxCents: 1,
+  tipCents: 0,
+  payer: "b",
+  participants: ["b", "a"],
+  pardoned: [],
+};
+
 it("breaks a largest-remainder tie by the lowest participant id", () => {
-  // each owes exactly 100.5 of a 201 total, so one cent decides the tie
+  const r = splitBill(TIED);
+  expect(r.shares.map(s => [s.participant, s.owedCents])).toEqual([["a", 101], ["b", 100]]);
+});
+
+it("never displays a tip line when the bill has no tip", () => {
+  // the rounding cent that would make b's tip -1 lands on the tax line instead
+  for (const bill of [TIED, { ...SAIGON, tipCents: 0 }]) {
+    for (const s of splitBill(bill).shares) {
+      expect(s.tipCents).toBe(0);
+      expect(s.subtotalCents + s.taxCents).toBe(s.owedCents);
+    }
+  }
+});
+
+it("lets a person whose own lines net negative owe a negative share", () => {
+  // b's coupon outweighs b's dish, so b is owed money back; the engine
+  // reflects claims as made rather than shifting b's credit onto a
   const r = splitBill({
     items: [
-      { id: "b-dish", label: "Dish", cents: 100, claimedBy: ["b"] },
-      { id: "a-dish", label: "Dish", cents: 100, claimedBy: ["a"] },
+      { id: "dish-a", label: "Dish", cents: 5000, claimedBy: ["a"] },
+      { id: "dish-b", label: "Dish", cents: 300, claimedBy: ["b"] },
+      { id: "coupon", label: "Coupon", cents: -1000, claimedBy: ["b"] },
     ],
-    taxCents: 1,
-    tipCents: 0,
-    payer: "b",
-    participants: ["b", "a"],
+    taxCents: 400,
+    tipCents: 800,
+    payer: "a",
+    participants: ["a", "b"],
     pardoned: [],
   });
-  expect(r.shares.map(s => [s.participant, s.owedCents])).toEqual([["a", 101], ["b", 100]]);
+  const byId = Object.fromEntries(r.shares.map(s => [s.participant, s]));
+  expect(byId.b.subtotalCents).toBe(-700);
+  expect(byId.b.owedCents).toBe(-895);
+  expect(byId.a.owedCents).toBe(6395);
+  expect(byId.a.owedCents + byId.b.owedCents).toBe(r.distributableCents);
 });
 
 it("is invariant under claim order", () => {
@@ -138,7 +172,8 @@ describe("on 1,000 generated bills", () => {
     return {
       items,
       taxCents: randomInt(random, 0, 3000),
-      tipCents: randomInt(random, 0, 6000),
+      // A no-tip bill is common and is where a stray cent could show as a -$0.01 tip.
+      tipCents: random() < 0.15 ? 0 : randomInt(random, 0, 6000),
       payer: participants[randomInt(random, 0, participants.length - 1)],
       participants,
       pardoned: participants.filter(() => random() < 0.2),
@@ -147,7 +182,7 @@ describe("on 1,000 generated bills", () => {
 
   const seeds = Array.from({ length: 1000 }, (_, i) => i + 1);
 
-  it("keeps every cent accounted for, every column summed, and claim order irrelevant", () => {
+  it("keeps every cent accounted for, every column summed and honestly signed, and claim order irrelevant", () => {
     for (const seed of seeds) {
       const random = seededRandom(seed);
       const bill = generateBill(random);
@@ -163,9 +198,13 @@ describe("on 1,000 generated bills", () => {
       for (const s of r.shares) {
         expect(Number.isInteger(s.owedCents), why).toBe(true);
         expect(s.subtotalCents + s.taxCents + s.tipCents, why).toBe(s.owedCents);
-      }
-      if (bill.items.every((item) => item.cents >= 0)) {
-        expect(r.shares.every((s) => s.owedCents >= 0), why).toBe(true);
+        // A share can only go negative when that person's own lines net negative.
+        if (s.subtotalCents >= 0) expect(s.owedCents, why).toBeGreaterThanOrEqual(0);
+        if (s.subtotalCents <= 0) expect(s.owedCents, why).toBeLessThanOrEqual(0);
+        // The displayed tip never points the opposite way from the exact slice
+        // tip * subtotal / billSubtotal, and is zero when that slice is zero.
+        const exactTipSign = Math.sign(bill.tipCents) * Math.sign(s.subtotalCents) * Math.sign(r.billSubtotalCents);
+        expect(s.tipCents === 0 || Math.sign(s.tipCents) === exactTipSign, why).toBe(true);
       }
       expect(splitBill(shuffleClaims(bill, random)), why).toEqual(r);
     }

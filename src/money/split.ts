@@ -103,14 +103,19 @@ export function splitBill(input: BillInput): SplitResult {
   const shares: Share[] = participants.map((p) => {
     const subtotalCents = isZeroBill ? 0 : subtotals.get(p)!;
     const owedCents = owed.get(p)!;
-    const taxCents = isZeroBill ? 0 : roundDiv(input.taxCents, subtotalCents, billSubtotalCents);
+    const roundedTaxCents = isZeroBill ? 0 : roundDiv(input.taxCents, subtotalCents, billSubtotalCents);
+    // The tip line absorbs the rounding so the three displayed lines add up to
+    // the total; tip is the payer's own number, not one printed on paper. But a
+    // stray cent must not show a -$0.01 tip on a no-tip bill, or any tip pointing
+    // the opposite way from the person's real slice, so then tax takes it.
+    const absorbingTipCents = owedCents - subtotalCents - roundedTaxCents;
+    const exactTipSign = Math.sign(input.tipCents) * Math.sign(subtotalCents) * Math.sign(billSubtotalCents);
+    const tipCents = Math.sign(absorbingTipCents) === exactTipSign ? absorbingTipCents : 0;
     return {
       participant: p,
       subtotalCents,
-      taxCents,
-      // The tip line absorbs the rounding so the three displayed lines add up
-      // to the total; tip is the payer's own number, not one printed on paper.
-      tipCents: owedCents - subtotalCents - taxCents,
+      taxCents: owedCents - subtotalCents - tipCents,
+      tipCents,
       owedCents,
       pardoned: pardoned.has(p),
     };
