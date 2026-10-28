@@ -11,6 +11,7 @@ import {
   insertItems,
   openDraftInChannel,
   removeClaim,
+  supersedeOlderDrafts,
   toSplitInput,
   type BillStatus,
   type NewBill,
@@ -341,5 +342,18 @@ describe("bill repository", () => {
 
   it("refuses to build split input for a bill that does not exist", async () => {
     await expect(toSplitInput(db, "ghost")).rejects.toThrow(/ghost/);
+  });
+
+  it("leaves the newer of two racing drafts open whichever supersedes first", async () => {
+    await createBill(db, newBill("b-first"));
+    await createBill(db, newBill("b-second"));
+
+    // Both runs created their bill before either superseded: the older run's
+    // sweep must not take out the newer bill.
+    expect(await supersedeOlderDrafts(db, "chan-1", "b-first")).toEqual([]);
+    const swept = await supersedeOlderDrafts(db, "chan-1", "b-second");
+
+    expect(swept.map((b) => [b.id, b.status])).toEqual([["b-first", "superseded"]]);
+    expect((await openDraftInChannel(db, "chan-1"))?.id).toBe("b-second");
   });
 });

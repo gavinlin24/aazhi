@@ -5,6 +5,7 @@ import {
   type APIInteractionResponse,
 } from "discord-api-types/v10";
 import type { Env } from "../env";
+import { splitCommand, splitMessageCommand } from "./handlers/split";
 
 export type InteractionHandler = (body: APIInteraction, env: Env, ctx: ExecutionContext) => Promise<Response>;
 
@@ -12,7 +13,10 @@ export type InteractionHandler = (body: APIInteraction, env: Env, ctx: Execution
 // here. Commands are keyed by exact name (the message command by its display
 // name). Components are keyed by a custom_id prefix, so a handler owns every
 // button of its kind and reads the bill id out of the rest of the custom_id.
-export const commandHandlers: Record<string, InteractionHandler> = {};
+export const commandHandlers: Record<string, InteractionHandler> = {
+  split: splitCommand,
+  "Split this receipt": splitMessageCommand,
+};
 export const componentHandlers: Record<string, InteractionHandler> = {};
 
 function respond(body: APIInteractionResponse): Response {

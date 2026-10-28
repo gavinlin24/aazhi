@@ -208,6 +208,60 @@ export async function openDraftInChannel(db: D1Database, channelId: string): Pro
   return row ? toBill(row) : null;
 }
 
+// Only lines read less confidently than the bill's best line are worth pointing
+// at: when every line came back equally sure, naming three of them would send
+// the payer to check lines at random.
+export async function getLeastConfidentItemIds(db: D1Database, billId: string, limit = 3): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id FROM bill_items
+       WHERE bill_id = ?1 AND source = 'ocr'
+         AND confidence < (SELECT MAX(confidence) FROM bill_items WHERE bill_id = ?1 AND source = 'ocr')
+       ORDER BY confidence, position LIMIT ?2`,
+    )
+    .bind(billId, limit)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
+// Supersedes only drafts older than the new bill, so two /split runs racing in
+// one channel leave the later one open instead of killing each other. A bill
+// that was confirmed once and reopened is not a stale draft: it may carry
+// payments, and a new /split must not quietly void them.
+export async function supersedeOlderDrafts(db: D1Database, channelId: string, newBillId: string): Promise<BillRow[]> {
+  const { results } = await db
+    .prepare(
+      `UPDATE bills SET status = 'superseded', revision = revision + 1
+       WHERE channel_id = ?1 AND status IN ('reading', 'draft') AND confirmed_at IS NULL
+         AND rowid < (SELECT rowid FROM bills WHERE id = ?2)
+       RETURNING ${BILL_COLUMNS}`,
+    )
+    .bind(channelId, newBillId)
+    .all<BillDbRow>();
+  return results.map(toBill);
+}
+
+export async function setBillMessage(db: D1Database, billId: string, channelId: string, messageId: string): Promise<void> {
+  await db
+    .prepare("UPDATE bills SET channel_id = ?, message_id = ? WHERE id = ?")
+    .bind(channelId, messageId, billId)
+    .run();
+}
+
+// D1's clock rather than the Worker's: every isolate compares against the same
+// clock, so a refused request can never land after the holder's final read.
+export async function claimEditLease(db: D1Database, billId: string, windowMs: number): Promise<boolean> {
+  const now = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
+  const { meta } = await db
+    .prepare(
+      `UPDATE bills SET edit_lease_until = ${now} + ?2
+       WHERE id = ?1 AND (edit_lease_until IS NULL OR edit_lease_until < ${now})`,
+    )
+    .bind(billId, windowMs)
+    .run();
+  return meta.changes === 1;
+}
+
 export async function toSplitInput(db: D1Database, billId: string): Promise<BillInput> {
   const [bill, items, claims, participants, pardoned] = await db.batch([
     db.prepare("SELECT payer_id, tax_cents, tip_cents FROM bills WHERE id = ?").bind(billId),

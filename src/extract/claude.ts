@@ -16,7 +16,11 @@ const MODEL = "claude-haiku-5-5";
 // without letting a runaway response bill us for much.
 const MAX_TOKENS = 4096;
 
-export function reconciles(e: Extraction): { ok: boolean; discrepancyCents: Cents | null } {
+// Takes only the amounts so a stored bill is checked by the same rule as a
+// fresh read.
+export function reconciles(
+  e: Pick<Extraction, "taxCents" | "printedTotalCents"> & { items: { cents: Cents }[] },
+): { ok: boolean; discrepancyCents: Cents | null } {
   if (e.printedTotalCents === null) return { ok: false, discrepancyCents: null };
   const sum = e.items.reduce((total, item) => total + item.cents, 0) + (e.taxCents ?? 0);
   const discrepancy = sum - e.printedTotalCents;
