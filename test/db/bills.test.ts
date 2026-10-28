@@ -211,6 +211,65 @@ describe("bill repository", () => {
     expect((await getBillItems(db, "b-claim"))[0].claimedBy).toEqual([]);
   });
 
+  describe("claim writes stay inside their own bill", () => {
+    async function twoBills() {
+      for (const id of ["b-a", "b-b"]) {
+        await createBill(db, newBill(id));
+        await addParticipant(db, { billId: id, id: "dani", kind: "member", displayName: "Dani", addedBy: null });
+      }
+      await addParticipant(db, { billId: "b-b", id: "marcus", kind: "member", displayName: "Marcus", addedBy: null });
+      await insertItems(db, "b-a", [{ id: "x-a", label: "A", cents: 100, source: "ocr" }]);
+      await insertItems(db, "b-b", [{ id: "x-b", label: "B", cents: 100, source: "ocr" }]);
+    }
+
+    async function claimCount() {
+      const row = await db.prepare("SELECT COUNT(*) AS n FROM item_claims").first<{ n: number }>();
+      return row?.n;
+    }
+
+    it("refuses a claim on an unknown bill without writing it", async () => {
+      await twoBills();
+
+      await expect(addClaim(db, "ghost", "x-a", "dani")).rejects.toThrow(/ghost/);
+      expect(await claimCount()).toBe(0);
+    });
+
+    it("refuses an item that belongs to another bill and leaves both revisions alone", async () => {
+      await twoBills();
+
+      await expect(addClaim(db, "b-a", "x-b", "dani")).rejects.toThrow(/x-b/);
+      expect(await claimCount()).toBe(0);
+      expect((await getBill(db, "b-a"))?.revision).toBe(3);
+      expect((await getBill(db, "b-b"))?.revision).toBe(4);
+    });
+
+    it("refuses a claimant who is not a participant of that bill", async () => {
+      await twoBills();
+
+      await expect(addClaim(db, "b-a", "x-a", "marcus")).rejects.toThrow(/marcus/);
+      expect(await claimCount()).toBe(0);
+      expect((await toSplitInput(db, "b-a")).items[0].claimedBy).toEqual([]);
+    });
+
+    it("refuses to remove a claim through the wrong bill or an unknown one", async () => {
+      await twoBills();
+      await addClaim(db, "b-b", "x-b", "dani");
+
+      await expect(removeClaim(db, "b-a", "x-b", "dani")).rejects.toThrow(/x-b/);
+      await expect(removeClaim(db, "ghost", "x-b", "dani")).rejects.toThrow(/ghost/);
+      expect(await claimCount()).toBe(1);
+    });
+
+    it("still removes a stale claim by someone no longer on the bill", async () => {
+      await twoBills();
+      await addClaim(db, "b-b", "x-b", "marcus");
+      await db.prepare("DELETE FROM participants WHERE bill_id = 'b-b' AND id = 'marcus'").run();
+
+      await removeClaim(db, "b-b", "x-b", "marcus");
+      expect(await claimCount()).toBe(0);
+    });
+  });
+
   it("scopes a guest participant to its own bill", async () => {
     await createBill(db, newBill("b-one"));
     await createBill(db, newBill("b-two"));

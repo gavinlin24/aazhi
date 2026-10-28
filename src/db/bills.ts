@@ -256,26 +256,63 @@ export async function addParticipant(db: D1Database, p: Participant): Promise<nu
   ]);
 }
 
+// Checks run before the batch because a batch commits whatever it contains: a
+// bad id must be refused up front, not discovered after a stray row landed.
+async function assertItemInBill(
+  db: D1Database,
+  billId: string,
+  itemId: string,
+  participantId: ParticipantId | null,
+): Promise<void> {
+  const row = await db
+    .prepare(
+      `SELECT
+         EXISTS (SELECT 1 FROM bills WHERE id = ?1) AS bill,
+         EXISTS (SELECT 1 FROM bill_items WHERE id = ?2 AND bill_id = ?1) AS item,
+         ?3 IS NULL OR EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?3) AS who`,
+    )
+    .bind(billId, itemId, participantId)
+    .first<{ bill: number; item: number; who: number }>();
+  if (!row?.bill) throw new Error(`bill ${billId} not found`);
+  if (!row.item) throw new Error(`item ${itemId} is not on bill ${billId}`);
+  if (!row.who) throw new Error(`${participantId} is not a participant of bill ${billId}`);
+}
+
 export async function addClaim(
   db: D1Database,
   billId: string,
   itemId: string,
   participantId: ParticipantId,
 ): Promise<number> {
+  await assertItemInBill(db, billId, itemId, participantId);
   return mutate(db, billId, [
     db
-      .prepare("INSERT INTO item_claims (bill_item_id, participant_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
-      .bind(itemId, participantId),
+      .prepare(
+        `INSERT INTO item_claims (bill_item_id, participant_id)
+         SELECT i.id, p.id FROM bill_items i JOIN participants p ON p.bill_id = i.bill_id
+         WHERE i.id = ? AND i.bill_id = ? AND p.id = ?
+         ON CONFLICT DO NOTHING`,
+      )
+      .bind(itemId, billId, participantId),
   ]);
 }
 
+// The claimant is deliberately not checked: removing a stale claim by someone
+// who is no longer on the bill must stay possible.
 export async function removeClaim(
   db: D1Database,
   billId: string,
   itemId: string,
   participantId: ParticipantId,
 ): Promise<number> {
+  await assertItemInBill(db, billId, itemId, null);
   return mutate(db, billId, [
-    db.prepare("DELETE FROM item_claims WHERE bill_item_id = ? AND participant_id = ?").bind(itemId, participantId),
+    db
+      .prepare(
+        `DELETE FROM item_claims
+         WHERE bill_item_id = ? AND participant_id = ?
+           AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)`,
+      )
+      .bind(itemId, participantId, billId),
   ]);
 }
