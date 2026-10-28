@@ -11,6 +11,9 @@ export default defineConfig({
     }),
   ],
   test: {
+    // discord-api-types ships CommonJS with thin .mjs wrappers, which the
+    // Workers test pool cannot load; pre-bundling turns it into plain ESM.
+    deps: { optimizer: { ssr: { enabled: true, include: ["discord-api-types/v10"] } } },
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });

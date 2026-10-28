@@ -6,11 +6,13 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "register-commands": "tsx scripts/register-commands.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.10",
     "@cloudflare/workers-types": "^5.20261028.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "wrangler": "^4.155.0"
