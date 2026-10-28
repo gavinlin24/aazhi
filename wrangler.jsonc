@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aazhi",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aazhi",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "aazhi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Discord bot that splits a restaurant bill from a photo of the receipt.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.10",
+    "@cloudflare/workers-types": "^5.20261028.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.155.0"
+  },
+  "dependencies": {
+    "discord-api-types": "^0.38.57",
+    "hono": "^4.13.14"
+  }
+}
