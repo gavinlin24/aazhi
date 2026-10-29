@@ -233,18 +233,35 @@ true.
 ### Guests
 
 A party of eight will sometimes include somebody's partner who has no
-account in the server. The payer can add a guest by typing a name, and
-that name gets a chip like anyone else.
+account in the server. Anyone on the bill can add a guest by typing a
+name, and that name gets a chip like anyone else.
 
 **A guest is a label on one bill and nothing more.** No person row, no
 cross-bill identity, no history, no appearance in any statistic. Two
 guests called Sam on two different bills are unrelated, and the bot never
 tries to connect them.
 
-A guest cannot tap anything, so their share is **owed by the member who
-added them**. The owe card names it that way ("Dani, including Sam: $71.40")
+A guest cannot tap anything, so **whoever adds a guest answers for them**.
+Nobody is asked who the guest came with: the person who typed the name taps
+the guest onto what they had, can rename or remove them while the bill is a
+draft, and is who the guest settles up with. Their share is owed by that
+member, and the owe card names it that way ("Dani, including Sam: $71.40")
 so there is always a real account to collect from and no row in the ledger
-with nobody behind it.
+with nobody behind it. The payer can tidy up any guest too.
+
+A guest the payer adds simply owes the payer. They get their own row on the
+owe card ("Kim (guest)") and in the payer's `/ledger`, and the payer can
+forgive them like anyone else.
+
+Once the bill is confirmed, a guest can be marked paid in two ways, told
+apart by who marks it:
+
+- **The payer:** the guest paid the payer directly. That is recorded as a
+  payment for the guest's whole share, so it comes off what the member who
+  added them owes, and the channel is told like any payment.
+- **The member who added them:** the guest paid that member back. That is
+  bookkeeping between the two of them; the member still owes the payer the
+  guest's share.
 
 ### Correctness: the receipt proves its own read
 

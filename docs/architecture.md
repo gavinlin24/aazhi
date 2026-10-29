@@ -81,7 +81,9 @@ naming the bill, the person and a 30-minute expiry, plus a signature only
 **5. Claiming.** `src/index.ts` checks the token before loading the bill and
 serves `src/web/page.ts` with the client script from `src/web/client.ts`. The
 script calls `src/web/api.ts` with the token as a Bearer header. People claim
-their own lines, and the payer can also edit lines, tax, tip and guests. Writes
+their own lines and can add guests, whom they tap onto lines and answer for
+(`src/money/debtors.ts` decides who owes for whom). The payer can also edit
+lines, tax, tip and anyone's guests. Writes
 only land while the SQL `WHERE` still sees a draft. The page polls every
 5 s. The Discord message updates at most every 3 s per bill, through a lease
 stored in D1, since Worker instances share no memory.
@@ -102,7 +104,9 @@ instructions.
 **8. Recording.** **I paid** (`src/discord/handlers/settle.ts`) inserts into
 `settlements` (`src/db/settlements.ts`). The checks run inside the insert, so
 racing taps cannot overpay. The payment is announced in the channel, and
-`/ledger` totals who still owes the payer.
+`/ledger` totals who still owes the payer. A guest has no Discord account, so
+the payer marks them paid on the page instead; that is a settlement against
+the guest, and it counts toward whoever answers for them.
 
 **9. Corrections.** **That's not mine** or **Reopen**
 (`src/discord/handlers/lifecycle.ts`) returns the bill to draft and pauses
