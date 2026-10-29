@@ -8,7 +8,7 @@ before any preference came into it.
 It very nearly holds. Hosting, storage, and the web page are free with no
 expiry and no sleeping. The one component that charges anything is reading
 the receipt photo, at about a tenth of a cent each, which works out to
-under a cent a year at the volume one group of friends generates.
+about a dime a year at the volume one group of friends generates.
 
 ## The decision that set all the others
 
@@ -129,7 +129,7 @@ high-resolution tier, so a phone photo is scaled to the 4,784-token cap:
 | **per receipt** | | **$0.00083** |
 
 A tenth of a cent. A single dollar buys about 1,200 receipts. Ten dinners
-a month costs under one cent a year.
+a month costs under a cent a month, so about a dime a year.
 
 High resolution is worth keeping rather than downsampling to cut the image
 cost by two thirds: a crumpled thermal receipt is a dense document, which
