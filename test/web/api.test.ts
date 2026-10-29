@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
 import { confirmBill, getBill, getBillItems, getParticipants, reopenBill } from "../../src/db/bills";
 import type { Env } from "../../src/env";
+import { formatCents } from "../../src/format";
 import { mintToken, TOKEN_TTL_MS } from "../../src/web/token";
 import { confirmingBeforeFirstWrite } from "../fixtures/race";
 import { seedSaigon } from "../fixtures/seed";
@@ -445,7 +446,7 @@ describe("who paid", () => {
     expect(reply.body.result.payerCollectsCents).toBe(32412 - 5091);
     expect((await getBill(db, BILL))!.payerId).toBe("priya");
     expect(edits).toHaveLength(1);
-    expect(JSON.stringify(edits[0].embeds)).toMatch(/Priya \$50\.91 🪙/);
+    expect(JSON.stringify(edits[0].embeds)).toContain("🪙 Priya paid");
 
     // The new payer now holds the payer's controls, and the old one does not.
     expect((await patch("gavin", { payer: "gavin" })).status).toBe(403);
@@ -533,7 +534,9 @@ describe("what every response carries", () => {
 
     // The channel message follows, through the coalesced edit.
     expect(edits).toHaveLength(1);
-    expect(JSON.stringify(edits[0].embeds)).toContain("Thai iced tea x3 · $15.00 · Marcus");
+    // Down from $27.06 with the tea and the water both open.
+    expect(reply.body.result.unclaimedCents).toBeLessThan(2706);
+    expect(JSON.stringify(edits[0].embeds)).toContain(`${formatCents(reply.body.result.unclaimedCents)} unclaimed`);
   });
 
   it("serves the same state to a poll without writing anything", async () => {

@@ -321,9 +321,9 @@ describe("/split", () => {
     expect(post!.method).toBe("PATCH");
     const text = shown(post!.body);
     expect(text).toContain("Saigon Kitchen");
-    expect(text).toMatch(/Gavin \$0\.00/);
-    expect(text).toMatch(/Unclaimed \$273\.82/);
-    expect(text).toMatch(/Garlic noodles · \$32\.00/);
+    expect(text).toMatch(/Total \$273\.82/);
+    expect(text).toMatch(/Gavin paid · 1 person/);
+    expect(text).toMatch(/\$273\.82 unclaimed/);
     expect(customIds(post!.body)).toEqual([
       `open:${bill!.id}`,
       `confirm:${bill!.id}:${bill!.revision}`,
@@ -429,11 +429,8 @@ describe("/split", () => {
     const [post] = originalEdits();
     const text = shown(post!.body);
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(text).toContain("$273.82");
-    expect(text).toContain("$323.82");
-    expect(text).toContain("$50.00");
-    expect(text).toMatch(/Garlic noodles \$82\.00/);
-    expect(text).toMatch(/Com tam \$9\.50/);
+    expect(text).toMatch(/Doesn't add up:\*\* \$50\.00 over the receipt/);
+    expect(text).toMatch(/Gavin, check Garlic noodles \$82\.00 and Com tam \$9\.50 on the page/);
     // Lines read as confidently as the rest are not worth pointing at.
     expect(text).not.toMatch(/Spring rolls \$15\.00/);
   });
@@ -446,7 +443,7 @@ describe("/split", () => {
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(shown(post!.body)).toMatch(/couldn't read the printed total/i);
+    expect(shown(post!.body)).toMatch(/No receipt total yet.*Gavin, enter it on the page/);
   });
 
   it.each([
@@ -561,8 +558,9 @@ describe("editBillMessage", () => {
 
     expect(channelEdits()).toHaveLength(1);
     const text = shown(channelEdits()[0]!.body);
-    expect(text).toMatch(/Pho · \$10\.00 · Marcus/);
-    expect(text).toMatch(/Marcus \$11\.00/);
+    // Before Marcus's claim the message would still say $11.00 unclaimed.
+    expect(text).toMatch(/Every line is claimed/);
+    expect(text).not.toMatch(/unclaimed/);
   });
 
   it("edits again once the window has passed", async () => {

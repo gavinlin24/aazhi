@@ -5,7 +5,6 @@ import {
   type APIButtonComponent,
   type APIComponentInMessageActionRow,
   type APIEmbed,
-  type APIEmbedField,
   type APIInteractionResponseCallbackData,
 } from "discord-api-types/v10";
 import {
@@ -19,19 +18,18 @@ import {
 } from "../db/bills";
 import { reconciles } from "../extract/claude";
 import { formatCents, formatDate } from "../format";
-import { debtorOf, groupByDebtor, groupOf, type DebtorGroup } from "../money/debtors";
+import { groupByDebtor, type DebtorGroup } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { LineItem, Share, SplitResult } from "../money/types";
 
 // Discord rejects the whole edit if any of these is exceeded, so the renderer
 // trims to fit instead of trusting the receipt to be short.
-const LIMITS = { title: 256, description: 4096, fieldValue: 1024, embed: 6000 };
+const LIMITS = { title: 256, description: 4096, embed: 6000 };
 const MAX_LABEL = 60;
 const MAX_NAME = 40;
-const MAX_SUMMARY = 120;
 
 // The coin the page puts on the payer's avatar, standing in for "paid the
-// bill" on their row.
+// bill" beside their name.
 const PAYER_MARK = "🪙";
 
 // The page's Ink & Paper palette: indigo for a draft, ochre for one that
@@ -75,50 +73,53 @@ function fitLines(lines: string[], budget: number, more: (n: number) => string):
   return kept.join("\n");
 }
 
-function readStatus(
-  bill: BillRow,
-  items: LineItem[],
-  leastConfident: string[],
-  payerName: string,
-): { ok: boolean; text: string } {
+// Only the problem and who fixes it where. The figures behind the gap are on
+// the page, beside the lines the payer edits to close it. The least-confident
+// lines are named here because the page does not point them out.
+function readProblem(bill: BillRow, items: LineItem[], leastConfident: string[], payerName: string): string | null {
   const check = reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents });
-  if (check.ok) {
-    return { ok: true, text: `Adds up: the items and tax match the printed total of ${formatCents(bill.printedTotalCents!)}.` };
-  }
+  if (check.ok) return null;
   if (bill.printedTotalCents === null || check.discrepancyCents === null) {
-    return {
-      ok: false,
-      text:
-        "**I couldn't read the printed total**, so I can't check this read yet. " +
-        `${payerName}, enter it on the page and Confirm appears once it adds up.`,
-    };
+    return `⚠️ **No receipt total yet.** ${payerName}, enter it on the page.`;
   }
-
   const gap = check.discrepancyCents;
   const suspects = leastConfident
     .map((id) => items.find((i) => i.id === id))
     .filter((i): i is LineItem => i !== undefined)
     .map((i) => `${escapeMarkdown(clip(i.label, MAX_LABEL))} ${formatCents(i.cents)}`);
-  const pointer = suspects.length > 0 ? `Least sure about: ${suspects.join(", ")}.` : "Check the prices against the receipt.";
-  return {
-    ok: false,
-    text:
-      `**Doesn't add up yet.** The receipt's printed total is ${formatCents(bill.printedTotalCents)}, ` +
-      `but the items and tax I read come to ${formatCents(bill.printedTotalCents + gap)}, ` +
-      `${formatCents(Math.abs(gap))} ${gap > 0 ? "over" : "short"}. ${pointer} ` +
-      `${payerName}, fix the lines on the page and Confirm appears once it adds up.`,
-  };
+  const fix = suspects.length > 0 ? `check ${and(suspects)}` : "fix the lines";
+  return (
+    `⚠️ **Doesn't add up:** ${formatCents(Math.abs(gap))} ${gap > 0 ? "over" : "under"} the receipt. ` +
+    `${payerName}, ${fix} on the page.`
+  );
 }
 
-function itemLine(item: LineItem, names: Map<string, string>): string {
-  // Alphabetical, so a line reads the same however the claims arrived.
-  const who = item.claimedBy
-    .map((id) => names.get(id) ?? escapeMarkdown(id))
-    .sort((a, b) => a.localeCompare(b))
-    .join(", ");
+function totalLine(result: SplitResult): string {
+  return `**Total ${formatCents(result.distributableCents)}**`;
+}
+
+// The draft says what the bill is, whether it is ready, and what to do next.
+// Who had which line and each running amount live on the page, which is one
+// tap away and keeps up as people claim.
+function draftSummary(
+  bill: BillRow,
+  result: SplitResult,
+  items: LineItem[],
+  participants: Participant[],
+  leastConfident: string[],
+  payerName: string,
+): { ok: boolean; text: string } {
+  const problem = readProblem(bill, items, leastConfident, payerName);
+  const count = participants.length === 1 ? "1 person" : `${participants.length} people`;
   // The page draws an unclaimed line with a dashed ring; ◌ is the same mark.
-  const line = `${escapeMarkdown(clip(item.label, MAX_LABEL))} · ${formatCents(item.cents)} · ${who || "**unclaimed**"}`;
-  return who ? line : `◌ ${line}`;
+  const progress =
+    result.unclaimedCents !== 0
+      ? `◌ **${formatCents(result.unclaimedCents)} unclaimed.** Open the split to claim what you had.`
+      : problem
+        ? null
+        : `✓ **Every line is claimed.** ${payerName} can confirm.`;
+  const lines = [totalLine(result), `${PAYER_MARK} ${payerName} paid · ${count}`, problem, progress];
+  return { ok: problem === null, text: lines.filter(Boolean).join("\n") };
 }
 
 function and(parts: string[]): string {
@@ -130,33 +131,6 @@ function and(parts: string[]): string {
 export function groupName(group: DebtorGroup, names: Map<string, string>): string {
   const own = names.get(group.debtor) ?? escapeMarkdown(group.debtor);
   return group.guests.length === 0 ? own : `${own}, including ${and(group.guests.map((g) => names.get(g.participant)!))}`;
-}
-
-// One line per person who answers for a share: every member, and any guest the
-// payer added, who owes the payer directly.
-function owedField(bill: BillRow, result: SplitResult, participants: Participant[], names: Map<string, string>): APIEmbedField {
-  const groups = groupByDebtor(result.shares, participants, bill.payerId);
-  const lines = participants
-    .filter((p) => debtorOf(p, bill.payerId) === p.id)
-    .map((p) => {
-      const group = groupOf(groups, p.id) ?? { debtor: p.id, own: undefined, guests: [], owedCents: 0 };
-      const paid = p.id === bill.payerId ? ` ${PAYER_MARK}` : "";
-      const who = p.kind === "guest" ? `${names.get(p.id)} (guest)` : groupName(group, names);
-      return `${who} ${groupAmount(group, names)}${paid}`;
-    });
-  const unclaimed = result.unclaimedCents !== 0 ? `**Unclaimed ${formatCents(result.unclaimedCents)}**` : "";
-  const budget = LIMITS.fieldValue - (unclaimed ? unclaimed.length + 1 : 0);
-  const people = fitLines(lines, budget, (n) => `and ${n} more`);
-  return { name: "Shares so far", value: [people, unclaimed].filter(Boolean).join("\n") || "Nobody yet" };
-}
-
-function billField(bill: BillRow, result: SplitResult): APIEmbedField {
-  return {
-    name: "Bill",
-    value:
-      `Subtotal ${formatCents(result.billSubtotalCents)} · Tax ${formatCents(bill.taxCents)} · ` +
-      `Tip ${formatCents(bill.tipCents)}\n**Total ${formatCents(result.distributableCents)}**`,
-  };
 }
 
 function openButton(bill: BillRow, style: ButtonStyle.Primary | ButtonStyle.Secondary = ButtonStyle.Primary): APIButtonComponent {
@@ -207,7 +181,6 @@ function embedLength(embed: APIEmbed): number {
   return (
     (embed.title?.length ?? 0) +
     (embed.description?.length ?? 0) +
-    (embed.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0) +
     (embed.footer?.text.length ?? 0)
   );
 }
@@ -261,59 +234,38 @@ function groupAmount(group: DebtorGroup, names: Map<string, string>): string {
   return `${formatCents(group.owedCents)} (${and(forgiven.map((s) => names.get(s.participant)!))} forgiven)`;
 }
 
-// "Spring rolls (1/3), Bun bo Hue": what a person's amount covers, with the
-// share of any line they split. Cut while still raw text and escaped after,
-// so the cut can never land between a backslash and the character it guards.
-function coveredBy(participant: string, items: LineItem[]): string {
-  const lines = items.flatMap((item) => {
-    if (!item.claimedBy.includes(participant)) return [];
-    const label = clip(item.label, MAX_LABEL);
-    return [item.claimedBy.length > 1 ? `${label} (1/${item.claimedBy.length})` : label];
-  });
-  return lines.length > 0 ? escapeMarkdown(clip(lines.join(", "), MAX_SUMMARY)) : "nothing claimed";
-}
-
 // The owe card. Amounts are the rows frozen at confirm, never a recomputation
-// from the lines. Its buttons are shared by everyone who can see the message,
-// so each one answers the tapper privately about their own share.
+// from the lines. One row per person who owes the payer, so the list is
+// exactly what the payer is collecting: the payer's own share is owed to
+// nobody. What each amount covers is in Show my math and on the page. Its
+// buttons are shared by everyone who can see the message, so each one answers
+// the tapper privately about their own share.
 function oweCard(
   bill: BillRow,
   result: SplitResult,
-  items: LineItem[],
   participants: Participant[],
   frozen: Share[],
   names: Map<string, string>,
 ): APIInteractionResponseCallbackData {
-  const payerName = names.get(bill.payerId) ?? "the person who paid";
   const payer = mention(
     participants.find((p) => p.id === bill.payerId),
     names,
-    payerName,
+    names.get(bill.payerId) ?? "the person who paid",
   );
-  const rows = groupByDebtor(frozen, participants, bill.payerId).map((group) => {
-    const member = participants.find((p) => p.id === group.debtor);
-    const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);
-    const paid = group.debtor === bill.payerId ? ` ${PAYER_MARK}` : "";
-    const covers = [
-      ...(group.own ? [coveredBy(group.own.participant, items)] : []),
-      ...group.guests.map((g) => `${names.get(g.participant)}: ${coveredBy(g.participant, items)}`),
-    ].join("; ");
-    return `${who} · ${groupAmount(group, names)}${paid} · ${covers}`;
-  });
+  const rows = groupByDebtor(frozen, participants, bill.payerId)
+    .filter((group) => group.debtor !== bill.payerId)
+    .map((group) => {
+      const member = participants.find((p) => p.id === group.debtor);
+      const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);
+      return `${who} · ${groupAmount(group, names)}`;
+    });
 
   const embed: APIEmbed = {
     title: titleOf(bill),
     color: COLOR.confirmed,
-    fields: [billField(bill, result)],
-    footer: {
-      text:
-        "These amounts are locked. Charged for something that isn't yours? Tap That's not mine and paying " +
-        `pauses until ${payerName} fixes it.`,
-    },
+    footer: { text: "Confirmed · amounts are locked" },
   };
-  const head =
-    `**Confirmed.** Pay ${payer} your share. **Pay my share** has your amount filled in, **I paid** records it ` +
-    "once you've sent it, and **Show my math** shows how it was worked out.\n\n";
+  const head = `${totalLine(result)}\n${PAYER_MARK} Pay ${payer} your share.\n\n`;
   const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
   embed.description = head + fitLines(rows, budget, (n) => `and ${n} more on the page`);
 
@@ -370,24 +322,21 @@ export function renderBill(
 
   const names = new Map(participants.map((p) => [p.id, escapeMarkdown(clip(p.displayName, MAX_NAME))]));
   if (bill.status === "deleted") return deleted(bill, names);
-  if (bill.status === "confirmed") return oweCard(bill, result, items, participants, frozen ?? result.shares, names);
+  if (bill.status === "confirmed") return oweCard(bill, result, participants, frozen ?? result.shares, names);
   const payerName = names.get(bill.payerId) ?? "Payer";
-  const status = readStatus(bill, items, leastConfident, payerName);
-
-  const embed: APIEmbed = {
-    title: titleOf(bill),
-    color: status.ok ? COLOR.draft : COLOR.needsFixing,
-    fields: [owedField(bill, result, participants, names), billField(bill, result)],
-    footer: { text: "Draft: amounts change as people claim their items. Tap Open the split to claim yours." },
-  };
-  const head = `${status.text}\n\n`;
-  const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
-  embed.description = head + fitLines(items.map((i) => itemLine(i, names)), budget, (n) => `and ${n} more on the page`);
+  const summary = draftSummary(bill, result, items, participants, leastConfident, payerName);
 
   return {
     content: "",
-    embeds: [embed],
-    components: components(bill, status.ok),
+    embeds: [
+      {
+        title: titleOf(bill),
+        description: summary.text,
+        color: summary.ok ? COLOR.draft : COLOR.needsFixing,
+        footer: { text: "Draft" },
+      },
+    ],
+    components: components(bill, summary.ok),
     allowed_mentions: { parse: [] },
   };
 }

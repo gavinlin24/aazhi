@@ -201,10 +201,8 @@ describe("the owe card", () => {
 
     expect(text).toContain("$44.46");
     const marcusRow = (data.embeds![0]!.description ?? "").split("\n").find((l) => l.includes("<@marcus>"))!;
-    expect(marcusRow).toContain("$44.46");
-    // A one-line summary of what the amount covers.
-    expect(marcusRow).toContain("Spring rolls");
-    expect(marcusRow).toContain("Bun bo Hue");
+    // Just the amount: what it covers is in Show my math and on the page.
+    expect(marcusRow).toBe("<@marcus> · $44.46");
     expect(text).toMatch(/pay <@gavin>/i);
 
     const labels = components(data).map((c) => c.label);
