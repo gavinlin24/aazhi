@@ -278,6 +278,38 @@ describe("the payer correcting the bill", () => {
     });
   });
 
+  it("lets the payer write, keep and clear a dish's add-ons", async () => {
+    await seedSaigon(db, BILL);
+    const noodles = async () => (await getBillItems(db, BILL)).find((i) => i.id === item("noodles"));
+
+    const written = await editItems("gavin", {
+      op: "edit",
+      itemId: item("noodles"),
+      note: "  Extra garlic +$2.00,\n  no chili ",
+      price: "34.00",
+    });
+    expect(written.status).toBe(200);
+    expect(await noodles()).toEqual({
+      id: item("noodles"),
+      label: "Garlic noodles",
+      cents: 3400,
+      note: "Extra garlic +$2.00, no chili",
+      claimedBy: ["dani"],
+    });
+
+    await editItems("gavin", { op: "edit", itemId: item("noodles"), label: "Garlic butter noodles" });
+    expect((await noodles())!.note).toBe("Extra garlic +$2.00, no chili");
+
+    const cleared = await editItems("gavin", { op: "edit", itemId: item("noodles"), note: "   " });
+    expect(cleared.status).toBe(200);
+    expect(await noodles()).toEqual({
+      id: item("noodles"),
+      label: "Garlic butter noodles",
+      cents: 3400,
+      claimedBy: ["dani"],
+    });
+  });
+
   it("lets the payer add a missed line and delete a hallucinated one", async () => {
     await seedSaigon(db, BILL);
     await db
@@ -311,6 +343,7 @@ describe("the payer correcting the bill", () => {
 
     const replies = [
       await editItems("marcus", { op: "edit", itemId: item("noodles"), price: "1.00" }),
+      await editItems("marcus", { op: "edit", itemId: item("noodles"), note: "No garlic" }),
       await editItems("marcus", { op: "add", label: "Free beer", price: "0.01" }),
       await editItems("marcus", { op: "delete", itemId: item("bun") }),
       await patch("marcus", { tip: "0.00" }),
@@ -662,6 +695,10 @@ describe("request bodies", () => {
       ["POST", "item", { op: "add", label: "Che" }],
       ["POST", "item", { op: "add", label: "Che", price: "1.00", itemId: item("tea") }],
       ["POST", "item", { op: "edit", itemId: item("tea") }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), note: 7 }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), note: null }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), note: "x".repeat(201) }],
+      ["POST", "item", { op: "add", label: "Che", price: "1.00", note: "Extra jelly" }],
       ["POST", "item", { op: "delete" }],
       ["POST", "item", { op: "delete", itemId: item("tea"), price: "1.00" }],
       ["PATCH", "", {}],

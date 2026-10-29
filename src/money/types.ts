@@ -4,7 +4,7 @@ export type ParticipantId = string;
 export interface LineItem {
   id: string;
   label: string;
-  note?: string;                // modifiers printed under the dish, display only
+  note?: string;                // the dish's add-ons, display only
   cents: Cents;                 // negative for a discount or comp
   claimedBy: ParticipantId[];
 }

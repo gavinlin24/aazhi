@@ -133,7 +133,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, p { margin: 0; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; }
 :focus-visible { outline: 2.5px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
@@ -432,6 +432,11 @@ button.row:active { background: var(--fill); }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
 .line-form .field-msg { grid-column: 1 / -1; }
+/* Editing a dish: name, add-ons, then the one price for the lot. */
+.line-form.has-addons { grid-template-columns: 112px minmax(0, 1fr); }
+.line-form.has-addons > .text-input { grid-column: 1 / -1; }
+.addons-input { height: auto; padding: 9px 10px; resize: none; font-size: 16px; line-height: 22px; color: var(--muted); }
+.addons-input:focus { color: var(--ink); }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
 .tile {

@@ -28,6 +28,7 @@ export const CLIENT_SCRIPT = String.raw`
   const NOTE_MS = 3500;
   const ARM_MS = 4000;
   const MAX_LABEL = 120;
+  const MAX_NOTE = 200;
   const MAX_GUEST_NAME = 40;
   const SVG = "http://www.w3.org/2000/svg";
   const STATUS_WORD = { reading: "Reading", draft: "Draft", confirmed: "Confirmed", superseded: "Replaced", deleted: "Deleted" };
@@ -1154,12 +1155,16 @@ export const CLIENT_SCRIPT = String.raw`
     const n = Date.now();
     const label = el("input", { id: "line-name-" + n, class: "text-input", name: "label", maxlength: MAX_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Name", placeholder: item ? null : "Name" });
     const price = el("input", { id: "line-price-" + n, name: "price", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Price", placeholder: "0.00" });
+    // Add-ons belong to a dish already on the bill, so only its editor asks.
+    const addOns = item ? el("textarea", { id: "line-note-" + n, class: "text-input addons-input", name: "note", rows: 2, maxlength: MAX_NOTE, autocomplete: "off", "aria-label": "Add-ons", placeholder: "Add-ons, like no onions" }) : null;
     if (item) {
       label.value = item.label;
+      addOns.value = item.note || "";
       price.value = plain(item.cents);
     }
-    const form = el("form", { class: "line-form", novalidate: true }, [
+    const form = el("form", { class: "line-form" + (item ? " has-addons" : ""), novalidate: true }, [
       label,
+      addOns,
       el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
@@ -1168,6 +1173,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
       ]),
     ]);
+    form._note = item ? item.note || "" : "";
     if (item) form.dataset.editLine = item.id;
     else form.dataset.addLine = "";
     return form;
@@ -1463,7 +1469,12 @@ export const CLIENT_SCRIPT = String.raw`
       form.elements.price.focus();
       return null;
     }
-    return { label, price };
+    const values = { label, price };
+    // Sent only when changed: a long note read off the receipt can stay as it
+    // is without tripping the length limit.
+    const note = form.elements.note ? form.elements.note.value.replace(/\s+/g, " ").trim() : form._note;
+    if (note !== form._note) values.note = note;
+    return values;
   }
 
   function setBusy(form, value) {
@@ -1477,7 +1488,7 @@ export const CLIENT_SCRIPT = String.raw`
     const itemId = form.dataset.editLine;
     setBusy(form, true);
     const failure = itemId
-      ? await write("POST", "/item", { op: "edit", itemId, label: values.label, price: values.price })
+      ? await write("POST", "/item", Object.assign({ op: "edit", itemId }, values))
       : await write("POST", "/item", { op: "add", label: values.label, price: values.price });
     setBusy(form, false);
     if (failure) {

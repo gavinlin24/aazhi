@@ -69,6 +69,7 @@ const GONE: Partial<Record<BillRow["status"], string>> = {
 // inside the range where integer arithmetic stays exact.
 const MAX_CENTS = 99_999_999;
 const MAX_LABEL = 120;
+const MAX_NOTE = 200;
 const MAX_GUEST_NAME = 40;
 
 class BadRequest extends Error {}
@@ -132,6 +133,15 @@ function label(value: unknown): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (trimmed.length === 0 || trimmed.length > MAX_LABEL) bad(`Give the line a name of 1 to ${MAX_LABEL} characters.`);
   return trimmed;
+}
+
+// One line of text, so a newline typed into the field never reaches the
+// Discord message. Empty clears the note.
+function note(value: unknown): string | null {
+  if (typeof value !== "string") bad('"note" must be a string.');
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (flat.length > MAX_NOTE) bad(`Keep the add-ons under ${MAX_NOTE} characters.`);
+  return flat || null;
 }
 
 // Decimal strings through the extraction's own strict parser: "12.50" becomes
@@ -271,12 +281,13 @@ api.post(
         break;
       }
       case "edit": {
-        expectKeys(body, ["op", "itemId"], ["label", "price"]);
-        if (!("label" in body) && !("price" in body)) bad("Change the line's name, its price, or both.");
+        expectKeys(body, ["op", "itemId"], ["label", "price", "note"]);
+        if (!("label" in body) && !("price" in body) && !("note" in body)) bad("Change the line's name, add-ons or price.");
         const id = (itemId = text(body.itemId, "itemId"));
         const change = {
           label: "label" in body ? label(body.label) : undefined,
           cents: "price" in body ? cents(body.price, "price", { signed: true }) : undefined,
+          note: "note" in body ? note(body.note) : undefined,
         };
         write = (db) => editItem(db, grant.billId, id, change);
         break;

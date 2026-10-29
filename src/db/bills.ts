@@ -526,15 +526,17 @@ export async function editItem(
   db: D1Database,
   billId: string,
   itemId: string,
-  change: { label?: string; cents?: number },
+  change: { label?: string; cents?: number; note?: string | null },
 ): Promise<number> {
+  // A null note clears it, so "leave it alone" needs its own flag.
   return mutateDraft(db, billId, [
     db
       .prepare(
-        `UPDATE bill_items SET label = COALESCE(?3, label), cents = COALESCE(?4, cents)
+        `UPDATE bill_items SET label = COALESCE(?3, label), cents = COALESCE(?4, cents),
+           note = CASE WHEN ?5 THEN ?6 ELSE note END
          WHERE bill_id = ?1 AND id = ?2 AND ${WHILE_DRAFT}`,
       )
-      .bind(billId, itemId, change.label ?? null, change.cents ?? null),
+      .bind(billId, itemId, change.label ?? null, change.cents ?? null, change.note !== undefined ? 1 : 0, change.note ?? null),
   ]);
 }
 
