@@ -195,7 +195,7 @@ describe("settled_at", () => {
 
     // Spring rolls were $6.42: Marcus now owes 41.10 and has paid 44.46.
     await reopenBill(db, BILL);
-    await editItem(db, BILL, `${BILL}-rolls`, { cents: 642 });
+    await editItem(db, BILL, `${BILL}-rolls`, { baseCents: 642 });
     await setBillAmounts(db, BILL, { printedTotalCents: 24292 + 2232 });
     await confirmed();
     expect((await owing("marcus"))!.owedCents).toBe(4110);
@@ -203,7 +203,7 @@ describe("settled_at", () => {
 
     // Then $21.00: Marcus owes more than he paid.
     await reopenBill(db, BILL);
-    await editItem(db, BILL, `${BILL}-rolls`, { cents: 2100 });
+    await editItem(db, BILL, `${BILL}-rolls`, { baseCents: 2100 });
     await setBillAmounts(db, BILL, { printedTotalCents: 25750 + 2232 });
     await confirmed();
     expect((await owing("marcus"))!.owedCents).toBeGreaterThan(4446);
@@ -217,7 +217,7 @@ describe("settled_at", () => {
     expect(await settledAt("marcus")).toBeNull();
 
     await reopenBill(db, BILL);
-    await editItem(db, BILL, `${BILL}-rolls`, { cents: 642 });
+    await editItem(db, BILL, `${BILL}-rolls`, { baseCents: 642 });
     await setBillAmounts(db, BILL, { printedTotalCents: 24292 + 2232 });
     await confirmed();
 

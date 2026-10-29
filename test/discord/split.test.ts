@@ -339,10 +339,19 @@ describe("/split", () => {
 
     const bill = await openDraftInChannel(db, "chan-1");
     const items = await getBillItems(db, bill!.id);
-    expect(items.map((i) => [i.label, i.cents, i.note])).toEqual([
-      ["Classic Burger", 1950, "Medium Rare, Extra Patty +$3.00, Add Bacon +$2.50, No Onions"],
-      ["Veggie Burger", 1500, "Gluten Free Bun +$2.00, No Pickles"],
-      ["Fries", 650, "Truffle Oil +$1.50"],
+    expect(items.map((i) => [i.label, i.cents, i.addons])).toEqual([
+      [
+        "Classic Burger",
+        1950,
+        [
+          { label: "Medium Rare", cents: 0 },
+          { label: "Extra Patty", cents: 300 },
+          { label: "Add Bacon", cents: 250 },
+          { label: "No Onions", cents: 0 },
+        ],
+      ],
+      ["Veggie Burger", 1500, [{ label: "Gluten Free Bun", cents: 200 }, { label: "No Pickles", cents: 0 }]],
+      ["Fries", 650, [{ label: "Truffle Oil", cents: 150 }]],
       ["Soda", 600, undefined],
     ]);
     expect(shown(originalEdits()[0]!.body)).toContain("Total $51.17");

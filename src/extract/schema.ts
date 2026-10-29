@@ -1,11 +1,10 @@
-import { formatCents } from "../format";
-import type { Cents } from "../money/types";
+import type { Addon, Cents } from "../money/types";
 
 export interface Extraction {
   place: string | null;
   billDate: string | null;
-  // `cents` already includes the item's priced modifiers; `note` lists them.
-  items: { label: string; cents: Cents; confidence: number; note?: string }[];
+  // `cents` is the dish with its add-ons, so whoever claims it pays for both.
+  items: { label: string; cents: Cents; confidence: number; addons?: Addon[] }[];
   taxCents: Cents | null;
   printedTotalCents: Cents | null;
 }
@@ -139,8 +138,9 @@ function parseModifiers(raw: unknown): Modifier[] | null {
 }
 
 // A dish and its modifiers stay one claimable line, so whoever had the burger
-// pays for its extra patty. Charged modifiers join the line's price, and every
-// modifier is named in the line's note.
+// pays for its extra patty. The line is always its base price plus its
+// add-ons. Charged on top, the printed price is the base. Already included,
+// the printed price is the total and the base is what is left of it.
 function line(
   label: string,
   printed: Cents,
@@ -148,14 +148,15 @@ function line(
   modifiers: Modifier[],
   charged: boolean,
 ): Extraction["items"][number] {
-  let cents = printed;
-  const parts: string[] = [];
-  for (const m of modifiers) {
-    const extra = charged ? m.cents : null;
-    if (extra !== null) cents += extra;
-    if (m.label) parts.push(extra === null ? m.label : `${m.label} ${extra > 0 ? "+" : ""}${formatCents(extra)}`);
-  }
-  return parts.length > 0 ? { label, cents, confidence, note: parts.join(", ") } : { label, cents, confidence };
+  let addons: Addon[] = modifiers
+    .filter((m) => m.label || m.cents !== null)
+    .map((m) => ({ label: m.label || "Add-on", cents: m.cents ?? 0 }));
+  const extra = addons.reduce((sum, a) => sum + a.cents, 0);
+  // Amounts bigger than the dish they are part of are a misread. Kept as
+  // names only, the total still matches what the receipt printed.
+  if (!charged && printed >= 0 && extra > printed) addons = addons.map((a) => ({ label: a.label, cents: 0 }));
+  const cents = charged ? printed + extra : printed;
+  return addons.length > 0 ? { label, cents, confidence, addons } : { label, cents, confidence };
 }
 
 export function parseToolInput(input: unknown): ParsedToolInput {

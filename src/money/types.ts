@@ -1,11 +1,18 @@
 export type Cents = number;
 export type ParticipantId = string;
 
+// Something ordered with a dish, like an extra patty. Unpriced ones ("No
+// onions") are 0.
+export interface Addon {
+  label: string;
+  cents: Cents;
+}
+
 export interface LineItem {
   id: string;
   label: string;
-  note?: string;                // the dish's add-ons, display only
-  cents: Cents;                 // negative for a discount or comp
+  addons?: Addon[];
+  cents: Cents;                 // the dish with its add-ons; negative for a discount or comp
   claimedBy: ParticipantId[];
 }
 

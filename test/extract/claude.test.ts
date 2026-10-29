@@ -417,15 +417,16 @@ describe("modifiers", () => {
   }
 
   const lines = (result: Awaited<ReturnType<typeof read>>) =>
-    result.extraction.items.map((i) => [i.label, i.cents, i.note]);
+    result.extraction.items.map((i) => [i.label, i.cents, i.addons]);
+  const addon = (label: string, cents = 0) => ({ label, cents });
 
-  it("keeps a dish and its charged extras one line, priced together, with the extras as its note", async () => {
+  it("keeps a dish and its charged add-ons one line, priced together, each add-on with its own price", async () => {
     const result = await read(PATTY_SHACK);
 
     expect(lines(result)).toEqual([
-      ["Classic Burger", 1950, "Medium Rare, Extra Patty +$3.00, Add Bacon +$2.50, No Onions"],
-      ["Veggie Burger", 1500, "Gluten Free Bun +$2.00, No Pickles"],
-      ["Fries", 650, "Truffle Oil +$1.50"],
+      ["Classic Burger", 1950, [addon("Medium Rare"), addon("Extra Patty", 300), addon("Add Bacon", 250), addon("No Onions")]],
+      ["Veggie Burger", 1500, [addon("Gluten Free Bun", 200), addon("No Pickles")]],
+      ["Fries", 650, [addon("Truffle Oil", 150)]],
       ["Soda", 600, undefined],
     ]);
     expect(result).toMatchObject({ reconciles: true, discrepancyCents: null });
@@ -435,30 +436,43 @@ describe("modifiers", () => {
     const result = await read(LA_PALMA);
 
     expect(lines(result)).toEqual([
-      ["Burrito Bowl", 1825, "Guacamole +$2.25, Extra Chicken +$3.50, No rice"],
-      ["Tacos (3)", 1150, "Cheese +$1.00"],
+      ["Burrito Bowl", 1825, [addon("Guacamole", 225), addon("Extra Chicken", 350), addon("No rice")]],
+      ["Tacos (3)", 1150, [addon("Cheese", 100)]],
       ["Horchata", 400, undefined],
       ["Chips & Salsa", 450, undefined],
     ]);
     expect(result.reconciles).toBe(true);
   });
 
-  it("takes the modifiers as already in the dish's price when only that reading matches the printed total", async () => {
+  it("keeps an already included add-on's amount and takes it out of the dish's own price, so the total stays as printed", async () => {
     const result = await read(MENSHO);
 
     expect(lines(result)).toEqual([
-      ["Tonkotsu Ramen", 1900, "Extra Chashu, Soft Egg, Spicy"],
+      ["Tonkotsu Ramen", 1900, [addon("Extra Chashu"), addon("Soft Egg"), addon("Spicy")]],
       ["Gyoza", 800, undefined],
-      ["Shoyu Ramen", 1600, "Add Corn"],
+      ["Shoyu Ramen", 1600, [addon("Add Corn", 100)]],
       ["Sapporo", 700, undefined],
     ]);
     expect(result).toMatchObject({ reconciles: true, discrepancyCents: null });
   });
 
+  it("keeps included add-ons as names only when their amounts are more than the dish they are part of", () => {
+    const input = {
+      ...PATTY_SHACK,
+      items: [{ label: "Milk tea", price: "1.00", modifiers: [{ label: "Boba", price: "5.00" }], confidence: 1 }],
+      tax: "0.00",
+      printed_total: "1.00",
+    };
+
+    const parsed = parseToolInput(input);
+
+    expect(parsed).toMatchObject({ modifiersIncluded: { items: [{ cents: 100, addons: [addon("Boba")] }] } });
+  });
+
   it("keeps the charged reading, and its gap, when neither reading matches the printed total", async () => {
     const result = await read({ ...MENSHO, printed_total: "60.00" });
 
-    expect(result.extraction.items.find((i) => i.label === "Shoyu Ramen")).toMatchObject({ cents: 1700, note: "Add Corn +$1.00" });
+    expect(result.extraction.items.find((i) => i.label === "Shoyu Ramen")).toMatchObject({ cents: 1700, addons: [addon("Add Corn", 100)] });
     expect(result).toMatchObject({ reconciles: false, discrepancyCents: -456 });
   });
 
@@ -468,7 +482,10 @@ describe("modifiers", () => {
     );
     const result = await read({ ...PATTY_SHACK, items });
 
-    expect(result.extraction.items[0]).toMatchObject({ cents: 1950, note: "Medium Rare, Extra Patty +$3.00, Add Bacon +$2.50, No Onions" });
+    expect(result.extraction.items[0]).toMatchObject({
+      cents: 1950,
+      addons: [addon("Medium Rare"), addon("Extra Patty", 300), addon("Add Bacon", 250), addon("No Onions")],
+    });
     expect(result.reconciles).toBe(true);
   });
 
@@ -480,7 +497,18 @@ describe("modifiers", () => {
 
     const parsed = parseToolInput(input);
 
-    expect(parsed).toMatchObject({ kind: "extraction", extraction: { items: [{ cents: 2900, note: "Sub salad -$1.00" }] } });
+    expect(parsed).toMatchObject({ kind: "extraction", extraction: { items: [{ cents: 2900, addons: [addon("Sub salad", -100)] }] } });
+  });
+
+  it("names a priced modifier read without a name, so the line still adds up to its add-ons", () => {
+    const input = {
+      ...PATTY_SHACK,
+      items: [{ label: "Burger", price: "14.00", modifiers: [{ label: " ", price: "3.00" }, { label: "", price: null }], confidence: 1 }],
+    };
+
+    const parsed = parseToolInput(input);
+
+    expect(parsed).toMatchObject({ extraction: { items: [{ cents: 1700, addons: [addon("Add-on", 300)] }] } });
   });
 
   it.each([

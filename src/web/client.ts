@@ -28,7 +28,8 @@ export const CLIENT_SCRIPT = String.raw`
   const NOTE_MS = 3500;
   const ARM_MS = 4000;
   const MAX_LABEL = 120;
-  const MAX_NOTE = 200;
+  const MAX_ADDON_LABEL = 80;
+  const MAX_ADDONS = 20;
   const MAX_GUEST_NAME = 40;
   const SVG = "http://www.w3.org/2000/svg";
   const STATUS_WORD = { reading: "Reading", draft: "Draft", confirmed: "Confirmed", superseded: "Replaced", deleted: "Deleted" };
@@ -69,6 +70,11 @@ export const CLIENT_SCRIPT = String.raw`
     return money(cents).replace(/[$,]/g, "");
   }
 
+  // Same as formatAddons on the server.
+  function addonsText(addons) {
+    return addons.map((a) => a.cents === 0 ? a.label : a.label + " " + (a.cents > 0 ? "+" : "") + money(a.cents)).join(", ");
+  }
+
   // "12", "12.5", "$1,012.50" and ".5" in; the server's strict "12.50" shape
   // out, or null. Hundredths either way, so it also reads a tip percentage.
   function decimal(text) {
@@ -91,6 +97,16 @@ export const CLIENT_SCRIPT = String.raw`
     const value = decimal(off ? trimmed.slice(1) : trimmed);
     if (value === null) return null;
     return off && hundredths(value) !== 0 ? "-" + value : value;
+  }
+
+  // An add-on can take money off ("No cheese -0.50"), so it may carry a sign.
+  // Left empty, it is unpriced.
+  function addonPrice(text) {
+    return text.trim() === "" ? "0.00" : linePrice(text);
+  }
+
+  function signedHundredths(value) {
+    return value[0] === "-" ? -hundredths(value.slice(1)) : hundredths(value);
   }
 
   function el(tag, attrs, children) {
@@ -354,7 +370,7 @@ export const CLIENT_SCRIPT = String.raw`
 
   function rowLabel(v, item, actor) {
     const others = item.claimedBy.filter((id) => id !== actor).map((id) => nameOf(v, id));
-    return item.label + (item.note ? " (" + item.note + ")" : "") + ", " + money(item.cents) + (others.length > 0 ? ", with " + others.join(", ") : "") +
+    return item.label + (item.addons ? " (" + addonsText(item.addons) + ")" : "") + ", " + money(item.cents) + (others.length > 0 ? ", with " + others.join(", ") : "") +
       (actor !== v.s.viewer ? ", for " + nameOf(v, actor) : "");
   }
 
@@ -378,11 +394,11 @@ export const CLIENT_SCRIPT = String.raw`
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
       el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
-      item.note ? el("span", { class: "item-note" }, item.note) : null,
+      item.addons ? el("span", { class: "item-addons" }, addonsText(item.addons)) : null,
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
-    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.note ? "has-note" : ""];
+    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : ""];
     const claim = { "data-claim": true, "data-item": item.id, "data-participant": actor, "aria-pressed": String(mine) };
     if (mode === "all") {
       classes.push("has-picker");
@@ -415,7 +431,7 @@ export const CLIENT_SCRIPT = String.raw`
         const roster = v.s.participants.map((p) => [p.id, p.displayName]);
         patch(list, v.s.items.map((item) => ({
           id: item.id,
-          key: JSON.stringify([item.label, item.note, item.cents, item.claimedBy.slice().sort(), roster, actor, mode]),
+          key: JSON.stringify([item.label, item.addons, item.cents, item.claimedBy.slice().sort(), roster, actor, mode]),
           build: () => rowNode(v, item, actor, mode),
         })));
       }
@@ -1151,21 +1167,26 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
   }
 
+  // A dish on the bill edits as its own price plus one row per add-on, so a
+  // wrongly read add-on is removed or repriced and the total follows. Adding
+  // a line from the receipt stays a name and a price.
   function lineForm(item) {
     const n = Date.now();
+    const addons = item ? item.addons || [] : [];
+    const base = item ? item.cents - addons.reduce((sum, a) => sum + a.cents, 0) : 0;
     const label = el("input", { id: "line-name-" + n, class: "text-input", name: "label", maxlength: MAX_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Name", placeholder: item ? null : "Name" });
-    const price = el("input", { id: "line-price-" + n, name: "price", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Price", placeholder: "0.00" });
-    // Add-ons belong to a dish already on the bill, so only its editor asks.
-    const addOns = item ? el("textarea", { id: "line-note-" + n, class: "text-input addons-input", name: "note", rows: 2, maxlength: MAX_NOTE, autocomplete: "off", "aria-label": "Add-ons", placeholder: "Add-ons, like no onions" }) : null;
+    const price = el("input", { id: "line-price-" + n, name: "price", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": item ? null : "Price", placeholder: "0.00" });
     if (item) {
       label.value = item.label;
-      addOns.value = item.note || "";
-      price.value = plain(item.cents);
+      price.value = plain(base);
     }
-    const form = el("form", { class: "line-form" + (item ? " has-addons" : ""), novalidate: true }, [
+    const form = el("form", { class: "line-form" + (item ? " dish-form" : ""), novalidate: true }, [
       label,
-      addOns,
+      item ? el("label", { class: "field-label", for: price.id, "data-base-label": true }) : null,
       el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
+      item ? el("p", { class: "addons-head", "data-addons-head": true }, "Add-ons") : null,
+      ...addons.map((a) => addonRow(a)),
+      item ? el("button", { type: "button", class: "add-row", "data-add-addon": true }, [icon("plus"), "Add-on"]) : null,
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
         item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete line" }, icon("trash")) : null,
@@ -1173,10 +1194,51 @@ export const CLIENT_SCRIPT = String.raw`
         el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
       ]),
     ]);
-    form._note = item ? item.note || "" : "";
-    if (item) form.dataset.editLine = item.id;
-    else form.dataset.addLine = "";
+    form._addons = JSON.stringify(addons.map((a) => [a.label, a.cents]));
+    if (item) {
+      form.dataset.editLine = item.id;
+      refreshDish(form);
+    } else form.dataset.addLine = "";
     return form;
+  }
+
+  function addonRow(addon) {
+    const name = el("input", { class: "text-input", "data-addon-label": true, maxlength: MAX_ADDON_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Add-on", placeholder: "Add-on" });
+    const price = el("input", { "data-addon-price": true, inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Add-on price", placeholder: "0.00" });
+    name.value = addon.label;
+    price.value = addon.cents === 0 ? "" : plain(addon.cents);
+    return el("div", { class: "addon", "data-addon": true }, [
+      name,
+      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
+      el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
+    ]);
+  }
+
+  // The dish as it would save. A price that doesn't read as money yet counts
+  // as nothing until it does.
+  function dishCents(form) {
+    const base = linePrice(form.elements.price.value);
+    let cents = base === null ? 0 : signedHundredths(base);
+    for (const input of form.querySelectorAll("[data-addon-price]")) {
+      const value = addonPrice(input.value);
+      if (value !== null) cents += signedHundredths(value);
+    }
+    return cents;
+  }
+
+  function refreshDish(form) {
+    const addons = form.querySelectorAll("[data-addon]");
+    const rows = addons.length;
+    for (const row of addons) {
+      const name = row.querySelector("[data-addon-label]").value.trim();
+      row.querySelector("[data-remove-addon]").setAttribute("aria-label", "Remove " + (name || "add-on"));
+    }
+    form.querySelector("[data-base-label]").textContent = rows > 0 ? "Base price" : "Price";
+    form.querySelector("[data-addons-head]").hidden = rows === 0;
+    form.querySelector("[data-add-addon]").hidden = rows >= MAX_ADDONS;
+    const dialog = form.closest("dialog");
+    const total = dialog ? dialog.querySelector("[data-dish-total]") : null;
+    if (total) total.textContent = money(dishCents(form));
   }
 
   function lineSheet(v, itemId) {
@@ -1186,7 +1248,7 @@ export const CLIENT_SCRIPT = String.raw`
     return [
       el("div", { class: "sheet-head" }, [
         el("h2", { id: "sheet-title" }, item.label),
-        el("span", { class: "money" }, money(item.cents)),
+        el("span", { class: "money", "data-dish-total": true }, money(sheet.form ? dishCents(sheet.form) : item.cents)),
         el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
       ]),
       el("div", { class: "picker", role: "group", "aria-label": "Who had " + item.label }, people.map((p) => pickNode(v, item, p))),
@@ -1470,10 +1532,29 @@ export const CLIENT_SCRIPT = String.raw`
       return null;
     }
     const values = { label, price };
-    // Sent only when changed: a long note read off the receipt can stay as it
-    // is without tripping the length limit.
-    const note = form.elements.note ? form.elements.note.value.replace(/\s+/g, " ").trim() : form._note;
-    if (note !== form._note) values.note = note;
+    if (form.dataset.editLine === undefined) return values;
+    const addons = [];
+    for (const row of form.querySelectorAll("[data-addon]")) {
+      const name = row.querySelector("[data-addon-label]");
+      const amount = row.querySelector("[data-addon-price]");
+      const addonLabel = name.value.replace(/\s+/g, " ").trim();
+      const addonValue = addonPrice(amount.value);
+      if (addonLabel === "" && addonValue !== null && hundredths(addonValue.replace("-", "")) === 0) continue;
+      if (addonLabel === "") {
+        msg.textContent = "Name the add-on.";
+        name.focus();
+        return null;
+      }
+      if (addonValue === null) {
+        msg.textContent = "Enter the add-on's price like 3.00.";
+        amount.focus();
+        return null;
+      }
+      addons.push({ label: addonLabel, price: addonValue });
+    }
+    // Sent only when changed, so add-ons read off the receipt that are longer
+    // than the field allows can stay as they are.
+    if (JSON.stringify(addons.map((a) => [a.label, signedHundredths(a.price)])) !== form._addons) values.addons = addons;
     return values;
   }
 
@@ -1816,6 +1897,24 @@ export const CLIENT_SCRIPT = String.raw`
     if (field) return startEdit(field.dataset.editField);
     const mode = target.closest("[data-tip-mode]");
     if (mode) return setTipMode(mode.dataset.tipMode);
+    const addAddon = target.closest("[data-add-addon]");
+    if (addAddon) {
+      const row = addonRow({ label: "", cents: 0 });
+      addAddon.before(row);
+      refreshDish(addAddon.form);
+      row.querySelector("input").focus();
+      return;
+    }
+    const removeAddon = target.closest("[data-remove-addon]");
+    if (removeAddon) {
+      const form = removeAddon.form;
+      const row = removeAddon.closest("[data-addon]");
+      const next = row.nextElementSibling && row.nextElementSibling.matches("[data-addon]") ? row.nextElementSibling : null;
+      row.remove();
+      refreshDish(form);
+      (next ? next.querySelector("[data-remove-addon]") : form.querySelector("[data-add-addon]")).focus();
+      return;
+    }
     const del = target.closest("[data-delete-line]");
     if (del) return deleteLine(del);
     if (target.closest("[data-add-open]")) {
@@ -1909,6 +2008,7 @@ export const CLIENT_SCRIPT = String.raw`
       msg.textContent = "";
     }
     if (form.dataset.field === "tip") tipPreview(view());
+    if (form.classList.contains("dish-form")) refreshDish(form);
   });
 
   root.addEventListener("keydown", (event) => {

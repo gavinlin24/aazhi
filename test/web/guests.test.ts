@@ -562,7 +562,7 @@ describe("a guest another member added", () => {
     const was = (await owedOf("dani")) + (await owedOf(sam));
 
     expect(await reopenBill(db, BILL)).toEqual([]);
-    await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
+    await editItem(db, BILL, `${BILL}-lobster-Sam`, { baseCents: 3000 });
     await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
     expect((await confirmOnPage()).status).toBe(200);
 
@@ -877,7 +877,7 @@ describe("marking a guest paid", () => {
     const direct = await owedOf(sam);
 
     await reopenBill(db, BILL);
-    await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
+    await editItem(db, BILL, `${BILL}-lobster-Sam`, { baseCents: 3000 });
     await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
     expect((await confirmOnPage()).status).toBe(200);
 

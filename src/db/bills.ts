@@ -1,7 +1,7 @@
 import { reconciles } from "../extract/claude";
 import { groupByDebtor, groupOf, paidByDebtor, type Diner } from "../money/debtors";
 import { splitBill } from "../money/split";
-import type { BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Addon, BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { debtorOfSql, debtorSql, groupPaidSql } from "./debt";
 
 export type BillStatus = "reading" | "draft" | "confirmed" | "superseded" | "deleted";
@@ -36,7 +36,7 @@ export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt">;
 export interface NewItem {
   id: string;
   label: string;
-  note?: string;
+  addons?: Addon[];
   cents: Cents;
   source: "ocr" | "manual";
   confidence?: number | null;
@@ -174,7 +174,7 @@ export async function getBill(db: D1Database, id: string): Promise<BillRow | nul
 }
 
 function itemsStatement(db: D1Database, billId: string) {
-  return db.prepare("SELECT id, label, note, cents FROM bill_items WHERE bill_id = ? ORDER BY position").bind(billId);
+  return db.prepare("SELECT id, label, addons, cents FROM bill_items WHERE bill_id = ? ORDER BY position").bind(billId);
 }
 
 function claimsStatement(db: D1Database, billId: string) {
@@ -190,7 +190,7 @@ function claimsStatement(db: D1Database, billId: string) {
 interface ItemDbRow {
   id: string;
   label: string;
-  note: string | null;
+  addons: string | null;
   cents: number;
 }
 
@@ -209,7 +209,7 @@ function assembleItems(items: ItemDbRow[], claims: ClaimDbRow[]): LineItem[] {
   return items.map((i) => ({
     id: i.id,
     label: i.label,
-    ...(i.note ? { note: i.note } : {}),
+    ...(i.addons ? { addons: JSON.parse(i.addons) as Addon[] } : {}),
     cents: i.cents,
     claimedBy: sortedIds(byItem.get(i.id) ?? []),
   }));
@@ -376,13 +376,13 @@ export async function bumpRevision(db: D1Database, billId: string): Promise<numb
 
 export async function insertItems(db: D1Database, billId: string, items: NewItem[]): Promise<number> {
   const insert = db.prepare(
-    `INSERT INTO bill_items (id, bill_id, label, note, cents, position, source, confidence)
+    `INSERT INTO bill_items (id, bill_id, label, addons, cents, position, source, confidence)
      VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM bill_items WHERE bill_id = ?), ?, ?)`,
   );
   return mutate(
     db,
     billId,
-    items.map((i) => insert.bind(i.id, billId, i.label, i.note ?? null, i.cents, billId, i.source, i.confidence ?? null)),
+    items.map((i) => insert.bind(i.id, billId, i.label, addonsJson(i.addons), i.cents, billId, i.source, i.confidence ?? null)),
   );
 }
 
@@ -526,18 +526,36 @@ export async function editItem(
   db: D1Database,
   billId: string,
   itemId: string,
-  change: { label?: string; cents?: number; note?: string | null },
+  change: { label?: string; baseCents?: Cents; addons?: Addon[] },
 ): Promise<number> {
-  // A null note clears it, so "leave it alone" needs its own flag.
+  // cents is base plus add-ons. A change to either is worked out against the
+  // stored add-ons inside the one statement, so the total never drifts from
+  // them. An empty list clears them, so "leave them alone" needs its own flag.
+  const addons = change.addons;
   return mutateDraft(db, billId, [
     db
       .prepare(
-        `UPDATE bill_items SET label = COALESCE(?3, label), cents = COALESCE(?4, cents),
-           note = CASE WHEN ?5 THEN ?6 ELSE note END
+        `UPDATE bill_items SET label = COALESCE(?3, label),
+           cents = COALESCE(?4, cents - ${STORED_ADDONS_CENTS}) + CASE WHEN ?5 THEN ?6 ELSE ${STORED_ADDONS_CENTS} END,
+           addons = CASE WHEN ?5 THEN ?7 ELSE addons END
          WHERE bill_id = ?1 AND id = ?2 AND ${WHILE_DRAFT}`,
       )
-      .bind(billId, itemId, change.label ?? null, change.cents ?? null, change.note !== undefined ? 1 : 0, change.note ?? null),
+      .bind(
+        billId,
+        itemId,
+        change.label ?? null,
+        change.baseCents ?? null,
+        addons ? 1 : 0,
+        addons ? addons.reduce((sum, a) => sum + a.cents, 0) : 0,
+        addonsJson(addons),
+      ),
   ]);
+}
+
+const STORED_ADDONS_CENTS = "(SELECT COALESCE(SUM(json_extract(a.value, '$.cents')), 0) FROM json_each(bill_items.addons) AS a)";
+
+function addonsJson(addons: Addon[] | undefined): string | null {
+  return addons && addons.length > 0 ? JSON.stringify(addons.map((a) => ({ label: a.label, cents: a.cents }))) : null;
 }
 
 // The line's claims go with it through the item_claims cascade.

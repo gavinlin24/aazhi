@@ -311,25 +311,26 @@ describe("renderPage", () => {
     expect(await select(page("marcus", bill, input, outsider), "[data-add-guest]")).toEqual([]);
   });
 
-  it("shows a line's modifiers under the dish name, and reads them out with it", async () => {
-    const note = "Extra patty +$3.00, No onions";
-    const input = withItem(withItem(draft, { id: "burger", label: "Burger", note, cents: 1950, claimedBy: ["marcus"] }), {
+  it("shows a line's add-ons under the dish name, and reads them out with it", async () => {
+    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }, { label: "No cheese", cents: -50 }];
+    const note = "Extra patty +$3.00, No onions, No cheese -$0.50";
+    const input = withItem(withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: ["marcus"] }), {
       id: "odd",
       label: "Odd",
-      note: "<b>bold</b>",
+      addons: [{ label: "<b>bold</b>", cents: 0 }],
       cents: 100,
       claimedBy: [],
     });
     const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "marcus", {}, NOW);
 
     const row = await one(html, 'li.item[data-item="burger"]');
-    expect(row.attrs.class.split(" ")).toContain("has-note");
-    expect(await textOf(html, 'li.item[data-item="burger"] .item-note')).toBe(note);
+    expect(row.attrs.class.split(" ")).toContain("has-addons");
+    expect(await textOf(html, 'li.item[data-item="burger"] .item-addons')).toBe(note);
     expect(html).not.toContain("<b>bold");
     expect(html).toContain("&lt;b&gt;bold&lt;/b&gt;");
     expect((await one(html, 'li.item[data-item="burger"] [aria-label]')).attrs["aria-label"]).toBe(`Burger (${note}), $19.50`);
-    expect(await select(html, 'li.item[data-item="bun"] .item-note')).toEqual([]);
-    expect(stateOf(html).items.find((i: any) => i.id === "burger").note).toBe(note);
+    expect(await select(html, 'li.item[data-item="bun"] .item-addons')).toEqual([]);
+    expect(stateOf(html).items.find((i: any) => i.id === "burger").addons).toEqual(addons);
   });
 
   it("escapes text that came from the receipt or from people", async () => {

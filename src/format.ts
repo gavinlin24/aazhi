@@ -1,4 +1,4 @@
-import type { Cents } from "./money/types";
+import type { Addon, Cents } from "./money/types";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -7,6 +7,11 @@ export function formatCents(cents: Cents): string {
   const remainder = abs % 100;
   const dollars = String((abs - remainder) / 100).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return `${cents < 0 ? "-" : ""}$${dollars}.${String(remainder).padStart(2, "0")}`;
+}
+
+// "Extra patty +$3.00, No onions": the short line shown under the dish.
+export function formatAddons(addons: Addon[]): string {
+  return addons.map((a) => (a.cents === 0 ? a.label : `${a.label} ${a.cents > 0 ? "+" : ""}${formatCents(a.cents)}`)).join(", ");
 }
 
 // Spelled out by hand rather than through Intl so the Discord message and the

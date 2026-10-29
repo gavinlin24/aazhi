@@ -159,7 +159,7 @@ describe("confirming on the page", () => {
   it("refuses a confirm sent from a page drawn before the bill changed", async () => {
     await seedSaigon(db, BILL);
     const seen = await revision();
-    await editItem(db, BILL, item("noodles"), { cents: 8200 });
+    await editItem(db, BILL, item("noodles"), { baseCents: 8200 });
 
     const reply = await send("POST", "/confirm", "gavin", { revision: seen });
 
@@ -170,7 +170,7 @@ describe("confirming on the page", () => {
 
   it("says the lines do not add up, in the payer's words", async () => {
     await seedSaigon(db, BILL);
-    await editItem(db, BILL, item("noodles"), { cents: 8200 });
+    await editItem(db, BILL, item("noodles"), { baseCents: 8200 });
 
     const reply = await confirm();
 
@@ -227,7 +227,7 @@ describe("confirming on the page", () => {
     await recordSettlement(db, BILL, "marcus", 4446, "marcus");
     expect((await send("POST", "/reopen", "gavin")).status).toBe(200);
     // The payer fixes the misread spring rolls, and the total with them.
-    await editItem(db, BILL, item("rolls"), { cents: 642 });
+    await editItem(db, BILL, item("rolls"), { baseCents: 642 });
     await setBillAmounts(db, BILL, { printedTotalCents: 24292 + 2232 });
 
     expect((await confirm()).status).toBe(200);
@@ -244,7 +244,7 @@ describe("confirming on the page", () => {
     await confirmed();
     await recordSettlement(db, BILL, "marcus", 4446, "marcus");
     await send("POST", "/reopen", "gavin");
-    await editItem(db, BILL, item("rolls"), { cents: 2100 });
+    await editItem(db, BILL, item("rolls"), { baseCents: 2100 });
     await setBillAmounts(db, BILL, { printedTotalCents: 25750 + 2232 });
     const nowCents = splitBill(await toSplitInput(db, BILL)).shares.find((s) => s.participant === "marcus")!.owedCents;
     expect(nowCents).toBeGreaterThan(4446);

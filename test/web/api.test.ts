@@ -278,36 +278,41 @@ describe("the payer correcting the bill", () => {
     });
   });
 
-  it("lets the payer write, keep and clear a dish's add-ons", async () => {
+  it("prices a dish as its own price plus its add-ons, through every kind of edit", async () => {
     await seedSaigon(db, BILL);
-    const noodles = async () => (await getBillItems(db, BILL)).find((i) => i.id === item("noodles"));
+    const noodles = async () => (await getBillItems(db, BILL)).find((i) => i.id === item("noodles"))!;
+    const edit = (change: object) => editItems("gavin", { op: "edit", itemId: item("noodles"), ...change });
+    const garlic = (price: string) => ({ label: "  Extra\n garlic ", price });
 
-    const written = await editItems("gavin", {
-      op: "edit",
-      itemId: item("noodles"),
-      note: "  Extra garlic +$2.00,\n  no chili ",
-      price: "34.00",
-    });
-    expect(written.status).toBe(200);
+    const before = await send("GET", `/b/${BILL}/state`, { as: "gavin" });
+    const added = await edit({ addons: [garlic("2.00"), { label: "No chili", price: "0.00" }] });
+    expect(added.status).toBe(200);
     expect(await noodles()).toEqual({
       id: item("noodles"),
       label: "Garlic noodles",
-      cents: 3400,
-      note: "Extra garlic +$2.00, no chili",
-      claimedBy: ["dani"],
-    });
-
-    await editItems("gavin", { op: "edit", itemId: item("noodles"), label: "Garlic butter noodles" });
-    expect((await noodles())!.note).toBe("Extra garlic +$2.00, no chili");
-
-    const cleared = await editItems("gavin", { op: "edit", itemId: item("noodles"), note: "   " });
-    expect(cleared.status).toBe(200);
-    expect(await noodles()).toEqual({
-      id: item("noodles"),
-      label: "Garlic butter noodles",
+      addons: [{ label: "Extra garlic", cents: 200 }, { label: "No chili", cents: 0 }],
       cents: 3400,
       claimedBy: ["dani"],
     });
+    expect(added.body.reconciles).toEqual({ ok: false, discrepancyCents: 200 });
+    expect(shareOf(added, "dani").subtotalCents).toBe(shareOf(before, "dani").subtotalCents + 200);
+
+    await edit({ addons: [garlic("3.00"), { label: "No chili", price: "0.00" }] });
+    expect((await noodles()).cents).toBe(3500);
+
+    await edit({ price: "30.00" });
+    expect((await noodles()).cents).toBe(3300);
+
+    await edit({ label: "Garlic butter noodles" });
+    expect(await noodles()).toMatchObject({ cents: 3300, addons: [{ label: "Extra garlic", cents: 300 }, { label: "No chili", cents: 0 }] });
+
+    const removed = await edit({ addons: [{ label: "No chili", price: "0.00" }] });
+    expect((await noodles()).cents).toBe(3000);
+    expect(removed.body.reconciles).toEqual({ ok: false, discrepancyCents: -200 });
+
+    const fixed = await edit({ price: "32.00", addons: [] });
+    expect(await noodles()).toEqual({ id: item("noodles"), label: "Garlic butter noodles", cents: 3200, claimedBy: ["dani"] });
+    expect(fixed.body.reconciles).toEqual({ ok: true, discrepancyCents: null });
   });
 
   it("lets the payer add a missed line and delete a hallucinated one", async () => {
@@ -343,7 +348,7 @@ describe("the payer correcting the bill", () => {
 
     const replies = [
       await editItems("marcus", { op: "edit", itemId: item("noodles"), price: "1.00" }),
-      await editItems("marcus", { op: "edit", itemId: item("noodles"), note: "No garlic" }),
+      await editItems("marcus", { op: "edit", itemId: item("noodles"), addons: [{ label: "No garlic", price: "0.00" }] }),
       await editItems("marcus", { op: "add", label: "Free beer", price: "0.01" }),
       await editItems("marcus", { op: "delete", itemId: item("bun") }),
       await patch("marcus", { tip: "0.00" }),
@@ -695,10 +700,15 @@ describe("request bodies", () => {
       ["POST", "item", { op: "add", label: "Che" }],
       ["POST", "item", { op: "add", label: "Che", price: "1.00", itemId: item("tea") }],
       ["POST", "item", { op: "edit", itemId: item("tea") }],
-      ["POST", "item", { op: "edit", itemId: item("tea"), note: 7 }],
-      ["POST", "item", { op: "edit", itemId: item("tea"), note: null }],
-      ["POST", "item", { op: "edit", itemId: item("tea"), note: "x".repeat(201) }],
-      ["POST", "item", { op: "add", label: "Che", price: "1.00", note: "Extra jelly" }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: "Extra jelly" }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: null }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: [{ label: "Jelly" }] }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: [{ label: "Jelly", price: 100 }] }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: [{ label: " ", price: "1.00" }] }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: [{ label: "x".repeat(81), price: "1.00" }] }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: [{ label: "Jelly", price: "1.00", extra: 1 }] }],
+      ["POST", "item", { op: "edit", itemId: item("tea"), addons: Array.from({ length: 21 }, () => ({ label: "Jelly", price: "1.00" })) }],
+      ["POST", "item", { op: "add", label: "Che", price: "1.00", addons: [] }],
       ["POST", "item", { op: "delete" }],
       ["POST", "item", { op: "delete", itemId: item("tea"), price: "1.00" }],
       ["PATCH", "", {}],

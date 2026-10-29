@@ -1,5 +1,5 @@
 import type { BillRow, Participant } from "../db/bills";
-import { formatCents, formatDate } from "../format";
+import { formatAddons, formatCents, formatDate } from "../format";
 import { debtorOf } from "../money/debtors";
 import { itemPieces } from "../money/split";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
@@ -133,7 +133,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, p { margin: 0; }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; }
 :focus-visible { outline: 2.5px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
@@ -259,9 +259,9 @@ button.row:active { background: var(--fill); }
 .item-label { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
 .item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
 /* A dish's modifiers wrap rather than clip: they explain the price beside it. */
-.item-note { grid-area: note; min-width: 0; font-size: 14px; line-height: 18px; color: var(--muted); padding-bottom: 2px; }
-.has-note .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" "tick note note" "tick who piece"; }
-.is-bare.has-note .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" "tick note note"; }
+.item-addons { grid-area: addons; min-width: 0; font-size: 14px; line-height: 18px; color: var(--muted); padding-bottom: 2px; }
+.has-addons .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" "tick addons addons" "tick who piece"; }
+.is-bare.has-addons .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" "tick addons addons"; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
@@ -432,11 +432,18 @@ button.row:active { background: var(--fill); }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
 .line-form .field-msg { grid-column: 1 / -1; }
-/* Editing a dish: name, add-ons, then the one price for the lot. */
-.line-form.has-addons { grid-template-columns: 112px minmax(0, 1fr); }
-.line-form.has-addons > .text-input { grid-column: 1 / -1; }
-.addons-input { height: auto; padding: 9px 10px; resize: none; font-size: 16px; line-height: 22px; color: var(--muted); }
-.addons-input:focus { color: var(--ink); }
+/* Editing a dish lays it out like the receipt: its own price, then one row
+   per add-on, every price in one column so the sum reads down. */
+.dish-form { grid-template-columns: minmax(0, 1fr) 112px 44px; }
+.dish-form > [name="label"] { grid-column: 1 / -1; }
+.dish-form .money-input { grid-column: 2; }
+.dish-form .field-label { grid-column: 1; align-self: center; color: var(--muted); }
+.dish-form .addons-head { grid-column: 1 / -1; margin-top: 6px; color: var(--muted); font-size: 15px; }
+.addon { display: contents; }
+.addon .text-input { grid-column: 1; }
+.addon .icon-btn { border-color: transparent; background: none; color: var(--muted); }
+.dish-form .add-row { grid-column: 1 / 3; gap: 6px; font-size: 16px; }
+.dish-form [hidden] { display: none; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
 .tile {
@@ -1115,7 +1122,7 @@ function notOnBill(v: View): string {
 
 function rowLabel(v: View, item: LineItem): string {
   const others = item.claimedBy.filter((id) => id !== v.s.viewer).map((id) => nameOf(v, id));
-  return `${item.label}${item.note ? ` (${item.note})` : ""}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
+  return `${item.label}${item.addons ? ` (${formatAddons(item.addons)})` : ""}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
 }
 
 function piece(v: View, item: LineItem): string {
@@ -1137,10 +1144,10 @@ function itemRow(v: View, item: LineItem): string {
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
     `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
-    (item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : "") +
+    (item.addons ? `<span class="item-addons">${escapeHtml(formatAddons(item.addons))}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
-  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.note ? "has-note" : ""];
+  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : ""];
   const claim = `data-claim data-item="${id}" data-participant="${escapeHtml(v.s.viewer)}" aria-pressed="${mine}"`;
   if (v.s.editable === "all") {
     classes.push("has-picker");
