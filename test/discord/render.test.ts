@@ -270,7 +270,7 @@ describe("renderBill", () => {
     expect(text).toContain("Fresh coconut");
   });
 
-  it("shows each person's frozen amount once confirmed, with the payer's Reopen and Delete", () => {
+  it("shows each person's frozen amount once confirmed, with pay controls and the payer's Reopen and Delete", () => {
     const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
     // The frozen rows, not a fresh split: Marcus's row says $40.00 here even
     // though the lines would give him $44.46 today.
@@ -285,8 +285,22 @@ describe("renderBill", () => {
     expect(text).toMatch(/<@gavin>[^\n]*\$48\.33[^\n]*paid the bill/i);
     // The payer is named as the person to pay.
     expect(text).toMatch(/pay <@gavin>/i);
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "reopen:bill-1", "delete:bill-1"]);
-    expect(buttonsOf(data).map((b) => b.label)).toEqual(["Open the split", "Reopen", "Delete"]);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual([
+      "pay:bill-1",
+      "math:bill-1",
+      "notmine:bill-1",
+      "open:bill-1",
+      "reopen:bill-1",
+      "delete:bill-1",
+    ]);
+    expect(buttonsOf(data).map((b) => b.label)).toEqual([
+      "Pay my share",
+      "Show my math",
+      "That's not mine",
+      "Open the split",
+      "Reopen",
+      "Delete",
+    ]);
     expect(JSON.stringify(data.components)).not.toMatch(/confirm:/);
     expect(data.allowed_mentions).toEqual({ parse: [] });
   });

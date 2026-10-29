@@ -35,9 +35,9 @@ import { invokerOf } from "../members";
 import { escapeMarkdown, loadBillMessage } from "../render";
 import { editBillMessage, ephemeral } from "../rest";
 
-const NOT_SUPPORTED = "That action is not supported.";
-const NOT_FOUND = "I can't find that split any more. It may have been removed.";
-const STATUS_REFUSAL: Record<BillRow["status"], string> = {
+export const NOT_SUPPORTED = "That action is not supported.";
+export const NOT_FOUND = "I can't find that split any more. It may have been removed.";
+export const STATUS_REFUSAL: Record<BillRow["status"], string> = {
   reading: "I'm still reading this receipt. Try again in a moment.",
   draft: "This bill isn't confirmed, so there's nothing to reopen. Fix it on the page and tap Confirm.",
   confirmed: "This bill is already confirmed.",
@@ -53,18 +53,18 @@ function json(body: unknown): Response {
   return Response.json(body);
 }
 
-const privately: Reply = (content) => json(ephemeral(content));
+export const privately: Reply = (content) => json(ephemeral(content));
 
 // The second step of a two-tap action answers by rewriting its own ephemeral
 // prompt, so the prompt's button is gone and cannot be tapped twice.
 const inPlace: Reply = (content) =>
   json({ type: InteractionResponseType.UpdateMessage, data: { content, components: [], allowed_mentions: { parse: [] } } });
 
-function outLoud(content: string): Response {
+export function outLoud(content: string): Response {
   return json({ type: InteractionResponseType.ChannelMessageWithSource, data: { content, allowed_mentions: { parse: [] } } });
 }
 
-function nameOf(participants: Participant[], id: string): string {
+export function nameOf(participants: Participant[], id: string): string {
   const name = participants.find((p) => p.id === id)?.displayName;
   return name ? escapeMarkdown(name) : "the person who paid";
 }
@@ -76,7 +76,7 @@ function list(parts: string[]): string {
 
 // A failed edit only leaves the channel message a little behind; the reply
 // already told the person what happened.
-function refreshMessage(bill: BillRow, env: Env, ctx: ExecutionContext): void {
+export function refreshMessage(bill: BillRow, env: Env, ctx: ExecutionContext): void {
   ctx.waitUntil(editBillMessage(bill, env).catch((error) => console.error("could not update the bill message", error)));
 }
 
@@ -95,14 +95,14 @@ function changeLine(change: AmountChange, participants: Participant[], payerId: 
   return `${who} paid ${formatCents(change.settledCents)} and now owes ${formatCents(change.nowCents)}, ${settle}`;
 }
 
-function announcement(lead: string, changes: AmountChange[], participants: Participant[], payerId: string): string {
+export function announcement(lead: string, changes: AmountChange[], participants: Participant[], payerId: string): string {
   return [lead, ...changes.map((c) => `- ${changeLine(c, participants, payerId)}`)].join("\n");
 }
 
 // Ids are generated UUIDs, so the custom_id splits cleanly on its colons.
 // `pinned` is the number the button was drawn with (a revision, or the payment
 // total a delete prompt named), so a tap on an outdated button is caught.
-function parseCustomId(body: APIInteraction, prefix: string, withPinned: boolean): { billId: string; pinned: number } | null {
+export function parseCustomId(body: APIInteraction, prefix: string, withPinned: boolean): { billId: string; pinned: number } | null {
   if (body.type !== InteractionType.MessageComponent) return null;
   const rest = body.data.custom_id.slice(prefix.length);
   if (!withPinned) return rest ? { billId: rest, pinned: NaN } : null;

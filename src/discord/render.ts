@@ -27,6 +27,7 @@ import type { LineItem, Share, SplitResult } from "../money/types";
 const LIMITS = { title: 256, description: 4096, fieldValue: 1024, embed: 6000 };
 const MAX_LABEL = 60;
 const MAX_NAME = 40;
+const MAX_SUMMARY = 120;
 
 const COLOR = { draft: 0x5865f2, needsFixing: 0xf0b232, confirmed: 0x23a55a, superseded: 0x80848e };
 
@@ -131,8 +132,8 @@ function billField(bill: BillRow, result: SplitResult): APIEmbedField {
   };
 }
 
-function openButton(bill: BillRow): APIButtonComponent {
-  return { type: ComponentType.Button, style: ButtonStyle.Primary, label: "Open the split", custom_id: `open:${bill.id}` };
+function openButton(bill: BillRow, style: ButtonStyle.Primary | ButtonStyle.Secondary = ButtonStyle.Primary): APIButtonComponent {
+  return { type: ComponentType.Button, style, label: "Open the split", custom_id: `open:${bill.id}` };
 }
 
 // Like Confirm and Reopen, everyone sees it and the handler refuses anyone
@@ -223,11 +224,24 @@ function mention(p: Participant | undefined, names: Map<string, string>, fallbac
   return p.kind === "member" ? `<@${p.id}>` : `${names.get(p.id)} (guest)`;
 }
 
-// Until the owe card arrives, a confirmed bill shows the frozen rows: the
-// numbers locked at confirm, never a recomputation from the lines.
-function confirmed(
+// "Spring rolls (1/3), Bun bo Hue": what a person's amount covers, with the
+// share of any line they split.
+function coveredBy(participant: string, items: LineItem[]): string {
+  const lines = items.flatMap((item) => {
+    if (!item.claimedBy.includes(participant)) return [];
+    const label = escapeMarkdown(clip(item.label, MAX_LABEL));
+    return [item.claimedBy.length > 1 ? `${label} (1/${item.claimedBy.length})` : label];
+  });
+  return lines.length > 0 ? clip(lines.join(", "), MAX_SUMMARY) : "nothing claimed";
+}
+
+// The owe card. Amounts are the rows frozen at confirm, never a recomputation
+// from the lines. Its buttons are shared by everyone who can see the message,
+// so each one answers the tapper privately about their own share.
+function oweCard(
   bill: BillRow,
   result: SplitResult,
+  items: LineItem[],
   participants: Participant[],
   frozen: Share[],
   names: Map<string, string>,
@@ -242,20 +256,32 @@ function confirmed(
   const rows = participants
     .filter((p) => owed.has(p.id))
     .map((p) => {
-      const line = `${mention(p, names, p.id)} · ${formatCents(owed.get(p.id)!)}`;
-      return p.id === bill.payerId ? `${line} · paid the bill` : line;
+      const paid = p.id === bill.payerId ? " (paid the bill)" : "";
+      return `${mention(p, names, p.id)} · ${formatCents(owed.get(p.id)!)}${paid} · ${coveredBy(p.id, items)}`;
     });
 
   const embed: APIEmbed = {
     title: titleOf(bill),
     color: COLOR.confirmed,
     fields: [billField(bill, result)],
-    footer: { text: `Confirmed: these amounts are locked. Something wrong? ${payerName} can reopen the bill to fix it.` },
+    footer: {
+      text:
+        "These amounts are locked. Charged for something that isn't yours? Tap That's not mine and paying " +
+        `pauses until ${payerName} fixes it.`,
+    },
   };
-  const head = `**Confirmed.** Pay ${payer} your share.\n\n`;
+  const head =
+    `**Confirmed.** Pay ${payer} your share. **Pay my share** has your amount filled in, ` +
+    "and **Show my math** shows how it was worked out.\n\n";
   const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
   embed.description = head + fitLines(rows, budget, (n) => `and ${n} more on the page`);
 
+  const button = (style: ButtonStyle.Success | ButtonStyle.Secondary, label: string, prefix: string): APIButtonComponent => ({
+    type: ComponentType.Button,
+    style,
+    label,
+    custom_id: `${prefix}:${bill.id}`,
+  });
   return {
     content: "",
     embeds: [embed],
@@ -263,10 +289,15 @@ function confirmed(
       {
         type: ComponentType.ActionRow,
         components: [
-          openButton(bill),
-          { type: ComponentType.Button, style: ButtonStyle.Secondary, label: "Reopen", custom_id: `reopen:${bill.id}` },
-          deleteButton(bill),
+          button(ButtonStyle.Success, "Pay my share", "pay"),
+          button(ButtonStyle.Secondary, "Show my math", "math"),
+          button(ButtonStyle.Secondary, "That's not mine", "notmine"),
         ],
+      },
+      // Reopen and Delete are the payer's, refused for anyone else like Confirm.
+      {
+        type: ComponentType.ActionRow,
+        components: [openButton(bill, ButtonStyle.Secondary), button(ButtonStyle.Secondary, "Reopen", "reopen"), deleteButton(bill)],
       },
     ],
     allowed_mentions: { parse: [] },
@@ -288,7 +319,7 @@ export function renderBill(
 
   const names = new Map(participants.map((p) => [p.id, escapeMarkdown(clip(p.displayName, MAX_NAME))]));
   if (bill.status === "deleted") return deleted(bill, names);
-  if (bill.status === "confirmed") return confirmed(bill, result, participants, frozen ?? result.shares, names);
+  if (bill.status === "confirmed") return oweCard(bill, result, items, participants, frozen ?? result.shares, names);
   const payerName = names.get(bill.payerId) ?? "Payer";
   const status = readStatus(bill, items, leastConfident, payerName);
 

@@ -1,4 +1,4 @@
-import type { BillInput, Cents, ParticipantId, Share, SplitResult } from "./types";
+import type { BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "./types";
 
 // Every proration is the exact rational a * b / d of integer cents. Working in
 // BigInt keeps the product exact beyond 2^53 and makes a fractional input throw
@@ -64,6 +64,16 @@ function largestRemainder(
   return owed;
 }
 
+// What each claimant's piece of one line is. Exported so anything that shows a
+// person their pieces shows the same cents the split itself used.
+export function itemPieces(item: LineItem): Map<ParticipantId, Cents> {
+  const claimants = byId(item.claimedBy);
+  if (claimants.length === 0) return new Map();
+  const base = floorDiv(item.cents, 1, claimants.length);
+  const leftover = item.cents - base * claimants.length;
+  return new Map(claimants.map((p, i) => [p, base + (i < leftover ? 1 : 0)]));
+}
+
 export function splitBill(input: BillInput): SplitResult {
   if (input.tipCents < 0) throw new RangeError(`Tip cannot be negative (got ${input.tipCents} cents)`);
 
@@ -77,14 +87,11 @@ export function splitBill(input: BillInput): SplitResult {
     if (item.claimedBy.length === 0) continue;
     claimedSubtotalCents += item.cents;
 
-    const claimants = byId(item.claimedBy);
-    const base = floorDiv(item.cents, 1, claimants.length);
-    const leftover = item.cents - base * claimants.length;
-    claimants.forEach((p, i) => {
+    for (const [p, piece] of itemPieces(item)) {
       const subtotal = subtotals.get(p);
       if (subtotal === undefined) throw new Error(`Item "${item.id}" is claimed by ${p}, who is not on the bill`);
-      subtotals.set(p, subtotal + base + (i < leftover ? 1 : 0));
-    });
+      subtotals.set(p, subtotal + piece);
+    }
   }
 
   const distributableCents = billSubtotalCents + input.taxCents + input.tipCents;

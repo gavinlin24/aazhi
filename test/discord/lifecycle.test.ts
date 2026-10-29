@@ -39,6 +39,7 @@ const TOKEN = "interaction-token";
 const EPHEMERAL = 1 << 6;
 
 const item = (id: string) => `${BILL}-${id}`;
+const OWE_CARD_BUTTONS = [`pay:${BILL}`, `math:${BILL}`, `notmine:${BILL}`, `open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`];
 
 let keypair: TestKeypair;
 const ready = generateKeypair().then((k) => (keypair = k));
@@ -434,12 +435,12 @@ describe("Confirm", () => {
     expect(reply.type).toBe(7);
     expect(shown(reply.data)).toMatch(/confirmed/i);
     expect(shown(reply.data)).toMatch(/<@marcus>[^\\"]*\$44\.46/);
-    expect(customIds(reply.data)).toEqual([`open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`]);
+    expect(customIds(reply.data)).toEqual(OWE_CARD_BUTTONS);
     expect(reply.data.allowed_mentions).toEqual({ parse: [] });
     expect((await getBill(db, BILL))!.status).toBe("confirmed");
     // The stored message catches up too, in case an older edit was in flight.
     expect(messageEdits()).toHaveLength(1);
-    expect(customIds(messageEdits()[0]!.body)).toEqual([`open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`]);
+    expect(customIds(messageEdits()[0]!.body)).toEqual(OWE_CARD_BUTTONS);
     expect(followUps()).toEqual([]);
   });
 
@@ -553,7 +554,7 @@ describe("Confirm", () => {
     expect(reply.data.flags).toBe(EPHEMERAL);
     expect(reply.data.content).toMatch(/already confirmed/i);
     expect(messageEdits()).toHaveLength(1);
-    expect(customIds(messageEdits()[0]!.body)).toEqual([`open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`]);
+    expect(customIds(messageEdits()[0]!.body)).toEqual(OWE_CARD_BUTTONS);
   });
 });
 
