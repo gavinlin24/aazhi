@@ -30,7 +30,14 @@ const MAX_LABEL = 60;
 const MAX_NAME = 40;
 const MAX_SUMMARY = 120;
 
-const COLOR = { draft: 0x5865f2, needsFixing: 0xf0b232, confirmed: 0x23a55a, superseded: 0x80848e };
+// The coin the page puts on the payer's avatar, standing in for "paid the
+// bill" on their row.
+const PAYER_MARK = "🪙";
+
+// The page's Ink & Paper palette: indigo for a draft, ochre for one that
+// needs fixing, the vermilion of the 定 seal once confirmed, and ash when
+// replaced. The left edge of the embed then matches the page it links to.
+const COLOR = { draft: 0x2d4b66, needsFixing: 0x8a520f, confirmed: 0xb3302a, superseded: 0x8c8478 };
 
 // Receipt labels and display names are other people's text; unescaped, a
 // "*" in a dish name would bold half the message.
@@ -109,7 +116,9 @@ function itemLine(item: LineItem, names: Map<string, string>): string {
     .map((id) => names.get(id) ?? escapeMarkdown(id))
     .sort((a, b) => a.localeCompare(b))
     .join(", ");
-  return `${escapeMarkdown(clip(item.label, MAX_LABEL))} · ${formatCents(item.cents)} · ${who || "**unclaimed**"}`;
+  // The page draws an unclaimed line with a dashed ring; ◌ is the same mark.
+  const line = `${escapeMarkdown(clip(item.label, MAX_LABEL))} · ${formatCents(item.cents)} · ${who || "**unclaimed**"}`;
+  return who ? line : `◌ ${line}`;
 }
 
 function and(parts: string[]): string {
@@ -131,7 +140,7 @@ function owedField(bill: BillRow, result: SplitResult, participants: Participant
     .filter((p) => debtorOf(p, bill.payerId) === p.id)
     .map((p) => {
       const group = groupOf(groups, p.id) ?? { debtor: p.id, own: undefined, guests: [], owedCents: 0 };
-      const paid = p.id === bill.payerId ? " (paid the bill)" : "";
+      const paid = p.id === bill.payerId ? ` ${PAYER_MARK}` : "";
       const who = p.kind === "guest" ? `${names.get(p.id)} (guest)` : groupName(group, names);
       return `${who} ${groupAmount(group, names)}${paid}`;
     });
@@ -284,7 +293,7 @@ function oweCard(
   const rows = groupByDebtor(frozen, participants, bill.payerId).map((group) => {
     const member = participants.find((p) => p.id === group.debtor);
     const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);
-    const paid = group.debtor === bill.payerId ? " (paid the bill)" : "";
+    const paid = group.debtor === bill.payerId ? ` ${PAYER_MARK}` : "";
     const covers = [
       ...(group.own ? [coveredBy(group.own.participant, items)] : []),
       ...group.guests.map((g) => `${names.get(g.participant)}: ${coveredBy(g.participant, items)}`),
