@@ -130,7 +130,7 @@ a { color: inherit; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* One look for "tap to change": a brush after the value. Read-only values
    carry none. */
-.ic.brush { width: 15px; height: 15px; color: var(--muted); stroke-width: 1.6; }
+.ic.brush { width: 21px; height: 21px; color: var(--muted); stroke-width: 1.5; }
 .money, .item-price, .totals dd { font-variant-numeric: tabular-nums lining-nums; }
 .page {
   max-width: 480px;
@@ -182,7 +182,7 @@ button.payer-chip {
   cursor: pointer;
 }
 /* Undoes the coin's size and colour, which the chip's icon rule gives every icon in it. */
-button.payer-chip .brush { width: 15px; height: 15px; color: var(--muted); }
+button.payer-chip .brush { width: 21px; height: 21px; color: var(--muted); }
 
 .toast {
   position: fixed;
@@ -213,7 +213,7 @@ button.payer-chip .brush { width: 15px; height: 15px; color: var(--muted); }
    the brushes hang in the margin and every figure, brush or not, still lines
    up on one edge. */
 .receipt { --end: 14px; }
-.receipt.is-editable { --end: 33px; }
+.receipt.is-editable { --end: 39px; }
 .row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -240,7 +240,7 @@ button.row:active { background: var(--fill); }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
-.has-picker .row .item-price, .amt { display: inline-flex; align-items: center; gap: 4px; margin-right: -19px; }
+.has-picker .row .item-price, .amt { display: inline-flex; align-items: center; gap: 4px; margin-right: -25px; }
 .tick-btn {
   position: absolute;
   z-index: 1;
@@ -501,8 +501,10 @@ button.tile:active { background: var(--fill); }
   box-shadow: 0 -6px 20px rgba(60, 40, 10, 0.06);
 }
 /* Bottom-aligned so the arrow and face sit on the amount's line, under its
-   caption, not centred on the two together. */
-.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
+   caption, not centred on the two together. The left padding puts the
+   amount on the receipt's tick circles: card border, row padding, and half
+   the gap between a 26px tick and its 44px column. */
+.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; padding-left: 14px; }
 /* Who a tap on a line claims for, one tap to switch. It shows only when there
    is more than one answer: you and the guests you brought. */
 /* The padding gives a focused chip's ring room inside the scroller, which
