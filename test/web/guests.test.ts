@@ -673,8 +673,8 @@ describe("the page", () => {
     expect(ids).not.toContain(kim);
     expect(ids).toEqual(expect.arrayContaining(["marcus", "jess", "dani"]));
     const by = (id: string) => toggles.find((t) => t.attrs["data-forgive"] === id)!;
-    expect(by("marcus").attrs["aria-pressed"]).toBe("true");
-    expect(by("dani").attrs["aria-pressed"]).toBe("false");
+    expect(by("marcus").text).toBe("Undo");
+    expect(by("dani").text).toBe("Forgive");
     expect("disabled" in by("jess").attrs).toBe(true);
     expect("disabled" in by("dani").attrs).toBe(false);
     expect(await select(html, "form[data-guest-form]:not([hidden])")).toEqual([]);

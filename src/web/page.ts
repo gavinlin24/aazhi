@@ -310,6 +310,7 @@ select.text-input { flex: 1; width: auto; font-size: 17px; }
 .totals .grand { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; font-size: 18px; font-weight: 700; }
 .totals .grand dt { color: var(--text); }
 .totals .short, .totals .short dt { color: var(--warn); font-weight: 600; }
+.money.is-guest { color: var(--muted); }
 .money.is-forgiven { text-decoration: line-through; color: var(--muted); }
 /* The forgive column has a fixed width and every row reserves it, so the
    amounts line up whether or not a row can be forgiven. */
@@ -323,7 +324,7 @@ select.text-input { flex: 1; width: auto; font-size: 17px; }
 .forgive-slot { display: flex; justify-content: flex-end; }
 .btn.forgive { width: 100%; padding: 0 10px; font-size: 15px; }
 .btn.forgive[aria-busy="true"] { cursor: progress; }
-.btn.forgive[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent-soft-ink); }
+.btn.forgive[data-pardoned="true"] { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent-soft-ink); }
 .guest-form { margin-top: 10px; }
 .guest-form .check-heading { margin: 0 0 2px; }
 .guest-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
@@ -633,9 +634,12 @@ function forgiveSlot(v: View, p: Participant): string {
   const share = v.shares.get(p.id);
   if (!share || debtorOf(p) === v.bill.payerId) return `<span class="forgive-slot"></span>`;
   const name = escapeHtml(p.displayName);
+  // The label names what a click does next, so it is not a toggle: no
+  // aria-pressed, and the script reads data-pardoned to send the opposite.
+  const label = share.pardoned ? `Undo forgiving ${name}'s share` : `Forgive ${name}'s share`;
   return (
     `<span class="forgive-slot"><button type="button" class="btn forgive" data-forgive="${escapeHtml(p.id)}" ` +
-    `aria-pressed="${share.pardoned}" aria-label="Forgive ${name}'s share"${v.paid.has(debtorOf(p)) ? " disabled" : ""}>Forgive</button></span>`
+    `data-pardoned="${share.pardoned}" aria-label="${label}"${v.paid.has(debtorOf(p)) ? " disabled" : ""}>${share.pardoned ? "Undo" : "Forgive"}</button></span>`
   );
 }
 
@@ -646,11 +650,12 @@ function personRow(v: View, p: Participant): string {
   if (p.id === v.bill.payerId) tags.push("paid");
   if (p.kind === "guest") {
     const host = p.addedBy ? v.names.get(p.addedBy) : undefined;
-    tags.push(host ? `guest of ${escapeHtml(host)}` : "guest");
+    if (p.addedBy && p.addedBy === v.bill.payerId) tags.push(p.addedBy === v.viewer ? "covered by you" : `covered by ${escapeHtml(host ?? "the payer")}`);
+    else tags.push(host ? `guest of ${escapeHtml(host)}` : "guest");
   }
   if (share?.pardoned) tags.push("forgiven");
   const tagHtml = tags.map((t) => `<span class="tag">${t}</span>`).join("");
-  return `<li class="person${p.id === v.viewer ? " is-viewer" : ""}"><span class="person-name">${escapeHtml(p.displayName)}${tagHtml}</span><span class="money${share?.pardoned ? " is-forgiven" : ""}" data-share="${escapeHtml(p.id)}">${formatCents(share?.owedCents ?? 0)}</span>${canForgive(v) ? forgiveSlot(v, p) : ""}</li>`;
+  return `<li class="person${p.id === v.viewer ? " is-viewer" : ""}"><span class="person-name">${escapeHtml(p.displayName)}${tagHtml}</span><span class="money${p.kind === "guest" ? " is-guest" : ""}${share?.pardoned ? " is-forgiven" : ""}" data-share="${escapeHtml(p.id)}">${formatCents(share?.owedCents ?? 0)}</span>${canForgive(v) ? forgiveSlot(v, p) : ""}</li>`;
 }
 
 function forgiveNote(v: View): string {

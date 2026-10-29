@@ -350,6 +350,87 @@ describe("renderPage", () => {
     expect(stateOf(unpaid).hasPayments).toBe(false);
   });
 
+  describe("the people list on a confirmed bill", () => {
+    const confirmed: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
+    const sam: Participant = { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" };
+    const kim: Participant = { billId: bill.id, id: "guest-kim", kind: "guest", displayName: "Kim", addedBy: "gavin" };
+    const input: BillInput = {
+      ...withItem(withItem(SAIGON, { id: "lobster", label: "Lobster", cents: 2000, claimedBy: ["guest-sam"] }), {
+        id: "fries",
+        label: "Fries",
+        cents: 700,
+        claimedBy: ["guest-kim"],
+      }),
+      participants: [...SAIGON.participants, "guest-sam", "guest-kim"],
+      pardoned: ["marcus"],
+    };
+    const people = [...participantsOf(SAIGON), sam, kim];
+
+    function list(viewer: string): string {
+      return renderPage(confirmed, splitBill(input), input.items, people, viewer, { paid: [] });
+    }
+
+    it("names the next action on the forgive button and keeps no pressed state", async () => {
+      const html = list("gavin");
+
+      const marcus = await one(html, 'button[data-forgive="marcus"]');
+      expect(marcus.text).toBe("Undo");
+      expect(marcus.attrs["aria-label"]).toBe("Undo forgiving Marcus's share");
+      const dani = await one(html, 'button[data-forgive="dani"]');
+      expect(dani.text).toBe("Forgive");
+      expect(dani.attrs["aria-label"]).toBe("Forgive Dani's share");
+
+      const buttons = await select(html, "button[data-forgive]");
+      expect(buttons.length).toBeGreaterThan(0);
+      for (const button of buttons) expect(button.attrs).not.toHaveProperty("aria-pressed");
+    });
+
+    it("tells the click handler which state a button is in, since the label no longer carries it for scripts", async () => {
+      const html = list("gavin");
+
+      expect((await one(html, 'button[data-forgive="marcus"]')).attrs["data-pardoned"]).toBe("true");
+      expect((await one(html, 'button[data-forgive="dani"]')).attrs["data-pardoned"]).toBe("false");
+    });
+
+    const tagsOf = async (html: string) => (await select(html, "li.person .tag")).map((t) => t.text);
+
+    it("says covered by you to the payer, for a guest who came with the payer", async () => {
+      expect(await tagsOf(list("gavin"))).toEqual(["you", "paid", "forgiven", "guest of Dani", "covered by you"]);
+    });
+
+    it("says covered by the payer's name to everyone else", async () => {
+      expect(await tagsOf(list("marcus"))).toEqual(["paid", "you", "forgiven", "guest of Dani", "covered by Gavin"]);
+    });
+
+    it("keeps guest of Dani for a guest of any other member, for every viewer", async () => {
+      for (const viewer of ["gavin", "marcus", "dani"]) {
+        const tags = (await tagsOf(list(viewer))).filter((t) => t.startsWith("guest") || t.startsWith("covered"));
+        expect(tags.filter((t) => t === "guest of Dani"), viewer).toHaveLength(1);
+        expect(tags.filter((t) => t.startsWith("covered by")), viewer).toHaveLength(1);
+        expect(tags, viewer).toHaveLength(2);
+      }
+    });
+
+    it("mutes a guest's amount and nobody else's", async () => {
+      const html = list("gavin");
+
+      for (const id of ["guest-sam", "guest-kim"]) {
+        expect((await one(html, `[data-share="${id}"]`)).attrs.class, id).toContain("is-guest");
+      }
+      for (const id of ["dani", "gavin", "marcus"]) {
+        expect((await one(html, `[data-share="${id}"]`)).attrs.class, id).not.toContain("is-guest");
+      }
+      expect(html).toMatch(/\.money\.is-guest\s*\{[^}]*color:\s*var\(--muted\)/);
+    });
+
+    it("does not offer a forgive button for the payer's own guest", async () => {
+      const html = list("gavin");
+
+      expect(await select(html, 'button[data-forgive="guest-kim"]')).toEqual([]);
+      expect(await select(html, 'button[data-forgive="guest-sam"]')).toHaveLength(1);
+    });
+  });
+
   it("is one self-contained, phone-sized page that follows the system theme", () => {
     const html = page("marcus");
 

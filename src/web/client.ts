@@ -448,13 +448,13 @@ export const CLIENT_SCRIPT = String.raw`
       type: "button",
       class: "btn forgive",
       "data-forgive": p.id,
-      "aria-pressed": String(share.pardoned),
-      "aria-label": "Forgive " + p.displayName + "'s share",
+      "data-pardoned": String(share.pardoned),
+      "aria-label": (share.pardoned ? "Undo forgiving " : "Forgive ") + p.displayName + "'s share",
       // Busy rather than disabled while its answer is out, so the button
       // keeps keyboard focus across the redraw.
       "aria-busy": forgiving.has(p.id) ? "true" : null,
       disabled: paid.has(debtorOf(p)) || stopped,
-    }, "Forgive"));
+    }, share.pardoned ? "Undo" : "Forgive"));
   }
 
   function renderPeople(s) {
@@ -487,12 +487,13 @@ export const CLIENT_SCRIPT = String.raw`
       if (p.id === s.payerId) tags.push("paid");
       if (p.kind === "guest") {
         const host = p.addedBy ? names.get(p.addedBy) : undefined;
-        tags.push(host ? "guest of " + host : "guest");
+        if (p.addedBy && p.addedBy === s.payerId) tags.push(p.addedBy === s.viewer ? "covered by you" : "covered by " + (host || "the payer"));
+        else tags.push(host ? "guest of " + host : "guest");
       }
       if (share && share.pardoned) tags.push("forgiven");
       return el("li", { class: "person" + (p.id === s.viewer ? " is-viewer" : "") }, [
         el("span", { class: "person-name" }, [p.displayName].concat(tags.map((t) => el("span", { class: "tag" }, t)))),
-        el("span", { class: "money" + (share && share.pardoned ? " is-forgiven" : ""), "data-share": p.id }, money(share ? share.owedCents : 0)),
+        el("span", { class: "money" + (p.kind === "guest" ? " is-guest" : "") + (share && share.pardoned ? " is-forgiven" : ""), "data-share": p.id }, money(share ? share.owedCents : 0)),
         forgive ? forgiveSlot(s, p, share, paid) : null,
       ]);
     }));
@@ -935,7 +936,7 @@ export const CLIENT_SCRIPT = String.raw`
     if (forgiving.has(participantId)) return;
     forgiving.add(participantId);
     render();
-    const failure = await write("POST", "/pardon", { participantId, pardoned: button.getAttribute("aria-pressed") !== "true" });
+    const failure = await write("POST", "/pardon", { participantId, pardoned: button.dataset.pardoned !== "true" });
     forgiving.delete(participantId);
     // A 409 already put its reason in the note at the top; anything else
     // that refused it needs saying too.
