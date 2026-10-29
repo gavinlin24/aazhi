@@ -3,7 +3,7 @@
 A Discord bot that splits a restaurant bill from a photo of the receipt.
 
 The name comes from AA制 (AA zhì), Chinese for going Dutch: everyone pays for
-what they had. No accounts or installs; Discord already knows who everyone is.
+what they had. No accounts or installs: Discord already knows who everyone is.
 
 ## How it works for the group
 
@@ -13,18 +13,13 @@ what they had. No accounts or installs; Discord already knows who everyone is.
    page. Shared plates split between whoever claims them.
 4. The payer confirms. Each share includes proportional tax and tip, in exact
    integer cents that sum to the total.
-5. **Pay my share** opens Venmo or Cash App with the amount filled in; **I
+5. **Pay my share** opens Venmo or Cash App with the amount filled in. **I
    paid** records it.
 
-```mermaid
-flowchart LR
-  people(["Discord users"]) --> discord["Discord"]
-  discord -- "signed POST /interactions" --> worker["Cloudflare Worker"]
-  worker --> discord
-  worker <--> d1[("D1")]
-  worker -- "photo URL" --> claude["Claude Haiku"]
-  browser["Split page"] -- "signed link" --> worker
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
+  <img src="docs/img/architecture-light.svg" width="528" alt="Discord and the split page both talk to one Cloudflare Worker, which stores bills in D1 and sends receipt photos to Claude.">
+</picture>
 
 One Cloudflare Worker serves Discord and the split page, with D1 for storage
 and Claude for reading receipts. Details: [docs/architecture.md](docs/architecture.md).

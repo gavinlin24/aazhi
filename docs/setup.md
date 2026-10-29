@@ -14,7 +14,7 @@ a stored secret back, and the bot token and API key are shown only once.
 | --- | --- |
 | `DISCORD_APPLICATION_ID` | Discord app, General Information |
 | `DISCORD_PUBLIC_KEY` | Discord app, General Information |
-| `DISCORD_BOT_TOKEN` | Discord app, Bot page (shown once; resetting it invalidates the copy on the Worker) |
+| `DISCORD_BOT_TOKEN` | Discord app, Bot page (shown once, and resetting it invalidates the copy on the Worker) |
 | `ANTHROPIC_API_KEY` | Anthropic Console (shown once) |
 | `TOKEN_SIGNING_KEY` | Any long random string, e.g. `openssl rand -base64 32` |
 
@@ -76,8 +76,8 @@ To test, run `/split` with a receipt photo. Watch the logs with
 
 | Name | Used for | Stored in | Secret | If leaked |
 | --- | --- | --- | --- | --- |
-| `DISCORD_APPLICATION_ID` | Discord API paths, command registration | Worker secret, `.dev.vars` | No | Nothing; it is public |
-| `DISCORD_PUBLIC_KEY` | Verifying requests come from Discord | Worker secret, `.dev.vars` | No | Nothing; it can't sign |
+| `DISCORD_APPLICATION_ID` | Discord API paths, command registration | Worker secret, `.dev.vars` | No | Nothing. It is public |
+| `DISCORD_PUBLIC_KEY` | Verifying requests come from Discord | Worker secret, `.dev.vars` | No | Nothing. It can't sign |
 | `DISCORD_BOT_TOKEN` | Posting and editing as the bot, registering commands | Worker secret, `.dev.vars` | Yes | Attacker can post as the bot, edit or delete its messages, and replace its commands. Reset it on the Bot page |
 | `ANTHROPIC_API_KEY` | Reading receipts | Worker secret, `.dev.vars` | Yes | Attacker can spend your Anthropic credit. Revoke it in the Console |
 | `TOKEN_SIGNING_KEY` | Signing split-page links | Worker secret, `.dev.vars` | Yes | Attacker can forge page links as anyone on a known bill, including the payer. Can't record payments. Rotate it freely |

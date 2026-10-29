@@ -1,7 +1,7 @@
 # Architecture
 
 How one bill moves from a receipt photo to settled payments. Setup and
-credentials are in [setup.md](setup.md); technology choices in [stack.md](stack.md).
+credentials are in [setup.md](setup.md). Technology choices are in [stack.md](stack.md).
 
 ## Components
 
@@ -63,7 +63,7 @@ handler to call. Reading takes longer than 3 s, so
 URL to Claude with a forced tool call (a fixed JSON schema in
 `src/extract/schema.ts`), so the photo never passes through the Worker or gets
 stored. Prices arrive as strings and are parsed into integer cents. Then the
-items plus tax are checked against the printed total; a bill that doesn't
+items plus tax are checked against the printed total. A bill that doesn't
 match can be fixed but not confirmed.
 
 **3. Saving and posting.** `src/db/bills.ts` writes the draft to D1. Each
@@ -81,7 +81,7 @@ naming the bill, the person and a 30-minute expiry, plus a signature only
 **5. Claiming.** `src/index.ts` checks the token before loading the bill and
 serves `src/web/page.ts` with the client script from `src/web/client.ts`. The
 script calls `src/web/api.ts` with the token as a Bearer header. People claim
-their own lines; the payer can also edit lines, tax, tip and guests. Writes
+their own lines, and the payer can also edit lines, tax, tip and guests. Writes
 only land while the SQL `WHERE` still sees a draft. The page polls every
 5 s. The Discord message updates at most every 3 s per bill, through a lease
 stored in D1, since Worker instances share no memory.
