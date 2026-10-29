@@ -200,8 +200,8 @@ cent is the right amount to spend on it.
 
 ## No image storage
 
-Discord already hosts the attachment, so the bot fetches it at extraction
-time and persists only the parsed line items. This removes a storage
+Discord already hosts the attachment, so the bot hands its URL to the model,
+which fetches it at extraction time, and persists only the parsed line items. This removes a storage
 dependency entirely and means a pile of receipt photographs is not
 accumulating anywhere. It is also forced: Discord attachment URLs are
 signed and expire, so an URL stored for later would not work later.
