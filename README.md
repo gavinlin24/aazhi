@@ -55,27 +55,53 @@ Why each piece was chosen: [docs/stack.md](docs/stack.md).
 ## Setup
 
 You need a Cloudflare account, a Discord application, an Anthropic API key,
-and Node 22. Run `npm ci` first. Every value below is entered at a prompt or
-in a settings page; none of them belongs in the repository.
+and Node 22. Run `npm ci` first.
+
+### Credentials
+
+Write all five values into a `.dev.vars` file in the project root, one
+`NAME=value` line each, before sending any of them anywhere. It is git-ignored;
+keep it that way.
+
+Collecting them first is not a convenience. Cloudflare cannot read a stored
+secret back, and two of these are shown exactly once by whoever issues them, so
+a value sent straight up leaves no copy behind and has to be reissued the next
+time something local needs it. Registering the commands is such a step.
+
+- `DISCORD_APPLICATION_ID` and `DISCORD_PUBLIC_KEY`: the Discord app's General
+  Information page. Always visible there, so these two are safe to lose.
+- `DISCORD_BOT_TOKEN`: the app's Bot page. Shown once, and resetting it
+  invalidates the copy already stored on the Worker.
+- `ANTHROPIC_API_KEY`: the Anthropic Console. Shown once.
+- `TOKEN_SIGNING_KEY`: signs the links to the split page. Any long random
+  string, for example from `openssl rand -base64 32`.
 
 ### Cloudflare
 
 1. Create the database with `npx wrangler d1 create aazhi`. It prints a
    `database_id`. Put it in `wrangler.jsonc` in place of
    `REPLACE_WITH_D1_DATABASE_ID` and commit that change: CI deploys from the
-   committed file, and the id is not a secret.
+   committed file, and the id is not a secret. Decline wrangler's offer to
+   write the config itself, which binds the database as `aazhi` rather than the
+   `DB` the code reads.
 2. Create the tables with `npx wrangler d1 migrations apply DB --remote`.
-3. Store each secret with `npx wrangler secret put NAME`, which asks for the
-   value:
-   - `npx wrangler secret put DISCORD_PUBLIC_KEY` (the Discord app's General
-     Information page)
-   - `npx wrangler secret put DISCORD_APPLICATION_ID` (the same page)
-   - `npx wrangler secret put DISCORD_BOT_TOKEN` (the app's Bot page)
-   - `npx wrangler secret put ANTHROPIC_API_KEY` (the Anthropic Console)
-   - `npx wrangler secret put TOKEN_SIGNING_KEY` (signs the links to the split
-     page; any long random string, for example from `openssl rand -base64 32`)
-4. Deploy once with `npx wrangler deploy`. It prints the Worker's URL, which
-   Discord needs next.
+3. Store the five secrets on the Worker. `npx wrangler secret put NAME` asks
+   for one value at a prompt and also accepts it on stdin, so the whole set can
+   go up from `.dev.vars` at once:
+
+   ```sh
+   for n in DISCORD_APPLICATION_ID DISCORD_PUBLIC_KEY DISCORD_BOT_TOKEN \
+            ANTHROPIC_API_KEY TOKEN_SIGNING_KEY; do
+     printf '%s' "$(sed -n "s/^$n=//p" .dev.vars)" | npx wrangler secret put "$n"
+   done
+   ```
+
+   A secret needs a Worker to live on, and the Worker does not exist until the
+   first deploy, so wrangler offers to create an empty one to hold them. Accept.
+4. Deploy with `npx wrangler deploy`. It prints the Worker's URL, which Discord
+   needs next. On an account that has never published to `workers.dev` it stops
+   to register a subdomain first: that name is account-wide and public, and
+   every Worker on the account is addressed under it.
 
 ### GitHub
 
@@ -94,20 +120,15 @@ for the deploy workflow:
    `DISCORD_PUBLIC_KEY` set.
 2. Install the bot in a server from OAuth2, URL Generator, with the `bot` and
    `applications.commands` scopes and the View Channels, Send Messages, Embed
-   Links and Read Message History permissions.
-3. Register the slash commands. Put the application id and the bot token in
-   your shell's environment without echoing the token (for example
-   `read -rs DISCORD_BOT_TOKEN && export DISCORD_BOT_TOKEN`), export
-   `DISCORD_APPLICATION_ID` the same way, then run `npm run register-commands`.
-   Run it again whenever `src/discord/commands.ts` changes.
+   Links and Read Message History permissions. No privileged intent is
+   required, because the bot never connects to the gateway.
+3. Register the commands with `npm run register-commands`, which reads
+   `.dev.vars`. Run it again whenever `src/discord/commands.ts` changes.
 
 ### Local development
 
-Create a `.dev.vars` file in the project root with one `NAME=value` line for
-each of the five secrets above. It is git-ignored; keep it that way. Then:
-
 - `npx wrangler d1 migrations apply DB --local` creates a local database.
-- `npx wrangler dev` serves the Worker against it.
+- `npx wrangler dev` serves the Worker against it, reading `.dev.vars`.
 - `npm test` runs the tests, which need no secrets and make no network calls.
 
 ## Deploy
