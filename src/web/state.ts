@@ -1,8 +1,8 @@
-import type { BillRow, BillSnapshot, Participant } from "../db/bills";
+import { getShares, type BillRow, type BillSnapshot, type Participant } from "../db/bills";
 import { reconciles } from "../extract/claude";
 import { payerCollects } from "../money/debtors";
 import { splitBill } from "../money/split";
-import type { Cents, LineItem, ParticipantId, SplitResult } from "../money/types";
+import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 
 export type Editable = "all" | "self" | "none";
 
@@ -73,7 +73,27 @@ export function billState(
   };
 }
 
-export function stateOf(snapshot: BillSnapshot, viewer: ParticipantId): BillState {
+// Once confirmed, the shares are the rows frozen at confirm, the amounts
+// people were told and are paying against, exactly as the owe card shows
+// them; recomputing from the lines would let a change underneath the bill
+// show someone a number nobody agreed to. The payer's figure follows from
+// the same rows. The bill-level totals still come from the lines, as they do
+// on the owe card.
+function frozenResult(split: SplitResult, frozen: Share[], payer: ParticipantId): SplitResult {
+  const payerCollectsCents = frozen.reduce((total, s) => (s.participant === payer || s.pardoned ? total : total + s.owedCents), 0);
+  return { ...split, shares: frozen, payerCollectsCents };
+}
+
+// The share rows are a read of their own rather than part of the snapshot,
+// which stays a fixed handful of statements for the draft path that polls it
+// most. The rows survive a reopen, so they count only for a confirmed bill.
+export async function pageResult(db: D1Database, snapshot: BillSnapshot): Promise<SplitResult> {
+  const split = splitBill(snapshot.input);
+  if (snapshot.bill.status !== "confirmed") return split;
+  return frozenResult(split, await getShares(db, snapshot.bill.id), snapshot.bill.payerId);
+}
+
+export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
   const { bill, input, participants, hasPayments, paid } = snapshot;
-  return billState(bill, splitBill(input), input.items, participants, viewer, hasPayments, paid);
+  return billState(bill, await pageResult(db, snapshot), input.items, participants, viewer, hasPayments, paid);
 }

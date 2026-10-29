@@ -23,13 +23,13 @@ import {
 import { getPaymentHandles, setPaymentHandle } from "../../db/handles";
 import type { Env } from "../../env";
 import { formatCents, formatDate } from "../../format";
-import { groupByDebtor, groupOf, owedAfterPardon, type DebtorGroup } from "../../money/debtors";
+import { debtorOf, groupByDebtor, groupOf, owedAfterPardon, type DebtorGroup } from "../../money/debtors";
 import { itemPieces } from "../../money/split";
 import type { LineItem, Share } from "../../money/types";
 import { describeHandle, HANDLE_RULES, METHOD_NAMES, normalizeHandle, PAY_METHODS, payLink, type PayMethod } from "../../web/paylink";
 import type { InteractionHandler } from "../interactions";
 import { invokerOf } from "../members";
-import { escapeMarkdown } from "../render";
+import { escapeMarkdown, groupName } from "../render";
 import { ephemeral } from "../rest";
 import {
   announcement,
@@ -52,6 +52,7 @@ const MAX_CONTENT = 2000;
 const MAX_LABEL = 60;
 const MAX_BILL_NAME = 80;
 const MAX_NOTE = 60;
+const MAX_NAME = 40;
 
 // By code point, so a cut never splits an emoji into a lone surrogate.
 export function clip(text: string, max: number): string {
@@ -194,6 +195,36 @@ export function renderMath(
     lines.push(...block.head, ...kept, ...block.tail);
   });
   return [...lines, ...closing].join("\n");
+}
+
+// What forgiving a share, or taking that back, is announced as. The amount
+// named is the one share that changed; what follows is what the member who
+// answers for it owes now, with any guests named the way the owe card names
+// the pair, since that row is where the number shows. Null when the share is
+// not on the bill.
+export function pardonNotice(
+  bill: BillRow,
+  participants: Participant[],
+  shares: Share[],
+  participantId: string,
+  pardoned: boolean,
+): string | null {
+  const target = participants.find((p) => p.id === participantId);
+  const share = shares.find((s) => s.participant === participantId);
+  const group = target && groupOf(groupByDebtor(shares, participants), debtorOf(target));
+  if (!target || !share || !group) return null;
+
+  const names = new Map(participants.map((p) => [p.id, escapeMarkdown(clip(p.displayName, MAX_NAME))]));
+  const payer = names.get(bill.payerId) ?? "The person who paid";
+  const whose = `${names.get(target.id)}'s ${formatCents(share.owedCents)} for ${escapeMarkdown(billName(bill))}`;
+  // "Dani, including Sam" is an aside mid-sentence, so it closes with a comma.
+  const who = groupName(group, names) + (group.guests.length > 0 ? "," : "");
+  if (pardoned) {
+    return clip(`${payer} forgave ${whose}, so ${who} owes ${group.owedCents === 0 ? "nothing" : formatCents(group.owedCents)}.`, MAX_CONTENT);
+  }
+  // "Again" only when the row is back to what it was before any pardon.
+  const stillForgiven = [group.own, ...group.guests].some((s) => s?.pardoned);
+  return clip(`${payer} took back forgiving ${whose}, so ${who} owes ${formatCents(group.owedCents)}${stillForgiven ? "" : " again"}.`, MAX_CONTENT);
 }
 
 export function paidUp(payer: string, settledCents: number): string {

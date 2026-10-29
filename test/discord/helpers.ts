@@ -33,9 +33,11 @@ export function testEnv(publicKeyHex: string): Env {
   };
 }
 
-export async function signedRequest(keypair: TestKeypair, body: unknown): Promise<Request> {
+// Signed at `atMs`, now by default, so a test can hand in a request that was
+// signed properly but captured long ago.
+export async function signedRequest(keypair: TestKeypair, body: unknown, atMs = Date.now()): Promise<Request> {
   const raw = JSON.stringify(body);
-  const timestamp = String(Math.floor(Date.now() / 1000));
+  const timestamp = String(Math.floor(atMs / 1000));
   return new Request("https://aazhi.test/interactions", {
     method: "POST",
     headers: {

@@ -553,6 +553,33 @@ describe("what every response carries", () => {
     expect(payer.body).toMatchObject({ viewerIsPayer: true, editable: "all", hasPayments: false });
   });
 
+  // Spring rolls corrected from $15.00 to $6.42 straight in D1, the way P10
+  // models a correction landing on a frozen bill: a recomputation would show
+  // Marcus $41.10, but what he was told, and still owes, is $44.46.
+  it("shows a confirmed bill's frozen shares, not a recomputation from the lines", async () => {
+    await seedSaigon(db, BILL);
+    expect(await confirmBill(db, BILL, await revision(), "gavin")).toMatchObject({ ok: true });
+    await send("POST", `/b/${BILL}/pardon`, { as: "gavin", body: { participantId: "jess", pardoned: true } });
+    const frozen = (await send("GET", `/b/${BILL}/state`, { as: "gavin" })).body;
+    await db.prepare("UPDATE bill_items SET cents = 642 WHERE id = ?").bind(item("rolls")).run();
+
+    const state = await send("GET", `/b/${BILL}/state`, { as: "gavin" });
+    const html = await (
+      await app.fetch(new Request(`https://aazhi.test/b/${BILL}?t=${await tokenFor("gavin")}`), env(), createExecutionContext())
+    ).text();
+    const embedded = JSON.parse(/<script type="application\/json" id="bill-state">([^<]*)<\/script>/.exec(html)![1]!);
+
+    for (const page of [state.body, embedded]) {
+      expect(page.result.shares.find((s: any) => s.participant === "marcus")).toMatchObject({ owedCents: 4446, pardoned: false });
+      expect(page.result.shares.find((s: any) => s.participant === "jess")).toMatchObject({ pardoned: true });
+      expect(page.result.shares).toEqual(frozen.result.shares);
+      expect(page.payerCollectsCents).toBe(frozen.payerCollectsCents);
+    }
+    // The frozen amounts still add up to what the payer is collecting.
+    const others = frozen.result.shares.filter((s: any) => s.participant !== "gavin" && !s.pardoned);
+    expect(frozen.payerCollectsCents).toBe(others.reduce((t: number, s: any) => t + s.owedCents, 0));
+  });
+
   it("tells a poll when the bill was confirmed, replaced or never existed", async () => {
     await seedSaigon(db, BILL);
     await db.prepare("UPDATE bills SET status = 'confirmed' WHERE id = ?").bind(BILL).run();

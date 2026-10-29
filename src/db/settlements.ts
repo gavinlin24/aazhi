@@ -85,15 +85,21 @@ const REMAINING = `(${owedSql("?1", "?3")} - ${paidSql("?1", "?3")})`;
 // tap landing between the person's look at the card and this write cannot
 // let through a payment the rules refuse. `remainingCents` is the amount a
 // paid-it-all button was drawn with; it must still be what is left.
+//
+// `id` makes the write idempotent: a caller that has a stable id for the
+// request (a Discord interaction id) passes it, and the same request arriving
+// again finds its own row instead of recording a second payment. Resolves
+// false in that case, true when this call wrote the row.
 export async function recordSettlement(
   db: D1Database,
   billId: string,
   participantId: ParticipantId,
   cents: Cents,
   recordedBy: ParticipantId,
-  options: { remainingCents?: Cents } = {},
-): Promise<void> {
+  options: { remainingCents?: Cents; id?: string } = {},
+): Promise<boolean> {
   if (!Number.isSafeInteger(cents) || cents <= 0) throw new SettlementRefusedError("not-positive");
+  const id = options.id ?? crypto.randomUUID();
   const now = new Date().toISOString();
   const [inserted] = await db.batch([
     db
@@ -108,13 +114,30 @@ export async function recordSettlement(
            AND (?6 = ?3 OR ?6 = b.payer_id)
            AND ?4 <= ${REMAINING}
            AND (?7 IS NULL OR ?7 = ${REMAINING})
+         ON CONFLICT (id) DO NOTHING
          RETURNING id`,
       )
-      .bind(billId, crypto.randomUUID(), participantId, cents, now, recordedBy, options.remainingCents ?? null),
+      .bind(billId, id, participantId, cents, now, recordedBy, options.remainingCents ?? null),
     settledAtStatement(db, billId, participantId, now),
   ]);
-  if (inserted!.results.length === 1) return;
+  if (inserted!.results.length === 1) return true;
+  // Asked before why the write refused: a replay of a payment that cleared
+  // the balance would otherwise be told it is already paid up, when it is
+  // that very payment.
+  if (options.id !== undefined && (await isSamePayment(db, options.id, billId, participantId, cents, recordedBy))) return false;
   throw await whyRefused(db, billId, participantId, cents, recordedBy, options.remainingCents);
+}
+
+async function isSamePayment(
+  db: D1Database,
+  id: string,
+  billId: string,
+  participantId: ParticipantId,
+  cents: Cents,
+  recordedBy: ParticipantId,
+): Promise<boolean> {
+  const row = await getSettlement(db, id);
+  return row?.billId === billId && row.participant === participantId && row.cents === cents && row.recordedBy === recordedBy;
 }
 
 // The write said no without saying why; this reads the bill as it is now to

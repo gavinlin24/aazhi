@@ -95,6 +95,24 @@ describe("POST /interactions signature gate", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
+  it("refuses a properly signed request from more than five minutes ago or ahead, like a bad signature", async () => {
+    await ready;
+    const bad = await signedRequest(keypair, { type: 1 });
+    bad.headers.set("x-signature-ed25519", "00".repeat(64));
+    const refused = await post(bad, keypair.publicKeyHex);
+    const refusal = { status: refused.status, body: await refused.text() };
+
+    for (const offsetMs of [-6 * 60_000, 6 * 60_000]) {
+      const parse = vi.spyOn(JSON, "parse");
+      const response = await post(await signedRequest(keypair, { type: 1 }, Date.now() + offsetMs), keypair.publicKeyHex);
+
+      expect({ status: response.status, body: await response.text() }, String(offsetMs)).toEqual(refusal);
+      expect(parse).not.toHaveBeenCalled();
+      parse.mockRestore();
+    }
+    expect(refusal.status).toBe(401);
+  });
+
   it("rejects a body tampered with after signing", async () => {
     await ready;
     const original = await signedRequest(keypair, { type: 1 });

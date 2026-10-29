@@ -135,13 +135,15 @@ async function refusal(error: SettlementRefusedError, tap: DinerTap, env: Env, c
 }
 
 // Said in the channel, so a payment is never a quiet change; the owe card
-// itself stays as it was frozen.
+// itself stays as it was frozen. A resent request that was already recorded
+// gets the same reply; Discord takes one response per interaction, so that
+// reply is never posted twice.
 async function record(
   env: Env,
   ctx: ExecutionContext,
   tap: DinerTap,
   cents: Cents,
-  options: { remainingCents?: Cents } = {},
+  options: { remainingCents?: Cents; id?: string } = {},
 ): Promise<Response> {
   try {
     await recordSettlement(env.DB, tap.bill.id, tap.who, cents, tap.who, options);
@@ -222,7 +224,10 @@ export const paidAmountSubmit: InteractionHandler = async (body, env, ctx) => {
   const typed = typedValue(body, "amount");
   const cents = typed === null ? null : parseAmount(typed);
   if (cents === null) return privately(UNREADABLE);
-  return record(env, ctx, tap, cents);
+  // Unlike paid-it-all, a typed amount carries nothing that goes stale once
+  // it is recorded, so a resent submit would pass every rule again. The
+  // interaction id is the payment's id, and a resend answers like the first.
+  return record(env, ctx, tap, cents, { id: body.id });
 };
 
 // "Oct 29, 2026 09:00 UTC". A select option is plain text, so Discord's

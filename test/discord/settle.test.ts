@@ -321,6 +321,43 @@ describe("Paid part", () => {
     expect(await settledCents("marcus")).toBe(4000);
   });
 
+  // The same signed submit arriving twice (a retry, or a captured request
+  // replayed) is one payment, not two, and the second gets the first's answer.
+  it("records a replayed submit once and answers it as the original", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    const body = submit(`paidamount:${BILL}`, "10", MARCUS);
+
+    const first = await run(body);
+    const again = await run(body);
+
+    expectOutLoud(first);
+    expect(first.data.content).toMatch(/Marcus paid Gavin \$10\.00/);
+    expect(again).toEqual(first);
+    expect((await listSettlements(db, BILL)).map((s) => [s.id, s.cents])).toEqual([[body.id, 1000]]);
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+
+    // A second, real payment of the same amount is its own interaction.
+    const next = await run({ ...submit(`paidamount:${BILL}`, "10", MARCUS), id: "int-5" });
+    expectOutLoud(next);
+    expect(await settledCents("marcus")).toBe(2000);
+  });
+
+  it("answers a replayed submit that paid everything as the original, not as already paid up", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    const body = submit(`paidamount:${BILL}`, "44.46", MARCUS);
+
+    const first = await run(body);
+    const again = await run(body);
+
+    expectOutLoud(first);
+    expect(first.data.content).toMatch(/paid up/i);
+    expect(again).toEqual(first);
+    expect(await settledCents("marcus")).toBe(4446);
+    expect(await listSettlements(db, BILL)).toHaveLength(1);
+  });
+
   it("refuses an amount that is not money, has too many decimals, is not positive or is more than is left", async () => {
     await seedSaigon(db, BILL);
     await confirmed();

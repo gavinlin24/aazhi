@@ -32,6 +32,12 @@ export async function followUp(interactionToken: string, body: unknown, env: Env
   await discord(env, "follow-up", "POST", `/webhooks/${env.DISCORD_APPLICATION_ID}/${interactionToken}`, body, "none");
 }
 
+// A new message, unlike an edit, shows up as unread in the channel. It uses
+// the bot token because it is sent long after any interaction token expired.
+export async function postChannelMessage(channelId: string, body: unknown, env: Env): Promise<void> {
+  await discord(env, "channel message", "POST", `/channels/${channelId}/messages`, body, "bot");
+}
+
 export async function editOriginal(
   interactionToken: string,
   body: unknown,

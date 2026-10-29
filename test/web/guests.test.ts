@@ -47,7 +47,7 @@ function env(): Env {
   };
 }
 
-let calls: { url: string; method: string; body: any }[];
+let calls: { url: string; method: string; body: any; authorization: string | null }[];
 
 beforeEach(async () => {
   await db.prepare("DELETE FROM bills").run();
@@ -55,7 +55,12 @@ beforeEach(async () => {
   calls = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    calls.push({
+      url,
+      method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      authorization: new Headers(init?.headers).get("authorization"),
+    });
     const channel = /\/channels\/([^/]+)\/messages\/([^/]+)$/.exec(url);
     return Response.json(channel ? { id: channel[2], channel_id: channel[1] } : { id: "follow-up-1", channel_id: "chan-1" });
   });
@@ -174,6 +179,10 @@ function ledgerCommand(who: unknown) {
 
 function customIds(data: any): string[] {
   return ((data.components ?? []) as any[]).flatMap((row) => row.components ?? []).flatMap((c: any) => (c.custom_id ? [c.custom_id] : []));
+}
+
+function channelPosts() {
+  return calls.filter((c) => c.method === "POST" && c.url === `${API}/channels/chan-1/messages`);
 }
 
 function messageEdits() {
@@ -549,6 +558,69 @@ describe("pardons", () => {
     const dani = (await run(tap(`math:${BILL}`, DANI))).data.content as string;
     expect(dani).toMatch(new RegExp(`Gavin forgave Sam's \\${formatCents(await owedOf(sam))}`));
     expect(dani).toContain(formatCents(await owedOf("dani")));
+  });
+
+  // An edit to the owe card notifies nobody, so a forgiven amount (or one
+  // brought back) is also said in the channel, in both directions.
+  it("says out loud in the channel when a share is forgiven and when that is taken back", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+
+    expect((await pardon("gavin", "marcus")).status).toBe(200);
+    expect((await pardon("gavin", "marcus", false)).status).toBe(200);
+
+    const posts = channelPosts();
+    expect(posts.map((p) => p.body)).toEqual([
+      {
+        content: "Gavin forgave Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes nothing.",
+        allowed_mentions: { parse: [] },
+      },
+      {
+        content: "Gavin took back forgiving Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes $44.46 again.",
+        allowed_mentions: { parse: [] },
+      },
+    ]);
+    expect(posts.map((p) => p.authorization)).toEqual(["Bot bot-token", "Bot bot-token"]);
+  });
+
+  it("names a guest's companion and says what the pair owes after a guest's pardon", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const samOwes = formatCents(await owedOf(sam));
+    const daniOwes = formatCents(await owedOf("dani"));
+    const together = formatCents((await owedOf("dani")) + (await owedOf(sam)));
+
+    expect((await pardon("gavin", sam)).status).toBe(200);
+    expect((await pardon("gavin", "dani")).status).toBe(200);
+    expect((await pardon("gavin", sam, false)).status).toBe(200);
+    expect((await pardon("gavin", "dani", false)).status).toBe(200);
+
+    const bill = "Saigon Kitchen, Oct 28, 2026";
+    expect(channelPosts().map((p) => p.body.content)).toEqual([
+      `Gavin forgave Sam's ${samOwes} for ${bill}, so Dani, including Sam, owes ${daniOwes}.`,
+      `Gavin forgave Dani's ${daniOwes} for ${bill}, so Dani, including Sam, owes nothing.`,
+      // Dani's own share is still forgiven, so this is not what the pair owed before.
+      `Gavin took back forgiving Sam's ${samOwes} for ${bill}, so Dani, including Sam, owes ${samOwes}.`,
+      `Gavin took back forgiving Dani's ${daniOwes} for ${bill}, so Dani, including Sam, owes ${together} again.`,
+    ]);
+    expect(channelPosts().every((p) => JSON.stringify(p.body.allowed_mentions) === JSON.stringify({ parse: [] }))).toBe(true);
+  });
+
+  it("posts nothing to the channel when a pardon is refused", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    await recordSettlement(db, BILL, "dani", 500, "dani");
+
+    expect((await pardon("marcus", "jess")).status).toBe(403);
+    expect((await pardon("gavin", "gavin")).status).toBe(400);
+    expect((await pardon("gavin", sam)).status).toBe(409);
+    expect((await pardon("gavin", "zoe")).status).toBe(400);
+    await reopenBill(db, BILL);
+    expect((await pardon("gavin", "marcus")).status).toBe(409);
+
+    expect(channelPosts()).toEqual([]);
   });
 
   it("asks for nothing in Pay my share once the whole pair is forgiven", async () => {

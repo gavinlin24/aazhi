@@ -7,6 +7,8 @@ import {
   editItem,
   getBill,
   getBillSnapshot,
+  getParticipants,
+  getShares,
   GuestRefusedError,
   PardonRefusedError,
   PaymentsRecordedError,
@@ -18,7 +20,8 @@ import {
   type BillRow,
   type BillSnapshot,
 } from "../db/bills";
-import { editBillMessage } from "../discord/rest";
+import { pardonNotice } from "../discord/handlers/owe";
+import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
 import type { Cents, ParticipantId } from "../money/types";
@@ -138,7 +141,7 @@ async function currentState(c: Ctx, grant: Grant): Promise<Response> {
   if (!snapshot) return refuse(404, NOT_FOUND);
   const gone = GONE[snapshot.bill.status];
   if (gone) return refuse(410, gone);
-  return reply(stateOf(snapshot, grant.participantId));
+  return reply(await stateOf(c.env.DB, snapshot, grant.participantId));
 }
 
 // The Discord message is only a summary of the page, so it follows on the
@@ -340,6 +343,22 @@ api.post(
   }),
 );
 
+// Someone was already told a number, and the owe card's "forgiven" arrives as
+// an edit, which Discord tells nobody about; so the change is also said in the
+// channel. The rows are read after the write, so the amounts are the ones now
+// in force. Like a failed card edit, a failed post is logged and the pardon
+// stands.
+async function announcePardon(env: Env, billId: string, participantId: ParticipantId, pardoned: boolean): Promise<void> {
+  const [bill, participants, shares] = await Promise.all([
+    getBill(env.DB, billId),
+    getParticipants(env.DB, billId),
+    getShares(env.DB, billId),
+  ]);
+  const content = bill && pardonNotice(bill, participants, shares, participantId, pardoned);
+  if (!bill || !content) return;
+  await postChannelMessage(bill.channelId, { content, allowed_mentions: { parse: [] } }, env);
+}
+
 // Forgiving waives a frozen amount, so it is only offered once the bill is
 // confirmed; the payer absorbs it and nobody else's share moves.
 api.post(
@@ -373,7 +392,13 @@ api.post(
     }
 
     try {
-      return await commit(c, grant, snapshot.bill, () => setPardon(c.env.DB, grant.billId, participantId, pardoned));
+      return await commit(c, grant, snapshot.bill, async () => {
+        const revision = await setPardon(c.env.DB, grant.billId, participantId, pardoned);
+        c.executionCtx.waitUntil(
+          announcePardon(c.env, grant.billId, participantId, pardoned).catch((error) => console.error("could not announce the pardon", error)),
+        );
+        return revision;
+      });
     } catch (error) {
       if (!(error instanceof PardonRefusedError)) throw error;
       const answers = snapshot.participants.find((p) => p.id === debtor)?.displayName ?? "They";

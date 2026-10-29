@@ -118,7 +118,7 @@ function and(parts: string[]): string {
 
 // A guest's amount is asked of the member who brought them, so the two read
 // as one row with one amount; the guest is named so the amount makes sense.
-function groupName(group: DebtorGroup, names: Map<string, string>): string {
+export function groupName(group: DebtorGroup, names: Map<string, string>): string {
   const own = names.get(group.debtor) ?? escapeMarkdown(group.debtor);
   return group.guests.length === 0 ? own : `${own}, including ${and(group.guests.map((g) => names.get(g.participant)!))}`;
 }

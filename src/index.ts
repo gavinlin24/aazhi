@@ -4,9 +4,9 @@ import { getBillSnapshot } from "./db/bills";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
-import { splitBill } from "./money/split";
 import { api } from "./web/api";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
+import { pageResult } from "./web/state";
 import { readToken } from "./web/token";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -57,7 +57,7 @@ app.get("/b/:billId", async (c) => {
   const { bill, input, participants, hasPayments, paid } = snapshot;
   if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
 
-  return page(renderPage(bill, splitBill(input), input.items, participants, grant.participantId, { hasPayments, paid }), 200);
+  return page(renderPage(bill, await pageResult(c.env.DB, snapshot), input.items, participants, grant.participantId, { hasPayments, paid }), 200);
 });
 
 // The page's script talks to these with the same token, as a bearer header.
