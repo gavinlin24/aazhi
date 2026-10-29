@@ -1,7 +1,11 @@
-import { getShares, type BillRow, type BillSnapshot, type Participant } from "../db/bills";
+import { getSettled, getShares, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
+import { getPaymentHandles, type PaymentHandle } from "../db/handles";
+import { billName, clip, MAX_NOTE } from "../discord/handlers/owe";
 import { reconciles } from "../extract/claude";
+import { groupByDebtor, paidByDebtor } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import { METHOD_NAMES, payLink, type PayMethod } from "./paylink";
 
 export type Editable = "all" | "self" | "none";
 
@@ -31,6 +35,15 @@ export interface BillState {
   items: LineItem[];
   participants: StateParticipant[];
   result: SplitResult;
+  // Display only, from here down.
+  // One entry per debtor: the one amount the page shows as theirs (their own
+  // share and their guests', after pardons, less what any guest paid the
+  // payer directly), and what they have paid towards it themselves. Worked
+  // out here so the page and its script never redo the debtor rule.
+  owing: Record<ParticipantId, { owedCents: Cents; paidCents: Cents }>;
+  // The viewer's ways to pay what they have left, the same links Pay my share
+  // offers in Discord. Empty unless the bill is confirmed and they owe.
+  pay: PayOption[];
 }
 
 // A guest also carries the two paid marks. paidToPayer: the guest paid the
@@ -46,6 +59,18 @@ export interface GuestsPaid {
   paidToHost?: ParticipantId[];
 }
 
+export type PayOption = { method: PayMethod; name: string } & ({ url: string } | { instructions: string });
+
+// What the page needs beyond the server's state, read only for a confirmed
+// bill: the payments, for what is left, and the payer's handles, for links.
+export interface PayExtras {
+  settled?: Settled[];
+  handles?: PaymentHandle[];
+}
+
+// Everything renderPage takes besides the bill, in one bag.
+export type StateExtras = { hasPayments?: boolean; paid?: ParticipantId[] } & GuestsPaid & PayExtras;
+
 // Someone holding a link to a bill they are not on (they opened it while it
 // was confirmed, and it was reopened since) gets nothing to tap: claiming
 // needs a roster row, and only Open the split adds one.
@@ -53,6 +78,27 @@ export function editableFor(bill: BillRow, participants: Pick<Participant, "id">
   if (bill.status !== "draft") return "none";
   if (viewer === bill.payerId) return "all";
   return participants.some((p) => p.id === viewer) ? "self" : "none";
+}
+
+// The same sums the Discord math and the settle check use: a guest's payment
+// to the payer comes off what their debtor is asked for instead of counting
+// as the debtor's own payment.
+function owingOf(shares: Share[], participants: Participant[], payer: ParticipantId, settled: Settled[]): BillState["owing"] {
+  const paid = paidByDebtor(settled, participants, payer);
+  const owing: BillState["owing"] = {};
+  for (const group of groupByDebtor(shares, participants, payer)) {
+    const { ownCents = 0, directCents = 0 } = paid.get(group.debtor) ?? {};
+    owing[group.debtor] = { owedCents: group.owedCents - directCents, paidCents: ownCents };
+  }
+  return owing;
+}
+
+// What is left, not the frozen amount, as Pay my share does: a link for the
+// full share after a partial payment would ask the person to pay twice.
+function payOptions(bill: BillRow, handles: PaymentHandle[], leftCents: Cents): PayOption[] {
+  if (leftCents <= 0) return [];
+  const note = clip(billName(bill), MAX_NOTE);
+  return handles.map(({ method, handle }) => ({ method, name: METHOD_NAMES[method], ...payLink(method, handle, leftCents, note) }));
 }
 
 export function billState(
@@ -64,9 +110,16 @@ export function billState(
   hasPayments: boolean,
   paid: ParticipantId[] = [],
   guestsPaid: GuestsPaid = {},
+  payExtras: PayExtras = {},
 ): BillState {
   const toPayer = new Set(guestsPaid.paidToPayer);
   const toHost = new Set(guestsPaid.paidToHost);
+  const owing = owingOf(result.shares, participants, bill.payerId, payExtras.settled ?? []);
+  const mine = owing[viewer];
+  const pay =
+    bill.status === "confirmed" && viewer !== bill.payerId && mine
+      ? payOptions(bill, payExtras.handles ?? [], mine.owedCents - mine.paidCents)
+      : [];
   return {
     billId: bill.id,
     revision: bill.revision,
@@ -88,6 +141,8 @@ export function billState(
       return p.kind === "guest" ? { ...base, paidToPayer: toPayer.has(p.id), paidToHost: toHost.has(p.id) } : base;
     }),
     result,
+    owing,
+    pay,
   };
 }
 
@@ -111,7 +166,23 @@ export async function pageResult(db: D1Database, snapshot: BillSnapshot): Promis
   return frozenResult(split, await getShares(db, snapshot.bill.id), snapshot.bill.payerId);
 }
 
+// Payments and handles are reads of their own for the same reason, and only
+// matter once the bill is confirmed: nobody pays a draft.
+export async function payExtrasOf(db: D1Database, bill: BillRow): Promise<PayExtras> {
+  if (bill.status !== "confirmed") return {};
+  const [settled, handles] = await Promise.all([getSettled(db, bill.id), getPaymentHandles(db, bill.payerId)]);
+  return { settled, handles };
+}
+
+// Everything the page is rendered from besides the bill's own rows.
+export async function pageData(db: D1Database, snapshot: BillSnapshot): Promise<{ result: SplitResult; extras: StateExtras }> {
+  const { bill, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
+  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, bill)]);
+  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, ...pay } };
+}
+
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
   const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
-  return billState(bill, await pageResult(db, snapshot), input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost });
+  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, bill)]);
+  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay);
 }

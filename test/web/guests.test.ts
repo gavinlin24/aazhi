@@ -609,7 +609,7 @@ describe("a guest the payer added", () => {
 
     const rows = cardRows(await renderedCard());
     expect(rows.filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ${formatCents(kimOwes)} · Lobster`]);
-    expect(rows.find((r) => r.startsWith("<@gavin>"))).toContain(`${formatCents(await owedOf("gavin"))} (paid the bill)`);
+    expect(rows.find((r) => r.startsWith("<@gavin>"))).toContain(`${formatCents(await owedOf("gavin"))} 🪙`);
 
     const state = await send("GET", `/b/${BILL}/state`, "gavin");
     const others = (await getShares(db, BILL)).filter((s) => s.participant !== "gavin").reduce((sum, s) => sum + s.owedCents, 0);
@@ -1130,21 +1130,27 @@ describe("pardons", () => {
 });
 
 describe("the page", () => {
-  it("offers everyone on a draft bill the guest form, with nobody to pick", async () => {
+  it("shows a guest on the tile of whoever added them, and offers a guest to anyone on a draft, with nobody to pick", async () => {
     await seedSaigon(db, BILL);
+    const sam = await withGuest();
     const snapshot = (await getBillSnapshot(db, BILL))!;
-    const view = (viewer: string) => renderPage(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, viewer);
+    const render = (viewer: string) =>
+      renderPage(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, viewer);
 
     for (const viewer of ["gavin", "marcus"]) {
-      const html = view(viewer);
-      expect("hidden" in (await one(html, "form[data-guest-form]")).attrs, viewer).toBe(false);
-      expect(await select(html, "form[data-guest-form] select"), viewer).toEqual([]);
-      expect(await select(html, "form[data-guest-form] input[name=name][maxlength='40']"), viewer).toHaveLength(1);
+      const html = render(viewer);
+      expect(await select(html, `[data-person="${sam}"]`), viewer).toEqual([]);
+      expect(await select(html, '[data-person="dani"] .minis .av.is-guest'), viewer).toHaveLength(1);
+      expect(await select(html, "[data-people] [data-add-guest]"), viewer).toHaveLength(1);
+      expect(await select(html, "select"), viewer).toEqual([]);
     }
-    expect(await select(view("zoe"), "form[data-guest-form]")).toEqual([]);
+    expect(await select(render("zoe"), "[data-add-guest]")).toEqual([]);
+    const shares = splitBill(snapshot.input).shares;
+    const owed = ["dani", sam].reduce((n, id) => n + shares.find((s) => s.participant === id)!.owedCents, 0);
+    expect(await select(render("dani"), `[data-owed="dani"]`)).toEqual([expect.objectContaining({ text: formatCents(owed) })]);
   });
 
-  it("gives the payer a forgive toggle per person on a confirmed bill, off for anyone who has paid", async () => {
+  it("hands the confirmed page what the payer's forgive and paid controls need", async () => {
     await seedSaigon(db, BILL);
     const kim = await withGuest("Kim", "gavin");
     await confirmed();
@@ -1154,24 +1160,25 @@ describe("the page", () => {
     const link = `/b/${BILL}?t=${await mintToken(BILL, "gavin", KEY, Date.now())}`;
     const response = await app.fetch(new Request(`https://aazhi.test${link}`), env(), createExecutionContext());
     const html = await response.text();
+    const state = JSON.parse(/<script type="application\/json" id="bill-state">([\s\S]*?)<\/script>/.exec(html)![1]!);
 
-    const toggles = await select(html, "button[data-forgive]");
-    const ids = toggles.map((t) => t.attrs["data-forgive"]);
-    expect(ids).not.toContain("gavin");
-    // Kim owes the payer directly, so the payer can forgive Kim like anyone else.
-    expect(ids).toEqual(expect.arrayContaining(["marcus", "jess", "dani", kim]));
-    const by = (id: string) => toggles.find((t) => t.attrs["data-forgive"] === id)!;
-    expect(by("marcus").text).toBe("Undo");
-    expect(by("dani").text).toBe("Forgive");
-    expect("disabled" in by("jess").attrs).toBe(true);
-    expect("disabled" in by("dani").attrs).toBe(false);
-    expect(await select(html, "form[data-guest-form]:not([hidden])")).toEqual([]);
+    expect(state.paid).toEqual(["jess"]);
+    expect(state.owing.jess.paidCents).toBe(100);
+    expect(state.result.shares.find((s: any) => s.participant === "marcus").pardoned).toBe(true);
+    expect(state.participants.find((p: any) => p.id === kim).addedBy).toBe("gavin");
+    // Kim owes the payer directly, so Kim is a debtor of their own and not on Gavin's total.
+    expect(state.owing[kim].owedCents).toBe(state.result.shares.find((s: any) => s.participant === kim).owedCents);
+    expect(state.owing.gavin.owedCents).toBe(state.result.shares.find((s: any) => s.participant === "gavin").owedCents);
+    expect(await select(html, '[data-person="marcus"] .badge.gift')).toHaveLength(1);
+    expect(await select(html, '[data-person="jess"] .stamp')).toEqual([]);
+    expect(await select(html, "[data-add-guest], [data-claim]")).toEqual([]);
 
     const diner = await app.fetch(
       new Request(`https://aazhi.test/b/${BILL}?t=${await mintToken(BILL, "marcus", KEY, Date.now())}`),
       env(),
       createExecutionContext(),
     );
-    expect(await select(await diner.text(), "button[data-forgive]")).toEqual([]);
+    const mine = await diner.text();
+    expect((await one(mine, "[data-you]")).attrs.class).toContain("is-forgiven");
   });
 });

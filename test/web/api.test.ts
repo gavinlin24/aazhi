@@ -445,7 +445,7 @@ describe("who paid", () => {
     expect(reply.body.result.payerCollectsCents).toBe(32412 - 5091);
     expect((await getBill(db, BILL))!.payerId).toBe("priya");
     expect(edits).toHaveLength(1);
-    expect(JSON.stringify(edits[0].embeds)).toMatch(/Priya \$50\.91 \(paid the bill\)/);
+    expect(JSON.stringify(edits[0].embeds)).toMatch(/Priya \$50\.91 🪙/);
 
     // The new payer now holds the payer's controls, and the old one does not.
     expect((await patch("gavin", { payer: "gavin" })).status).toBe(403);

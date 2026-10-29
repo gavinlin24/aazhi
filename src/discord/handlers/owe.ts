@@ -51,7 +51,7 @@ export const NO_SHARE = "You have no share on this bill, so there's nothing for 
 const MAX_CONTENT = 2000;
 const MAX_LABEL = 60;
 const MAX_BILL_NAME = 80;
-const MAX_NOTE = 60;
+export const MAX_NOTE = 60;
 const MAX_NAME = 40;
 
 // By code point, so a cut never splits an emoji into a lone surrogate.

@@ -117,9 +117,9 @@ describe("renderBill", () => {
 
     expect(lineFor(text, "Spring rolls")).toMatch(/\$15\.00.*Dani, Marcus, Omar/);
     expect(lineFor(text, "Banh xeo")).toMatch(/\$11\.00.*Lena, Theo/);
-    expect(lineFor(text, "Thai iced tea x3")).toMatch(/\$15\.00.*unclaimed/i);
+    expect(lineFor(text, "Thai iced tea x3")).toMatch(/^◌ .*\$15\.00.*unclaimed/i);
     expect(lineFor(text, "Sparkling water")).toMatch(/\$6\.00.*unclaimed/i);
-    expect(lineFor(text, "Shaking beef")).not.toMatch(/unclaimed/i);
+    expect(lineFor(text, "Shaking beef")).not.toMatch(/unclaimed|◌/i);
   });
 
   it("shows the bill subtotal, tax, tip and total", () => {
@@ -133,8 +133,8 @@ describe("renderBill", () => {
 
   it("marks the payer as the one who paid", () => {
     const text = embedText(embedOf(render(bill, draftState)));
-    expect(lineFor(text, "Gavin $")).toMatch(/paid/i);
-    expect(lineFor(text, "Marcus $")).not.toMatch(/paid/i);
+    expect(lineFor(text, "Gavin $")).toMatch(/🪙/);
+    expect(lineFor(text, "Marcus $")).not.toMatch(/🪙/);
   });
 
   // A reopened bill keeps its pardons, so a bare $0.00 would read as a claiming mistake.
@@ -289,7 +289,7 @@ describe("renderBill", () => {
     expect(lineFor(text, "<@marcus>")).toContain("$40.00");
     expect(text).not.toContain("$44.46");
     expect(lineFor(text, "<@priya>")).toContain("$50.91");
-    expect(text).toMatch(/<@gavin>[^\n]*\$48\.33[^\n]*paid the bill/i);
+    expect(text).toMatch(/<@gavin>[^\n]*\$48\.33[^\n]*🪙/);
     // The payer is named as the person to pay.
     expect(text).toMatch(/pay <@gavin>/i);
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual([
