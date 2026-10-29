@@ -107,6 +107,32 @@ async function mutate(db: D1Database, billId: string, writes: D1PreparedStatemen
   return row.revision;
 }
 
+export class BillNotDraftError extends Error {
+  constructor(billId: string) {
+    super(`bill ${billId} is not an open draft`);
+    this.name = "BillNotDraftError";
+  }
+}
+
+// Every draft-only write carries this condition in its own WHERE clause, with
+// the bill id bound as ?1. A status check the caller made earlier is only a
+// courtesy: Confirm can land between that check and the write, and the shares
+// it froze must not then move under it.
+const WHILE_DRAFT = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'draft')";
+
+// The writes and the bump share one transaction and the same condition, so
+// either all of them land on a draft or none of them do. An empty RETURNING
+// means the bill was not a draft (or not there) when the batch ran.
+async function mutateDraft(db: D1Database, billId: string, writes: D1PreparedStatement[]): Promise<number> {
+  const bump = db
+    .prepare("UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND status = 'draft' RETURNING revision")
+    .bind(billId);
+  const results = await db.batch<{ revision: number }>([...writes, bump]);
+  const row = results[results.length - 1].results[0];
+  if (!row) throw new BillNotDraftError(billId);
+  return row.revision;
+}
+
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
   const createdAt = new Date().toISOString();
   await db
@@ -262,25 +288,44 @@ export async function claimEditLease(db: D1Database, billId: string, windowMs: n
   return meta.changes === 1;
 }
 
-export async function toSplitInput(db: D1Database, billId: string): Promise<BillInput> {
+export interface BillSnapshot {
+  bill: BillRow;
+  participants: Participant[];
+  input: BillInput;
+}
+
+// One batch is one transaction, so the revision a page is handed always
+// belongs to the items and claims it is shown beside.
+export async function getBillSnapshot(db: D1Database, billId: string): Promise<BillSnapshot | null> {
   const [bill, items, claims, participants, pardoned] = await db.batch([
-    db.prepare("SELECT payer_id, tax_cents, tip_cents FROM bills WHERE id = ?").bind(billId),
+    db.prepare(`SELECT ${BILL_COLUMNS} FROM bills WHERE id = ?`).bind(billId),
     itemsStatement(db, billId),
     claimsStatement(db, billId),
     participantsStatement(db, billId),
     db.prepare("SELECT participant_id FROM shares WHERE bill_id = ? AND pardoned = 1").bind(billId),
   ]);
-  const billRow = (bill.results as { payer_id: string; tax_cents: number; tip_cents: number }[])[0];
-  if (!billRow) throw new Error(`bill ${billId} not found`);
+  const billRow = (bill.results as BillDbRow[])[0];
+  if (!billRow) return null;
 
+  const people = (participants.results as ParticipantDbRow[]).map(toParticipant);
   return {
-    items: assembleItems(items.results as ItemDbRow[], claims.results as ClaimDbRow[]),
-    taxCents: billRow.tax_cents,
-    tipCents: billRow.tip_cents,
-    payer: billRow.payer_id,
-    participants: sortedIds((participants.results as ParticipantDbRow[]).map((p) => p.id)),
-    pardoned: sortedIds((pardoned.results as { participant_id: string }[]).map((p) => p.participant_id)),
+    bill: toBill(billRow),
+    participants: people,
+    input: {
+      items: assembleItems(items.results as ItemDbRow[], claims.results as ClaimDbRow[]),
+      taxCents: billRow.tax_cents,
+      tipCents: billRow.tip_cents,
+      payer: billRow.payer_id,
+      participants: sortedIds(people.map((p) => p.id)),
+      pardoned: sortedIds((pardoned.results as { participant_id: string }[]).map((p) => p.participant_id)),
+    },
   };
+}
+
+export async function toSplitInput(db: D1Database, billId: string): Promise<BillInput> {
+  const snapshot = await getBillSnapshot(db, billId);
+  if (!snapshot) throw new Error(`bill ${billId} not found`);
+  return snapshot.input;
 }
 
 export async function bumpRevision(db: D1Database, billId: string): Promise<number> {
@@ -299,13 +344,31 @@ export async function insertItems(db: D1Database, billId: string, items: NewItem
   );
 }
 
-export async function addParticipant(db: D1Database, p: Participant): Promise<number> {
-  return addParticipants(db, p.billId, [p]);
+export async function addParticipant(db: D1Database, p: Participant, options: { draftOnly?: boolean } = {}): Promise<number> {
+  return addParticipants(db, p.billId, [p], options);
 }
 
 // One batch for the lot, because the payer's roster picker can add 25 people
-// inside an interaction that has to answer within three seconds.
-export async function addParticipants(db: D1Database, billId: string, people: Participant[]): Promise<number> {
+// inside an interaction that has to answer within three seconds. draftOnly is
+// for people joining from Discord; seeding a bill being created skips it.
+export async function addParticipants(
+  db: D1Database,
+  billId: string,
+  people: Participant[],
+  options: { draftOnly?: boolean } = {},
+): Promise<number> {
+  if (options.draftOnly) {
+    const insert = db.prepare(
+      `INSERT INTO participants (bill_id, id, kind, display_name, added_by)
+       SELECT ?1, ?2, ?3, ?4, ?5 WHERE ${WHILE_DRAFT}
+       ON CONFLICT (bill_id, id) DO NOTHING`,
+    );
+    return mutateDraft(
+      db,
+      billId,
+      people.map((p) => insert.bind(billId, p.id, p.kind, p.displayName, p.addedBy)),
+    );
+  }
   const insert = db.prepare(
     `INSERT INTO participants (bill_id, id, kind, display_name, added_by) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (bill_id, id) DO NOTHING`,
@@ -375,5 +438,104 @@ export async function removeClaim(
            AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)`,
       )
       .bind(itemId, participantId, billId),
+  ]);
+}
+
+// The page's writes. Each is one row-level statement scoped to its bill, so
+// two people claiming the same line at once both land, and an id that went
+// stale between the caller's check and the write changes nothing. All of them
+// refuse a bill that is no longer a draft with BillNotDraftError.
+
+export async function setClaim(
+  db: D1Database,
+  billId: string,
+  itemId: string,
+  participantId: ParticipantId,
+  claimed: boolean,
+): Promise<number> {
+  const write = claimed
+    ? db.prepare(
+        `INSERT INTO item_claims (bill_item_id, participant_id)
+         SELECT i.id, p.id FROM bill_items i JOIN participants p ON p.bill_id = i.bill_id
+         WHERE i.bill_id = ?1 AND i.id = ?2 AND p.id = ?3 AND ${WHILE_DRAFT}
+         ON CONFLICT DO NOTHING`,
+      )
+    : db.prepare(
+        `DELETE FROM item_claims
+         WHERE bill_item_id = ?2 AND participant_id = ?3
+           AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?1) AND ${WHILE_DRAFT}`,
+      );
+  return mutateDraft(db, billId, [write.bind(billId, itemId, participantId)]);
+}
+
+export async function addItem(db: D1Database, billId: string, item: NewItem): Promise<number> {
+  return mutateDraft(db, billId, [
+    db
+      .prepare(
+        `INSERT INTO bill_items (id, bill_id, label, cents, position, source, confidence)
+         SELECT ?2, ?1, ?3, ?4, (SELECT COALESCE(MAX(position) + 1, 0) FROM bill_items WHERE bill_id = ?1), ?5, ?6
+         WHERE ${WHILE_DRAFT}`,
+      )
+      .bind(billId, item.id, item.label, item.cents, item.source, item.confidence ?? null),
+  ]);
+}
+
+export async function editItem(
+  db: D1Database,
+  billId: string,
+  itemId: string,
+  change: { label?: string; cents?: number },
+): Promise<number> {
+  return mutateDraft(db, billId, [
+    db
+      .prepare(
+        `UPDATE bill_items SET label = COALESCE(?3, label), cents = COALESCE(?4, cents)
+         WHERE bill_id = ?1 AND id = ?2 AND ${WHILE_DRAFT}`,
+      )
+      .bind(billId, itemId, change.label ?? null, change.cents ?? null),
+  ]);
+}
+
+// The line's claims go with it through the item_claims cascade.
+export async function deleteItem(db: D1Database, billId: string, itemId: string): Promise<number> {
+  return mutateDraft(db, billId, [
+    db.prepare(`DELETE FROM bill_items WHERE bill_id = ?1 AND id = ?2 AND ${WHILE_DRAFT}`).bind(billId, itemId),
+  ]);
+}
+
+export interface BillAmounts {
+  taxCents?: number;
+  tipCents?: number;
+  // A percentage in hundredths of a percent, applied to the bill subtotal
+  // inside the write so the tip matches the lines as they stand when it lands.
+  tipBasisPoints?: number;
+  printedTotalCents?: number | null;
+}
+
+export async function setBillAmounts(db: D1Database, billId: string, amounts: BillAmounts): Promise<number> {
+  const sets: string[] = [];
+  const values: (number | null)[] = [];
+  const set = (sql: string, value: number | null) => {
+    values.push(value);
+    sets.push(sql.replace("?", `?${values.length + 1}`));
+  };
+  if (amounts.taxCents !== undefined) set("tax_cents = ?", amounts.taxCents);
+  if (amounts.tipCents !== undefined) set("tip_cents = ?", amounts.tipCents);
+  // Integer division truncates, and both factors are non-negative, so adding
+  // half the divisor first rounds half up to the cent without a float. The
+  // cast matters: a bound number may arrive as REAL, which would make the
+  // division fractional.
+  if (amounts.tipBasisPoints !== undefined) {
+    set(
+      `tip_cents = (SELECT (MAX(COALESCE(SUM(cents), 0), 0) * CAST(? AS INTEGER) + 5000) / 10000
+                    FROM bill_items WHERE bill_id = ?1)`,
+      amounts.tipBasisPoints,
+    );
+  }
+  if (amounts.printedTotalCents !== undefined) set("printed_total_cents = ?", amounts.printedTotalCents);
+  if (sets.length === 0) throw new Error("no amounts to set");
+
+  return mutateDraft(db, billId, [
+    db.prepare(`UPDATE bills SET ${sets.join(", ")} WHERE id = ?1 AND status = 'draft'`).bind(billId, ...values),
   ]);
 }

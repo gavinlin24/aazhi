@@ -241,12 +241,85 @@ describe("renderPage", () => {
       status: "draft",
       revision: 7,
       editable: "self",
+      viewerIsPayer: false,
       taxCents: 2232,
       tipCents: 5030,
+      printedTotalCents: 27382,
+      reconciles: { ok: true, discrepancyCents: null },
     });
     expect(state.items).toHaveLength(SAIGON.items.length);
     expect(state.participants.map((p: any) => p.id)).toEqual(SAIGON.participants);
     expect(state.result.unclaimedCents).toBe(2706);
+  });
+
+  it("gives a viewer who is not on the bill nothing to tap and tells them how to join", async () => {
+    const people = participantsOf(draft).filter((p) => p.id !== "marcus");
+    const input = { ...withUnclaimed(draft, ["rolls", "tea", "bun"]), participants: draft.participants.filter((p) => p !== "marcus") };
+    const html = page("marcus", bill, input, people);
+
+    expect((await one(html, "#bill")).attrs["data-editable"]).toBe("none");
+    expect(await select(html, "button.chip:not([disabled])")).toEqual([]);
+    expect(await textOf(html, "[data-you]")).toMatch(/not on this bill/i);
+    expect(await textOf(html, "[data-you]")).toMatch(/Open the split/);
+    const hint = await textOf(html, "[data-hint]");
+    expect(hint).toMatch(/not on this bill/i);
+    expect(hint).not.toMatch(/Tap You/);
+  });
+
+  it("names each status for what it is", async () => {
+    expect(await textOf(page("marcus"), "[data-status-label]")).toMatch(/^Draft/);
+    const confirmed = page("marcus", { ...bill, status: "confirmed" }, SAIGON);
+    expect(await textOf(confirmed, "[data-status-label]")).toMatch(/^Confirmed/);
+    expect(await textOf(page("marcus", { ...bill, status: "reading" }, SAIGON), "[data-status-label]")).not.toMatch(
+      /Confirmed/,
+    );
+  });
+
+  it("keeps one note line on every row, so a claim landing never moves the chips", async () => {
+    const html = page("marcus");
+
+    for (const item of SAIGON.items) {
+      expect(await select(html, `li.item[data-item="${item.id}"] .item-meta`), item.id).toHaveLength(1);
+    }
+    expect(await textOf(html, 'li.item[data-item="rolls"] .item-meta')).toBe("Split 3 ways");
+    expect(await textOf(html, 'li.item[data-item="bun"] .item-meta')).toBe("Just you");
+    expect(await textOf(html, 'li.item[data-item="noodles"] .item-meta')).toBe("Just Dani");
+    expect(await textOf(html, 'li.item[data-item="tea"] .item-meta')).toMatch(/nobody/i);
+    expect(html).toMatch(/\.item-meta\s*\{[^}]*height:\s*20px/);
+    // Pressed and unpressed chips share a weight, so a toggle keeps its width.
+    expect(html).not.toMatch(/\.chip\[aria-pressed="true"\]\s*\{[^}]*font-weight/);
+  });
+
+  it("draws chips the viewer cannot tap as name tags rather than buttons", () => {
+    expect(page("marcus")).toMatch(/\.chip:disabled\s*\{[^}]*border-color:\s*transparent/);
+  });
+
+  it("shows the payer whether the read adds up, with the inputs to fix it", async () => {
+    const adds = page("gavin");
+    expect((await one(adds, "[data-reconcile]")).attrs.class).toContain("is-ok");
+    expect(await textOf(adds, "[data-reconcile]")).toBe("Adds up: the items and tax match the printed total of $273.82.");
+    expect((await one(adds, "#field-printedTotal")).attrs.value).toBe("273.82");
+    expect((await one(adds, "#field-tax")).attrs.value).toBe("22.32");
+    expect((await one(adds, "#field-tip")).attrs.value).toBe("50.30");
+    // The inputs need the script; without it the payer still sees the check.
+    expect((await one(adds, "[data-check] .fields")).attrs.class).toContain("needs-js");
+    expect(await select(adds, "[data-add-line].needs-js")).toHaveLength(1);
+
+    const misread = withItem(SAIGON, { id: "extra", label: "Misread", cents: 5000, claimedBy: [] });
+    const over = page("gavin", bill, misread);
+    expect((await one(over, "[data-reconcile]")).attrs.class).toContain("is-off");
+    expect(await textOf(over, "[data-reconcile]")).toBe(
+      "Doesn't add up yet: the items and tax come to $323.82, $50.00 more than the printed total of $273.82.",
+    );
+
+    const unread = page("gavin", { ...bill, printedTotalCents: null });
+    expect(await textOf(unread, "[data-reconcile]")).toMatch(/Enter the printed total/);
+    expect((await one(unread, "#field-printedTotal")).attrs.value).toBe("");
+
+    expect(await select(page("marcus"), "[data-check], [data-add-line]")).toEqual([]);
+    const locked = await select(page("gavin", { ...bill, status: "confirmed" }, SAIGON), "[data-check], [data-add-line]");
+    expect(locked).toHaveLength(2);
+    expect(locked.every((el) => "hidden" in el.attrs)).toBe(true);
   });
 
   it("is one self-contained, phone-sized page that follows the system theme", () => {

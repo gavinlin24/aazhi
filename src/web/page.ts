@@ -1,9 +1,10 @@
 import type { BillRow, Participant } from "../db/bills";
 import { formatCents, formatDate } from "../format";
-import type { LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { CLIENT_SCRIPT } from "./client";
+import { billState, type BillState, type Editable } from "./state";
 
-export type Editable = "all" | "self" | "none";
+export type { Editable } from "./state";
 
 // Covers text and double-quoted attribute values alike; every attribute this
 // file writes is double-quoted.
@@ -38,6 +39,8 @@ const STYLES = `
   --warn: #a14a05;
   --warn-soft: #fcefdc;
   --warn-line: #e3a043;
+  --ok: #1d7a3e;
+  --ok-soft: #e2f3e7;
   --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -54,6 +57,8 @@ const STYLES = `
     --warn: #f3b25a;
     --warn-soft: #382a12;
     --warn-line: #9c6718;
+    --ok: #6fd897;
+    --ok-soft: #16301f;
   }
 }
 * { box-sizing: border-box; }
@@ -116,11 +121,37 @@ h1, h2, p { margin: 0; }
   border-radius: var(--radius);
   padding: 12px;
 }
-.item.is-unclaimed { border-color: var(--warn-line); box-shadow: inset 4px 0 0 var(--warn-line); padding-left: 16px; }
+.item.is-unclaimed { border-color: var(--warn-line); box-shadow: inset 4px 0 0 var(--warn-line); }
 .item-line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+button.item-line {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+button.item-line .item-price { text-decoration: underline dotted var(--muted); text-underline-offset: 4px; }
+button.item-line:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .item-label { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .item-price { font-weight: 600; white-space: nowrap; }
-.item-flag { font-size: 14px; font-weight: 600; color: var(--warn); margin-top: 2px; }
+/* One line, always present, so a row keeps its height when its first claim
+   lands or its last one goes: the chip under a finger never moves. */
+.item-meta {
+  font-size: 14px;
+  line-height: 20px;
+  height: 20px;
+  margin-top: 2px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item-flag, .item-meta.is-error { font-weight: 600; color: var(--warn); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .chip {
   min-height: 44px;
@@ -140,16 +171,109 @@ h1, h2, p { margin: 0; }
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+/* Pressed and unpressed share a font weight, so a toggle never changes a
+   chip's width and the chips after it never reflow. */
 .chip[aria-pressed="true"] {
   background: var(--accent-soft);
   border-color: var(--accent-soft);
   color: var(--accent-soft-ink);
-  font-weight: 600;
 }
 .chip.is-viewer { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .chip.is-viewer[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
-.chip:disabled { cursor: default; opacity: 1; }
+/* Someone else's chip reads as a name tag, not a button: no outline to tap.
+   Full-contrast text still shows who is on the line. */
+.chip:disabled { cursor: default; opacity: 1; border-color: transparent; }
+.chip:disabled[aria-pressed="false"] { color: var(--muted); }
 .chip:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.needs-js { display: none; }
+.is-live .needs-js:not([hidden]) { display: block; }
+.live-note {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-soft-ink);
+  font-weight: 600;
+}
+.live-note.is-warn { background: var(--warn-soft); color: var(--warn); }
+.check-heading { font-size: 15px; font-weight: 600; color: var(--muted); }
+.check-status { margin-top: 8px; padding: 10px 12px; border-radius: 10px; font-size: 15px; font-weight: 600; }
+.check-status.is-ok { background: var(--ok-soft); color: var(--ok); }
+.check-status.is-off { background: var(--warn-soft); color: var(--warn); }
+.fields { margin-top: 12px; }
+.field { padding: 10px 0 0; border-top: 1px solid var(--line); margin-top: 10px; }
+.field-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+.field-head label, .editor label { font-size: 15px; font-weight: 600; }
+.field-row { display: flex; gap: 8px; margin-top: 6px; }
+.money-input {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--bg);
+}
+.money-input:focus-within { border-color: var(--accent); }
+.money-input span { color: var(--muted); }
+.money-input.is-percent span { order: 2; }
+.money-input input, .text-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.text-input { border: 1.5px solid var(--line); border-radius: 10px; padding: 0 12px; background: var(--bg); width: 100%; }
+.text-input:focus { border-color: var(--accent); }
+.field-note { font-size: 14px; color: var(--muted); min-height: 20px; margin-top: 4px; }
+.btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.danger { color: var(--warn); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:focus-visible, .seg button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.seg { display: inline-flex; border: 1.5px solid var(--line); border-radius: 999px; padding: 2px; }
+.seg button {
+  min-width: 44px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-soft-ink); }
+.editor { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.editor-row { display: grid; gap: 4px; }
+.editor .editor-check { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 400; min-height: 32px; }
+.editor-check input { width: 20px; height: 20px; margin: 0; }
+.editor-msg { font-size: 14px; font-weight: 600; color: var(--warn); min-height: 20px; }
+.editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.editor-actions .danger { margin-left: auto; }
+.add-line { margin-top: 10px; }
+.add-line.is-open { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.add-line.is-open .editor { margin-top: 0; padding-top: 0; border-top: 0; }
+.btn-add { width: 100%; border-style: dashed; color: var(--accent); }
 .empty { color: var(--muted); }
 .people { list-style: none; margin: 0; padding: 0 16px; }
 .person {
@@ -242,6 +366,7 @@ interface View {
   result: SplitResult;
   items: LineItem[];
   participants: Participant[];
+  state: BillState;
   viewer: ParticipantId;
   viewerIsPayer: boolean;
   editable: Editable;
@@ -249,21 +374,31 @@ interface View {
   shares: Map<ParticipantId, Share>;
 }
 
-function editableFor(bill: BillRow, viewerIsPayer: boolean): Editable {
-  if (bill.status !== "draft") return "none";
-  return viewerIsPayer ? "all" : "self";
+// The script in client.ts renders the same words from the same state; a
+// change to any copy here needs the matching change there.
+const STATUS_LABEL: Record<BillRow["status"], string> = {
+  reading: "Reading the receipt",
+  draft: "Draft · amounts change as people claim",
+  confirmed: "Confirmed · amounts are locked",
+  superseded: "Replaced by a newer split",
+  deleted: "Deleted",
+};
+
+// The amount as typed into an input: no symbol, no thousands separators.
+function plainDollars(cents: Cents): string {
+  return formatCents(cents).replace(/[$,]/g, "");
 }
 
 function header(v: View): string {
   const date = formatDate(v.bill.billDate);
   const payer = v.viewerIsPayer ? "You" : escapeHtml(v.names.get(v.bill.payerId) ?? "Someone");
   const meta = [date, `${payer} paid`].filter(Boolean).join(" · ");
-  const status = v.bill.status === "draft" ? "Draft · amounts change as people claim" : "Confirmed";
   return `<header class="head">
-<p class="eyebrow">${status}</p>
+<p class="eyebrow" data-status-label>${STATUS_LABEL[v.bill.status]}</p>
 <h1>${escapeHtml(v.bill.place?.trim() || "Receipt")}</h1>
 <p class="meta">${meta}</p>
-</header>`;
+</header>
+<p class="live-note" data-live-note role="status" hidden></p>`;
 }
 
 function youSummary(v: View): string {
@@ -276,7 +411,9 @@ function youSummary(v: View): string {
   let note: string;
   if (!share) {
     label = "You're not on this bill";
-    note = "Nothing here is yours to pay.";
+    note = draft
+      ? "If you were at dinner, tap <strong>Open the split</strong> on the bill in Discord to join it."
+      : "Nothing here is yours to pay.";
   } else if (v.viewerIsPayer) {
     label = `Your share${soFar}`;
     note = `You paid, so the others owe you <strong class="money">${formatCents(v.result.payerCollectsCents)}</strong>${soFar}.`;
@@ -295,6 +432,51 @@ function youSummary(v: View): string {
 <p class="you-amount money" data-you-owed>${formatCents(share?.owedCents ?? 0)}</p>
 ${detail}
 <p class="you-note">${note}</p>
+</section>`;
+}
+
+function reconcileText(state: BillState): string {
+  const total = state.printedTotalCents;
+  const gap = state.reconciles.discrepancyCents;
+  if (state.reconciles.ok && total !== null) return `Adds up: the items and tax match the printed total of ${formatCents(total)}.`;
+  if (total === null || gap === null) {
+    return "Enter the printed total from the receipt to check this read. Confirm appears in Discord once it adds up.";
+  }
+  return (
+    `Doesn't add up yet: the items and tax come to ${formatCents(total + gap)}, ` +
+    `${formatCents(Math.abs(gap))} ${gap > 0 ? "more" : "less"} than the printed total of ${formatCents(total)}.`
+  );
+}
+
+function moneyField(name: string, label: string, cents: Cents | null, extra = ""): string {
+  const value = cents === null ? "" : plainDollars(cents);
+  const id = `field-${name}`;
+  return `<form class="field" data-field="${name}" novalidate>
+<div class="field-head"><label for="${id}">${label}</label>${extra}</div>
+<div class="field-row"><div class="money-input"><span data-unit aria-hidden="true">$</span><input id="${id}" name="value" inputmode="decimal" autocomplete="off" enterkeyhint="done" value="${value}"${name === "printedTotal" ? ' placeholder="Not entered"' : ""}></div><button type="submit" class="btn primary" disabled>Save</button></div>
+<p class="field-note" data-note></p>
+</form>`;
+}
+
+// The payer's corrections. The status line is plain HTML, so even without the
+// script the payer sees whether the read adds up; the inputs need the script.
+// Rendered (hidden) for the payer even off-draft, so a reopened bill can bring
+// it back without a reload.
+function checkCard(v: View): string {
+  if (!v.viewerIsPayer) return "";
+  const ok = v.state.reconciles.ok;
+  const tipMode =
+    '<div class="seg" role="group" aria-label="Enter the tip as">' +
+    '<button type="button" data-tip-mode="dollars" aria-pressed="true">$</button>' +
+    '<button type="button" data-tip-mode="percent" aria-pressed="false">%</button></div>';
+  return `<section class="card check" data-check aria-labelledby="check-heading"${v.bill.status === "draft" ? "" : " hidden"}>
+<h2 class="check-heading" id="check-heading">Check the receipt</h2>
+<p class="check-status ${ok ? "is-ok" : "is-off"}" data-reconcile>${reconcileText(v.state)}</p>
+<div class="fields needs-js">
+${moneyField("printedTotal", "Printed total", v.bill.printedTotalCents)}
+${moneyField("tax", "Tax", v.bill.taxCents)}
+${moneyField("tip", "Tip", v.bill.tipCents, tipMode)}
+</div>
 </section>`;
 }
 
@@ -317,38 +499,54 @@ function chip(v: View, item: LineItem, p: Participant): string {
   );
 }
 
+function itemMeta(v: View, item: LineItem): string {
+  const n = item.claimedBy.length;
+  if (n === 0) return `<p class="item-meta item-flag">Nobody has claimed this yet</p>`;
+  if (n > 1) return `<p class="item-meta">Split ${n} ways</p>`;
+  const only = item.claimedBy[0]!;
+  return `<p class="item-meta">Just ${only === v.viewer ? "you" : escapeHtml(v.names.get(only) ?? only)}</p>`;
+}
+
 function itemRow(v: View, item: LineItem, people: Participant[]): string {
   const unclaimed = item.claimedBy.length === 0;
   const label = escapeHtml(item.label);
   return `<li class="item${unclaimed ? " is-unclaimed" : ""}" data-item="${escapeHtml(item.id)}">
 <div class="item-line"><span class="item-label">${label}</span><span class="item-price">${formatCents(item.cents)}</span></div>
-${unclaimed ? `<p class="item-flag">Nobody has claimed this yet</p>\n` : ""}<div class="chips" role="group" aria-label="Who had ${label}">${people.map((p) => chip(v, item, p)).join("")}</div>
+${itemMeta(v, item)}
+<div class="chips" role="group" aria-label="Who had ${label}">${people.map((p) => chip(v, item, p)).join("")}</div>
 </li>`;
 }
 
-function hintFor(editable: Editable): string {
-  switch (editable) {
+function hintFor(v: View): string {
+  switch (v.editable) {
     case "all":
-      return "You paid, so you can tap anyone onto a line. Tap several people on one line to split it evenly between them.";
+      return "You paid, so you can tap anyone onto a line, and tap a line's name or price to fix it. Tap several people on one line to split it evenly.";
     case "self":
       return "Tap <strong>You</strong> on every line you had. On a shared dish, everyone tapped on it splits it evenly.";
     case "none":
-      return "This bill is confirmed, so these amounts are locked.";
+      if (v.bill.status === "draft") return "You're not on this bill, so there's nothing here for you to tap.";
+      if (v.bill.status === "confirmed") return "This bill is confirmed, so these amounts are locked.";
+      return "This bill can't be changed any more.";
   }
 }
 
 function itemList(v: View): string {
   const people = chipOrder(v);
   const open = v.items.filter((i) => i.claimedBy.length === 0).length;
-  const badge = open > 0 ? `<span class="badge">${open} unclaimed</span>` : "";
+  const badge = open > 0 ? `<span class="badge" data-unclaimed-badge>${open} unclaimed</span>` : "";
   const list =
     v.items.length > 0
       ? `<ul class="items">${v.items.map((i) => itemRow(v, i, people)).join("\n")}</ul>`
       : `<p class="empty">No items on this bill.</p>`;
-  return `<section aria-labelledby="items-heading">
+  const add = v.viewerIsPayer
+    ? `<div class="add-line needs-js" data-add-line${v.editable === "all" ? "" : " hidden"}>` +
+      `<button type="button" class="btn btn-add" data-add-open>Add a missing line</button></div>`
+    : "";
+  return `<section aria-labelledby="items-heading" data-items>
 <div class="section-head"><h2 id="items-heading">Items</h2>${badge}</div>
-<p class="hint">${hintFor(v.editable)}</p>
+<p class="hint" data-hint>${hintFor(v)}</p>
 ${list}
+${add}
 </section>`;
 }
 
@@ -367,7 +565,7 @@ function personRow(v: View, p: Participant): string {
 function people(v: View): string {
   const heading = v.bill.status === "draft" ? "Everyone so far" : "Everyone";
   return `<section aria-labelledby="people-heading">
-<div class="section-head"><h2 id="people-heading">${heading}</h2></div>
+<div class="section-head"><h2 id="people-heading" data-people-heading>${heading}</h2></div>
 <ul class="card people">${v.participants.map((p) => personRow(v, p)).join("\n")}</ul>
 </section>`;
 }
@@ -395,36 +593,24 @@ export function renderPage(
   participants: Participant[],
   viewer: ParticipantId,
 ): string {
-  const viewerIsPayer = viewer === bill.payerId;
+  const state = billState(bill, result, items, participants, viewer);
   const v: View = {
     bill,
     result,
     items,
     participants,
+    state,
     viewer,
-    viewerIsPayer,
-    editable: editableFor(bill, viewerIsPayer),
+    viewerIsPayer: state.viewerIsPayer,
+    editable: state.editable,
     names: new Map(participants.map((p) => [p.id, p.displayName])),
     shares: new Map(result.shares.map((s) => [s.participant, s])),
   };
 
-  const state = {
-    billId: bill.id,
-    viewer,
-    payerId: bill.payerId,
-    status: bill.status,
-    revision: bill.revision,
-    editable: v.editable,
-    taxCents: bill.taxCents,
-    tipCents: bill.tipCents,
-    items,
-    participants: participants.map((p) => ({ id: p.id, kind: p.kind, displayName: p.displayName, addedBy: p.addedBy })),
-    result,
-  };
-
-  const main = `<main class="page" id="bill" data-bill-id="${escapeHtml(bill.id)}" data-viewer="${escapeHtml(viewer)}" data-payer="${escapeHtml(bill.payerId)}" data-viewer-is-payer="${viewerIsPayer}" data-editable="${v.editable}" data-status="${bill.status}" data-revision="${bill.revision}">
+  const main = `<main class="page" id="bill" data-bill-id="${escapeHtml(bill.id)}" data-viewer="${escapeHtml(viewer)}" data-payer="${escapeHtml(bill.payerId)}" data-viewer-is-payer="${v.viewerIsPayer}" data-editable="${v.editable}" data-status="${bill.status}" data-revision="${bill.revision}">
 ${header(v)}
 ${youSummary(v)}
+${checkCard(v)}
 ${itemList(v)}
 ${people(v)}
 ${totals(v)}

@@ -5,6 +5,7 @@ import app from "../../src/index";
 import { getBill, getParticipants } from "../../src/db/bills";
 import type { Env } from "../../src/env";
 import { readToken } from "../../src/web/token";
+import { confirmingBeforeFirstWrite } from "../fixtures/race";
 import { seedSaigon } from "../fixtures/seed";
 import { one } from "../web/html";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
@@ -190,6 +191,26 @@ describe("Open the split", () => {
     expect(calls).toEqual([]);
   });
 
+  it("does not join someone to a bill confirmed between the check and the insert", async () => {
+    await seedSaigon(db, "bill-1", { participants: ["gavin"] });
+    const race = confirmingBeforeFirstWrite(db, "bill-1");
+    await ready;
+
+    const ctx = createExecutionContext();
+    const response = await app.fetch(
+      await signedRequest(keypair, tapOpen("bill-1", member("marcus", { nick: "Marcus" }))),
+      { ...env(), DB: race.db },
+      ctx,
+    );
+    await settle(waitOnExecutionContext(ctx));
+    const reply: any = await response.json();
+
+    expect(race.raced()).toBe(true);
+    expect(linkButton(reply).url).toContain("/b/bill-1?t=");
+    expect((await getParticipants(db, "bill-1")).map((p) => p.id)).toEqual(["gavin"]);
+    expect(calls).toEqual([]);
+  });
+
   it("says a superseded split was replaced, with no link and no roster change", async () => {
     await seedSaigon(db, "bill-1", { participants: ["gavin"] });
     await db.prepare("UPDATE bills SET status = 'superseded' WHERE id = 'bill-1'").run();
@@ -290,6 +311,29 @@ describe("the payer's roster picker", () => {
     const reply = await run(pick("bill-1", member("gavin", { nick: "Gavin" }), [{ id: "jess", nick: "Jess" }]));
 
     expect(reply.data.content).toMatch(/already on/i);
+    expect(calls).toEqual([]);
+  });
+
+  it("adds nobody to a bill confirmed between the check and the insert", async () => {
+    await seedSaigon(db, "bill-1", { participants: ["gavin"] });
+    const before = (await getBill(db, "bill-1"))!.revision;
+    const race = confirmingBeforeFirstWrite(db, "bill-1");
+    await ready;
+
+    const ctx = createExecutionContext();
+    const response = await app.fetch(
+      await signedRequest(keypair, pick("bill-1", member("gavin", { nick: "Gavin" }), [{ id: "dani", nick: "Dani" }])),
+      { ...env(), DB: race.db },
+      ctx,
+    );
+    await settle(waitOnExecutionContext(ctx));
+    const reply: any = await response.json();
+
+    expect(race.raced()).toBe(true);
+    expect(reply.data.flags).toBe(EPHEMERAL);
+    expect(reply.data.content).toMatch(/confirmed/i);
+    expect((await getParticipants(db, "bill-1")).map((p) => p.id)).toEqual(["gavin"]);
+    expect((await getBill(db, "bill-1"))!.revision).toBe(before);
     expect(calls).toEqual([]);
   });
 

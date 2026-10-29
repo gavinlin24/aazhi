@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
-import { getBill, getParticipants, toSplitInput } from "./db/bills";
+import { getBillSnapshot } from "./db/bills";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
 import { splitBill } from "./money/split";
+import { api } from "./web/api";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
 import { readToken } from "./web/token";
 
@@ -51,12 +52,15 @@ app.get("/b/:billId", async (c) => {
   const grant = await readToken(c.req.query("t") ?? "", c.env.TOKEN_SIGNING_KEY, Date.now());
   if (!grant || grant.billId !== billId) return page(renderLinkRefused(), 403);
 
-  const bill = await getBill(c.env.DB, billId);
-  if (!bill) return page(renderBillNotFound(), 404);
+  const snapshot = await getBillSnapshot(c.env.DB, billId);
+  if (!snapshot) return page(renderBillNotFound(), 404);
+  const { bill, input, participants } = snapshot;
   if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
 
-  const [input, participants] = await Promise.all([toSplitInput(c.env.DB, billId), getParticipants(c.env.DB, billId)]);
   return page(renderPage(bill, splitBill(input), input.items, participants, grant.participantId), 200);
 });
+
+// The page's script talks to these with the same token, as a bearer header.
+app.route("/b", api);
 
 export default app;

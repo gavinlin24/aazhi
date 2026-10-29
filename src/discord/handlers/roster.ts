@@ -5,7 +5,15 @@ import {
   type APIActionRowComponent,
   type APIButtonComponent,
 } from "discord-api-types/v10";
-import { addParticipant, addParticipants, getBill, getParticipants, type BillRow, type Participant } from "../../db/bills";
+import {
+  addParticipant,
+  addParticipants,
+  BillNotDraftError,
+  getBill,
+  getParticipants,
+  type BillRow,
+  type Participant,
+} from "../../db/bills";
 import type { Env } from "../../env";
 import { mintToken } from "../../web/token";
 import type { InteractionHandler } from "../interactions";
@@ -19,6 +27,20 @@ const GONE: Partial<Record<BillRow["status"], string>> = {
   superseded: "This split was replaced by a newer one in this channel. Claim your items on the newer message.",
   deleted: "This split was deleted, so there's nothing to claim on it.",
 };
+
+const NOT_DRAFT = "This bill is already confirmed, so nobody new can be added to it.";
+
+// The status check before a join is only a courtesy; the insert itself
+// refuses a bill that stopped being a draft in the meantime.
+async function joinedDraft(join: () => Promise<number>): Promise<boolean> {
+  try {
+    await join();
+    return true;
+  } catch (error) {
+    if (error instanceof BillNotDraftError) return false;
+    throw error;
+  }
+}
 
 function json(body: unknown): Response {
   return Response.json(body);
@@ -64,8 +86,10 @@ export const openSplit: InteractionHandler = async (body, env, ctx, origin) => {
   if (bill.status === "draft") {
     const roster = await getParticipants(env.DB, bill.id);
     if (!roster.some((p) => p.id === who.id)) {
-      await addParticipant(env.DB, { billId: bill.id, id: who.id, kind: "member", displayName: who.displayName, addedBy: null });
-      refreshMessage(bill, env, ctx);
+      const member: Participant = { billId: bill.id, id: who.id, kind: "member", displayName: who.displayName, addedBy: null };
+      // Confirmed since the check above: the link still works, just without
+      // joining, the same as tapping a confirmed bill.
+      if (await joinedDraft(() => addParticipant(env.DB, member, { draftOnly: true }))) refreshMessage(bill, env, ctx);
     }
   }
 
@@ -94,7 +118,7 @@ export const pickRoster: InteractionHandler = async (body, env, ctx) => {
   if (!bill) return json(ephemeral(NOT_FOUND));
   const gone = GONE[bill.status];
   if (gone) return json(ephemeral(gone));
-  if (bill.status !== "draft") return json(ephemeral("This bill is already confirmed, so nobody new can be added to it."));
+  if (bill.status !== "draft") return json(ephemeral(NOT_DRAFT));
 
   const roster = await getParticipants(env.DB, bill.id);
   if (who.id !== bill.payerId) {
@@ -120,7 +144,9 @@ export const pickRoster: InteractionHandler = async (body, env, ctx) => {
     return json(ephemeral(why));
   }
 
-  await addParticipants(env.DB, bill.id, added);
+  if (!(await joinedDraft(() => addParticipants(env.DB, bill.id, added, { draftOnly: true })))) {
+    return json(ephemeral(NOT_DRAFT));
+  }
   refreshMessage(bill, env, ctx);
   const names = listNames(added.map((p) => escapeMarkdown(p.displayName)));
   return json(ephemeral(`Added ${names}. They have chips on the page now, so you can tap them onto their items.`));

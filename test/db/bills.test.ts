@@ -2,19 +2,28 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addClaim,
+  addItem,
   addParticipant,
+  addParticipants,
+  BillNotDraftError,
   bumpRevision,
   createBill,
+  deleteItem,
+  editItem,
   getBill,
   getBillItems,
+  getBillSnapshot,
   getParticipants,
   insertItems,
   openDraftInChannel,
   removeClaim,
+  setBillAmounts,
+  setClaim,
   supersedeOlderDrafts,
   toSplitInput,
   type BillStatus,
   type NewBill,
+  type Participant,
 } from "../../src/db/bills";
 import { splitBill } from "../../src/money/split";
 import { SAIGON } from "../fixtures/saigon";
@@ -338,6 +347,86 @@ describe("bill repository", () => {
          VALUES ('s-2', 'b-fk', 'dani', 500, '2026-10-28T00:00:00.000Z', 'dani')`,
       )
       .run();
+  });
+
+  describe("draft-only writes", () => {
+    const dani: Participant = { billId: "b-lock", id: "dani", kind: "member", displayName: "Dani", addedBy: null };
+    const writes: [string, () => Promise<number>][] = [
+      ["claim", () => setClaim(db, "b-lock", "l-1", "dani", true)],
+      ["unclaim", () => setClaim(db, "b-lock", "l-2", "dani", false)],
+      ["add a line", () => addItem(db, "b-lock", { id: "l-new", label: "Tea", cents: 300, source: "manual" })],
+      ["edit a line", () => editItem(db, "b-lock", "l-1", { label: "Rolls!", cents: 1 })],
+      ["delete a line", () => deleteItem(db, "b-lock", "l-2")],
+      ["amounts", () => setBillAmounts(db, "b-lock", { taxCents: 1, tipCents: 2, printedTotalCents: null })],
+      ["tip percent", () => setBillAmounts(db, "b-lock", { tipBasisPoints: 2000 })],
+      ["join", () => addParticipants(db, "b-lock", [{ ...dani, id: "marcus" }], { draftOnly: true })],
+    ];
+
+    async function lockedBill(status: BillStatus) {
+      await createBill(db, newBill("b-lock", { status, taxCents: 100, tipCents: 0, printedTotalCents: 1000 }));
+      await addParticipant(db, dani);
+      await insertItems(db, "b-lock", [
+        { id: "l-1", label: "Rolls", cents: 900, source: "ocr" },
+        { id: "l-2", label: "Pho", cents: 1200, source: "ocr" },
+      ]);
+      await addClaim(db, "b-lock", "l-2", "dani");
+      return getBillSnapshot(db, "b-lock");
+    }
+
+    for (const status of ["confirmed", "superseded", "deleted", "reading"] as const) {
+      it(`refuses every page write to a ${status} bill inside the write itself`, async () => {
+        for (const [what, write] of writes) {
+          await db.prepare("DELETE FROM bills").run();
+          const before = await lockedBill(status);
+
+          await expect(write(), what).rejects.toBeInstanceOf(BillNotDraftError);
+          expect(await getBillSnapshot(db, "b-lock"), what).toEqual(before);
+        }
+      });
+    }
+
+    it("lands each write and bumps the revision once on a draft", async () => {
+      const before = (await lockedBill("draft"))!.bill.revision;
+      let revision = before;
+      for (const [what, write] of writes) {
+        const next = await write();
+        expect(next, what).toBe(revision + 1);
+        revision = next;
+      }
+
+      const after = (await getBillSnapshot(db, "b-lock"))!;
+      expect(after.bill).toMatchObject({ taxCents: 1, printedTotalCents: null, revision: before + writes.length });
+      // 20% of the subtotal left after the edits (1 + 300 cents) is 60.2 cents.
+      expect(after.bill.tipCents).toBe(60);
+      expect(after.input.items).toEqual([
+        { id: "l-1", label: "Rolls!", cents: 1, claimedBy: ["dani"] },
+        { id: "l-new", label: "Tea", cents: 300, claimedBy: [] },
+      ]);
+      expect(after.participants.map((p) => p.id)).toEqual(["dani", "marcus"]);
+    });
+
+    it("rounds a percentage tip half up to the cent", async () => {
+      await createBill(db, newBill("b-tip"));
+      await insertItems(db, "b-tip", [{ id: "t-1", label: "Pho", cents: 25150, source: "ocr" }]);
+
+      await setBillAmounts(db, "b-tip", { tipBasisPoints: 1850 }); // 4652.75
+      expect((await getBill(db, "b-tip"))!.tipCents).toBe(4653);
+      await setBillAmounts(db, "b-tip", { tipBasisPoints: 1 }); // 2.515
+      expect((await getBill(db, "b-tip"))!.tipCents).toBe(3);
+      await setBillAmounts(db, "b-tip", { tipBasisPoints: 2 }); // 5.03
+      expect((await getBill(db, "b-tip"))!.tipCents).toBe(5);
+    });
+  });
+
+  it("reads a bill, its items, claims and roster as one snapshot", async () => {
+    await seedSaigon("b-snap");
+
+    const snap = await getBillSnapshot(db, "b-snap");
+
+    expect(snap!.bill).toEqual(await getBill(db, "b-snap"));
+    expect(snap!.input).toEqual(await toSplitInput(db, "b-snap"));
+    expect(snap!.participants).toEqual(await getParticipants(db, "b-snap"));
+    expect(await getBillSnapshot(db, "ghost")).toBeNull();
   });
 
   it("refuses to build split input for a bill that does not exist", async () => {
