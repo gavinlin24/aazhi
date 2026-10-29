@@ -328,7 +328,9 @@ anti-goal.
 The payer can waive any diner's share. The pardon is applied **after**
 shares are computed, so the payer absorbs it out of their own pocket and
 nobody else's share moves. Pardoning is a gift from the payer, not a
-redistribution across the table.
+redistribution across the table. Because it is that payer's gift, handing
+a reopened bill to a different payer clears every pardon; the new payer
+forgives only what they choose to.
 
 ## The money arithmetic
 
@@ -379,8 +381,10 @@ Naive per-person rounding does not, and a column that doesn't add up to
 the paper is the project's one unrecoverable failure.
 
 **The payer** is a diner like anyone else and has a share. What they are
-owed is the distributable total, less their own share, less anything
-pardoned.
+owed is the sum of everyone else's shares, less anything pardoned. During
+the draft that counts only claimed lines, so the unclaimed shortfall is
+never shown as money owed; once every line is claimed it equals the
+distributable total less the payer's own share.
 
 **Property test, not example test.** For randomly generated bills,
 assignments, tax, and tips: the shares must always sum to the

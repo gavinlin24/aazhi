@@ -102,7 +102,7 @@ export function splitBill(input: BillInput): SplitResult;
 
 - `owedCents` comes from largest remainder over `distributableCents`. The displayed `taxCents` is `round(taxCents * subtotal / billSubtotal)`, and `tipCents` is then `owedCents - subtotalCents - taxCents`. The stray cent lands on the tip line, which is the discretionary number, so the three displayed lines always sum to the total. **The spec guarantees the column adds up but does not say where the stray cent goes; this pins it.**
 - A pardon is applied after shares are computed: the pardoned person's `owedCents` is unchanged and `pardoned` is true, and `payerCollectsCents` simply excludes them. Pardoning never redistributes.
-- `payerCollectsCents` is `distributableCents` minus the payer's own `owedCents` minus every pardoned person's `owedCents`.
+- `payerCollectsCents` is the sum of every non-payer, non-pardoned person's `owedCents`, so unclaimed lines never count as owed (see the spec's "The payer").
 - Largest remainder distributes up to `round(claimedSubtotal * distributable / billSubtotal)`, not to `distributable`, so a partly claimed bill does not hand unclaimed money to claimants.
 - A `billSubtotalCents` of zero returns all-zero shares rather than dividing.
 
