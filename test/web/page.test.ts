@@ -200,6 +200,35 @@ describe("renderPage", () => {
     expect((await one(html, "[data-bar] .stack")).attrs["aria-label"]).toBe("Dani, Jess, Lena, Marcus, Omar, Priya, Theo");
   });
 
+  describe("who a tap claims for", () => {
+    const withSam = { ...draft, participants: [...draft.participants, "guest-sam"] };
+    const people = [...participantsOf(draft), sam];
+
+    it("puts you and your guests in the bar, you pressed, so switching is one tap", async () => {
+      const html = page("dani", bill, withSam, people);
+
+      const row = await one(html, "[data-bar] [data-claimers]");
+      expect(row.attrs.hidden).toBeUndefined();
+      expect(row.attrs["aria-label"]).toBe("Claim for");
+      const chips = await select(html, "[data-claimers] button.claimer");
+      expect(chips.map((c) => [c.attrs["data-claim-as"], c.attrs["aria-pressed"], c.text])).toEqual([
+        ["dani", "true", "DYou"],
+        ["guest-sam", "false", "SSam"],
+      ]);
+      // The chips already say whose amount it is, so no faces beside it.
+      expect(await select(html, "[data-bar] .bar-in .stack")).toEqual([]);
+      expect(html).toMatch(/\.claimers\[hidden\]\s*\{\s*display:\s*none/);
+    });
+
+    it("stays out of the way for anyone with nobody else to claim for", async () => {
+      for (const viewer of ["marcus", "gavin"]) {
+        const html = page(viewer, bill, withSam, people);
+        expect((await one(html, "[data-claimers]")).attrs.hidden, viewer).toBe("");
+        expect(await select(html, "[data-claimers] button"), viewer).toEqual([]);
+      }
+    });
+  });
+
   it("shows the bill totals and the unclaimed shortfall once each", async () => {
     const html = page("marcus");
 

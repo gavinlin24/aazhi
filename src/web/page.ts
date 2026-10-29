@@ -51,6 +51,7 @@ const STYLES = `${FONT_FACES}
   --ring: #8a8274;
   --line: #ddd3c1;
   --fill: #e9e1d1;
+  --tint: #eee7d9;
   --warn: #8a520f;
   --warn-soft: #f1e1c4;
   --ok: #2f6446;
@@ -87,6 +88,7 @@ const STYLES = `${FONT_FACES}
     --ring: #827968;
     --line: #3a342c;
     --fill: #2c2721;
+    --tint: #2e2923;
     --warn: #dda458;
     --warn-soft: #3a2b16;
     --ok: #8fc7a2;
@@ -135,8 +137,10 @@ a { color: inherit; }
   padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
 }
 .page[data-layout="receipt"].has-bar { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
+.page[data-layout="receipt"].has-bar:has(.claimers:not([hidden])) { padding-bottom: calc(156px + env(safe-area-inset-bottom)); }
 /* Keyboard focus and claim mode scroll rows into view; keep them clear of the bar. */
 html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+html:has(.has-bar .claimers:not([hidden])) { scroll-padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
 .needs-js { display: none; }
 .is-live .needs-js:not([hidden]) { display: revert; }
 .card {
@@ -176,7 +180,7 @@ button.payer-chip {
   background: none;
   cursor: pointer;
 }
-button.payer-chip .name { text-decoration: underline dotted var(--ring); text-underline-offset: 4px; }
+button.payer-chip .name { padding: 2px 8px; border-radius: 7px; background: var(--tint); }
 
 .toast {
   position: fixed;
@@ -229,7 +233,10 @@ button.row:active { background: var(--fill); }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
-.has-picker .row .item-price { text-decoration: underline dotted var(--ring); text-underline-offset: 4px; }
+/* One look for "tap to change": a value on a tint. Tax, tip, the printed
+   total, the payer and a guest's name wear it too. The negative margin keeps
+   the figures lined up with the plain ones above and below. */
+.has-picker .row .item-price { margin-right: -8px; padding: 1px 8px; border-radius: 7px; background: var(--tint); }
 .tick-btn {
   position: absolute;
   z-index: 1;
@@ -256,10 +263,20 @@ button.row:active { background: var(--fill); }
 .tick .ic { width: 16px; height: 16px; stroke-width: 2.2; opacity: 0; }
 .is-mine .tick { background: var(--ink); border-color: var(--ink); }
 .is-mine .tick .ic { opacity: 1; }
+/* Claiming for a guest, the ticks become their face, so a glance down the
+   column says whose lines these are. An empty ring holds their initial in
+   pencil: a tap there goes to them. Their own pigment only once it is theirs,
+   since some pigments are the warning red. */
+.tick.is-other { color: var(--ring); font-size: 13px; font-weight: 600; line-height: 1; }
+.is-mine .tick.is-other { background: var(--av-bg); border: 1.6px dashed var(--av-ink); color: var(--av-ink); }
 .is-unclaimed .tick { border: 1.6px dashed var(--warn); }
 .is-unclaimed .item-label { color: var(--warn); }
+/* Nothing on a locked line answers a tap, so it draws no ring to tap: a bare
+   check on your lines, the small unclaimed ring from the totals on nobody's. */
 .is-locked .tick { border-color: transparent; }
-.is-locked.is-mine .tick { border-color: var(--ink); }
+.is-locked.is-mine .tick { background: none; border-color: transparent; color: var(--ink); }
+.is-locked.is-mine .tick .ic { width: 20px; height: 20px; }
+.is-locked.is-unclaimed .tick { width: 18px; height: 18px; border: 1.6px dashed var(--warn); }
 .is-inked .tick { animation: ink 320ms ease-out; }
 @keyframes ink {
   from { transform: scale(0.55); filter: blur(1.5px); }
@@ -287,7 +304,7 @@ button.row:active { background: var(--fill); }
 .av.is-viewer { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--ink); }
 .av.is-guest { border: 1px dashed var(--av-ink); }
 
-.add-line { padding: 6px 14px 4px 48px; }
+.add-line { padding: 8px 14px 4px 58px; }
 .add-row {
   display: flex;
   align-items: center;
@@ -302,31 +319,32 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-.totals { margin: 10px 0 0; padding: 0 14px 4px 58px; }
-.trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
-.trow dt { display: flex; align-items: center; gap: 7px; color: var(--muted); min-width: 0; }
+.totals { margin: 8px 0 0; padding: 0 14px 10px 58px; }
+.trow { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
 .trow dd { margin: 0; white-space: nowrap; }
-.trow .pct { font-size: 14px; color: var(--muted); padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; }
+.trow .pct { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .amt {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
   margin: -2px -8px;
-  padding: 0 8px;
+  padding: 0;
   border: 0;
   background: none;
   cursor: pointer;
-  text-decoration: underline dotted var(--ring);
-  text-underline-offset: 4px;
 }
+.amt > [data-total] { padding: 2px 8px; border-radius: 7px; background: var(--tint); }
+.receipt-row dt { align-items: center; }
 .receipt-row .mark { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
 .receipt-row.is-ok .mark { color: var(--ok); }
 .receipt-row.is-off .mark { color: var(--warn); font-weight: 600; }
 .receipt-row .ic { width: 18px; height: 18px; }
+/* A ledger's total: one rule above, a double rule below. */
 .grand {
-  margin: 6px 0;
+  margin: 6px 0 2px;
   padding: 4px 0;
-  border-top: 3px double var(--rule-strong);
+  border-top: 1px solid var(--rule-strong);
   border-bottom: 3px double var(--rule-strong);
   font-size: 19px;
   font-weight: 600;
@@ -334,6 +352,9 @@ button.row:active { background: var(--fill); }
 .grand dt { color: var(--ink); }
 .short dt, .short dd { color: var(--warn); font-weight: 600; }
 .dash-ring { width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed currentColor; flex: none; }
+/* The ring hangs in the tick column, where the unclaimed lines show the same
+   ring, so the word lines up with Subtotal, Tax and Tip. */
+.short .dash-ring { position: absolute; left: -41px; top: 50%; margin-top: -9px; }
 
 .edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0; }
 .edit-form .money-input { min-width: 88px; }
@@ -474,13 +495,44 @@ button.tile:active { background: var(--fill); }
   box-shadow: 0 -6px 20px rgba(60, 40, 10, 0.06);
 }
 .bar-in { display: flex; align-items: center; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
+/* Who a tap on a line claims for, one tap to switch. It shows only when there
+   is more than one answer: you and the guests you brought. */
+/* The padding gives a focused chip's ring room inside the scroller, which
+   would clip it; the negative margin takes the room back. */
+.claimers {
+  display: flex;
+  gap: 6px;
+  max-width: 458px;
+  margin: -5px max(-5px, calc((100% - 448px) / 2 - 5px)) 3px;
+  padding: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.claimers[hidden] { display: none; }
+.claimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  max-width: 11em;
+  height: 44px;
+  padding: 0 14px 0 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 22px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.claimer .av { --s: 30px; box-shadow: none; }
+.claimer .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claimer[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); font-weight: 600; }
+.claimer[aria-pressed="true"] .av { box-shadow: 0 0 0 1.5px var(--card); }
 .bar .stack .av { --s: 32px; }
 .bar .stack .av + .av { margin-left: -9px; }
 .bar .av.payer { --s: 32px; }
 .bar .arrow { width: 22px; height: 22px; color: var(--muted); }
 .bar .amount { font: 500 28px/1 var(--display); letter-spacing: -0.01em; }
 .bar .grow { flex: 1; }
-.bar .claimer { font-size: 17px; }
 .ring-btn {
   display: grid;
   place-items: center;
@@ -496,7 +548,6 @@ button.tile:active { background: var(--fill); }
   font-size: 17px;
   cursor: pointer;
 }
-.done-btn { display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 16px; border: 0; border-radius: 22px; background: var(--ink); color: var(--card); font-weight: 600; cursor: pointer; }
 
 .view + .view { margin-top: 18px; }
 .is-live[data-layout="share"] .view:not(.is-active) { display: none; }
@@ -605,6 +656,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .sheet-guest { margin-top: 14px; padding-top: 10px; border-top: 3px double var(--rule); }
 .sheet-guest .sheet-head .av { --s: 34px; }
 .sheet-guest h3 { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+.name-btn { display: inline-flex; align-items: center; max-width: 100%; min-height: 44px; margin: -4px 0 -4px -8px; padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.name-btn > span { padding: 2px 8px; border-radius: 7px; background: var(--tint); overflow-wrap: anywhere; }
 .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .chip-btn {
   display: inline-flex;
@@ -665,7 +718,6 @@ const ICONS: Record<string, string> = {
   bowl: '<path d="M3.5 11.5h17a8.5 8.5 0 0 1-17 0zM9 8c-.8-1.4.8-2.2 0-3.8M13 8c-.8-1.4.8-2.2 0-3.8"/>',
   trash: '<path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5"/>',
   warn: '<path d="M12 4.5l8.5 15h-17zM12 10.5v4M12 17.3v.2"/>',
-  pencil: '<path d="M5 19l1-4L15.5 5.5l3 3L9 18zM13.5 7.5l3 3"/>',
 };
 
 function sprite(): string {
@@ -1010,6 +1062,25 @@ function people(v: View): string {
 </section>`;
 }
 
+// The chips already show whose share the amount is, so the faces beside it
+// go while they are up.
+function choosing(v: View): boolean {
+  return v.s.editable !== "none" && guestsOf(v, v.s.viewer).length > 0;
+}
+
+// You first, then the guests you brought. Nobody else's: the payer settles
+// other people's lines from the line itself.
+function claimers(v: View): string {
+  const ids = [v.s.viewer, ...guestsOf(v, v.s.viewer).map((g) => g.id)];
+  const chips = ids.map(
+    (id) =>
+      `<button type="button" class="claimer" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">` +
+      `${av(v, id)}<span class="label">${id === v.s.viewer ? "You" : escapeHtml(nameOf(v, id))}</span></button>`,
+  );
+  const hidden = choosing(v) ? "" : " hidden";
+  return `<div class="claimers" data-claimers role="group" aria-label="Claim for"${hidden}>${hidden ? "" : chips.join("")}</div>`;
+}
+
 function bar(v: View): string {
   if (!v.onBill) return "";
   const s = v.s;
@@ -1019,9 +1090,9 @@ function bar(v: View): string {
   const content = s.viewerIsPayer
     ? `${stack(v, s.participants.filter((p) => p.kind === "member" && p.id !== s.viewer).map((p) => p.id), 4)}${arrow}${av(v, s.viewer, "payer")}` +
       `<span class="amount money" data-you-owed>${formatCents(s.payerCollectsCents)}</span>`
-    : `${stack(v, [s.viewer, ...guestsOf(v, s.viewer).map((g) => g.id)], 3)}<span class="amount money" data-you-owed>${formatCents(owedOf(v, s.viewer))}</span>` +
+    : `${choosing(v) ? "" : stack(v, [s.viewer, ...guestsOf(v, s.viewer).map((g) => g.id)], 3)}<span class="amount money" data-you-owed>${formatCents(owedOf(v, s.viewer))}</span>` +
       `${arrow}${av(v, s.payerId, "payer")}`;
-  return `<div class="bar" data-bar><div class="bar-in">${content}<span class="grow"></span>${ring}</div></div>`;
+  return `<div class="bar" data-bar>${claimers(v)}<div class="bar-in">${content}<span class="grow"></span>${ring}</div></div>`;
 }
 
 // Food, tax and tip of what is asked for after pardons and after any guest

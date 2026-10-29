@@ -41,8 +41,9 @@ export const CLIENT_SCRIPT = String.raw`
   let writes = 0;
   let polling = false;
   let stopped = false;
-  // Who a tap on a line claims for: the viewer, or a guest they brought (or,
-  // for the payer, anyone) while they tap through what that person had.
+  // Who a tap on a line claims for: the viewer (null), or a guest they
+  // brought (or, for the payer, anyone's guest). The bar shows it and
+  // switches it.
   let claimFor = null;
   // The one open inline editor: a totals field, or the add-a-line form.
   let editing = null;
@@ -349,8 +350,11 @@ export const CLIENT_SCRIPT = String.raw`
     return el("span", { class: "piece" }, ["÷" + n, el("span", { class: "money" }, money(mine))]);
   }
 
-  function tickNode() {
-    return el("span", { class: "tick", "aria-hidden": "true" }, icon("check"));
+  // Your own tick is a check; claiming for someone else, it is their face.
+  function tickNode(v, actor) {
+    if (actor === v.s.viewer) return el("span", { class: "tick", "aria-hidden": "true" }, icon("check"));
+    return el("span", { class: "tick is-other hue-" + hueOf(actor), "aria-hidden": "true" },
+      el("span", { class: "ini" }, initialOf(nameOf(v, actor))));
   }
 
   function rowNode(v, item, actor, mode) {
@@ -367,16 +371,16 @@ export const CLIENT_SCRIPT = String.raw`
     if (mode === "all") {
       classes.push("has-picker");
       return el("li", { class: classes.filter(Boolean).join(" "), "data-item": item.id }, [
-        el("button", Object.assign({ type: "button", class: "tick-btn", "aria-label": item.label + ", " + nameOf(v, actor) }, claim), tickNode()),
+        el("button", Object.assign({ type: "button", class: "tick-btn", "aria-label": item.label + ", " + nameOf(v, actor) }, claim), tickNode(v, actor)),
         el("button", { type: "button", class: "row", "data-open-line": item.id, "aria-haspopup": "dialog", "aria-label": rowLabel(v, item, actor) }, inner()),
       ]);
     }
     if (mode === "self") {
       return el("li", { class: classes.filter(Boolean).join(" "), "data-item": item.id },
-        el("button", Object.assign({ type: "button", class: "row", "aria-label": rowLabel(v, item, actor) }, claim), [tickNode()].concat(inner())));
+        el("button", Object.assign({ type: "button", class: "row", "aria-label": rowLabel(v, item, actor) }, claim), [tickNode(v, actor)].concat(inner())));
     }
     classes.push("is-locked");
-    return el("li", { class: classes.filter(Boolean).join(" "), "data-item": item.id }, el("div", { class: "row" }, [tickNode()].concat(inner())));
+    return el("li", { class: classes.filter(Boolean).join(" "), "data-item": item.id }, el("div", { class: "row" }, [tickNode(v, actor)].concat(inner())));
   }
 
   function renderItems(v) {
@@ -604,25 +608,37 @@ export const CLIENT_SCRIPT = String.raw`
 
   // ---- the bar ------------------------------------------------------------
 
+  // Mirrors claimers in page.ts, plus whoever the payer picked from a guest's
+  // sheet, so the person the ticks belong to always has a chip.
+  function claimerIds(v) {
+    const ids = [v.s.viewer].concat(guestsOf(v, v.s.viewer).map((g) => g.id));
+    if (claimFor && !ids.includes(claimFor)) ids.push(claimFor);
+    return ids;
+  }
+
+  // Answers whether the chips are up, which the rest of the bar needs.
+  function renderClaimers(v) {
+    const row = root.querySelector("[data-bar] > [data-claimers]");
+    if (!row) return false;
+    const ids = editable(v.s) === "none" ? [] : claimerIds(v);
+    const actor = claimFor || v.s.viewer;
+    row.hidden = ids.length < 2;
+    keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
+      el("button", { type: "button", class: "claimer", "data-claim-as": id, "aria-pressed": String(id === actor) }, [
+        av(v, id),
+        el("span", { class: "label" }, id === v.s.viewer ? "You" : nameOf(v, id)),
+      ])));
+    return !row.hidden;
+  }
+
   function renderBar(v) {
+    const choosing = renderClaimers(v);
     const bar = root.querySelector("[data-bar] > .bar-in");
     if (!bar) return;
     const s = v.s;
     const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-    const actor = claimFor && v.people.has(claimFor) ? claimFor : null;
-    keyedInto(bar, JSON.stringify([s.owing, s.payerCollectsCents, s.participants, s.viewer, s.payerId, open, actor]), () => {
+    keyedInto(bar, JSON.stringify([s.owing, s.payerCollectsCents, s.participants, s.viewer, s.payerId, open, choosing]), () => {
       const ring = open > 0 ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " unclaimed" }, String(open)) : null;
-      if (actor) {
-        const share = v.shares.get(actor);
-        return [
-          av(v, actor, "payer"),
-          el("span", { class: "claimer" }, nameOf(v, actor)),
-          el("span", { class: "amount money" }, money(share ? share.owedCents : 0)),
-          el("span", { class: "grow" }),
-          ring,
-          el("button", { type: "button", class: "done-btn", "data-claim-done": true, "aria-label": "Done claiming for " + nameOf(v, actor) }, icon("check")),
-        ];
-      }
       if (s.viewerIsPayer) {
         return [
           stack(v, s.participants.filter((p) => p.kind === "member" && p.id !== s.viewer).map((p) => p.id), 4),
@@ -634,7 +650,7 @@ export const CLIENT_SCRIPT = String.raw`
         ];
       }
       return [
-        stack(v, [s.viewer].concat(guestsOf(v, s.viewer).map((g) => g.id)), 3),
+        choosing ? null : stack(v, [s.viewer].concat(guestsOf(v, s.viewer).map((g) => g.id)), 3),
         el("span", { class: "amount money", "data-you-owed": true }, money(owedOf(v, s.viewer))),
         icon("arrow", "arrow"),
         av(v, s.payerId, "payer"),
@@ -891,7 +907,9 @@ export const CLIENT_SCRIPT = String.raw`
         ])
       : el("div", { class: "sheet-head" }, [
           av(v, g.id),
-          el("h3", null, g.displayName),
+          el("h3", null, draft && manage
+            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, el("span", null, g.displayName))
+            : g.displayName),
           guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
         ]);
@@ -899,7 +917,6 @@ export const CLIENT_SCRIPT = String.raw`
     if (draft && manage) {
       actions.push(
         el("button", { type: "button", class: "chip-btn", "data-claim-for": g.id, "aria-label": "Claim lines for " + g.displayName }, [icon("check"), "Claim"]),
-        el("button", { type: "button", class: "icon-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, icon("pencil")),
         el("button", {
           type: "button",
           class: "icon-btn danger" + (armed.has("remove:" + g.id) ? " is-armed" : ""),
@@ -1377,12 +1394,12 @@ export const CLIENT_SCRIPT = String.raw`
     endRename(form.dataset.rename);
   }
 
-  // The form replaces the pencil, so focus goes back to it or it is lost.
+  // The form replaces the name button, so focus goes back to it or it is lost.
   function endRename(id) {
     if (sheet) sheet.renaming = null;
     render();
-    const pencil = root.querySelector('[data-rename-guest="' + CSS.escape(id) + '"]');
-    if (pencil) pencil.focus();
+    const name = root.querySelector('[data-rename-guest="' + CSS.escape(id) + '"]');
+    if (name) name.focus();
   }
 
   async function removeGuest(button) {
@@ -1501,8 +1518,9 @@ export const CLIENT_SCRIPT = String.raw`
       render();
       return focusLines();
     }
-    if (target.closest("[data-claim-done]")) {
-      claimFor = null;
+    const as = target.closest("[data-claim-as]");
+    if (as) {
+      claimFor = as.dataset.claimAs === state.viewer ? null : as.dataset.claimAs;
       return render();
     }
     const rename = target.closest("[data-rename-guest]");
