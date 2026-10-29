@@ -430,8 +430,8 @@ describe("/split", () => {
     const text = shown(post!.body);
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
     expect(text).toContain("Receipt total $273.82");
-    expect(text).toContain("Our read comes to $323.82, $50.00 more.");
-    expect(text).toMatch(/least sure of Garlic noodles \$82\.00 and Com tam \$9\.50\. Gavin can fix it on the page/);
+    expect(text).toContain("The dishes and tax add up to $323.82, $50.00 more than the receipt.");
+    expect(text).toContain("Probably misread: Garlic noodles $82.00, Com tam $9.50. Gavin can fix it in Open the split");
     // Lines read as confidently as the rest are not worth pointing at.
     expect(text).not.toMatch(/Spring rolls \$15\.00/);
   });
@@ -444,7 +444,7 @@ describe("/split", () => {
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(shown(post!.body)).toMatch(/No receipt total yet.*Gavin can enter it on the page/);
+    expect(shown(post!.body)).toMatch(/Couldn't read the receipt's total.*Gavin can enter it in Open the split/);
   });
 
   it.each([
@@ -560,7 +560,7 @@ describe("editBillMessage", () => {
     expect(channelEdits()).toHaveLength(1);
     const text = shown(channelEdits()[0]!.body);
     // Before Marcus's claim the message would still say $11.00 unclaimed.
-    expect(text).toMatch(/Every line is claimed/);
+    expect(text).toMatch(/Every dish is claimed/);
     expect(text).not.toMatch(/unclaimed/);
   });
 

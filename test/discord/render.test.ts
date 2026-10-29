@@ -130,7 +130,7 @@ describe("renderBill", () => {
     const data = render(bill, SAIGON);
     const text = embedText(embedOf(data));
 
-    expect(text).toContain("✓ **Every line is claimed.** Gavin can confirm.");
+    expect(text).toContain("✓ **Every dish is claimed.** Gavin can confirm.");
     expect(text).not.toMatch(/unclaimed/);
     expect(buttonsOf(data).map((b) => b.custom_id)).toContain("confirm:bill-1:7");
   });
@@ -161,7 +161,7 @@ describe("renderBill", () => {
     expect(text).not.toMatch(/⚠️|add up|receipt total/i);
   });
 
-  it("leads with the receipt's total, then says what was read, the lines it is least sure of, and who fixes it where", () => {
+  it("leads with the receipt's total, then says what the dishes add up to, which are probably misread, and which button fixes it", () => {
     // The model read Garlic noodles as $82.00; the receipt says $273.82.
     const misread: BillInput = {
       ...draftState,
@@ -175,8 +175,8 @@ describe("renderBill", () => {
     expect(embed.description!.split("\n").slice(0, 4)).toEqual([
       "**Receipt total $273.82**",
       "🪙 Gavin paid · 8 people",
-      "⚠️ **Our read comes to $323.82, $50.00 more.**",
-      "We're least sure of Garlic noodles $82.00 and Com tam $9.50. Gavin can fix it on the page, then Confirm appears.",
+      "⚠️ **The dishes and tax add up to $323.82, $50.00 more than the receipt.**",
+      "Probably misread: Garlic noodles $82.00, Com tam $9.50. Gavin can fix it in Open the split, then Confirm appears.",
     ]);
     // The total of a read in doubt is not shown as the bill's total.
     expect(text).not.toMatch(/\*\*Total/);
@@ -186,13 +186,21 @@ describe("renderBill", () => {
     expect(text).toMatch(/\$\d+\.\d\d unclaimed/);
   });
 
-  it("says when the read comes to less than the receipt, and points at no line when none stands out", () => {
+  it("suggests a missing dish when the dishes come to less than the receipt and none stands out", () => {
     const short: BillInput = { ...SAIGON, items: SAIGON.items.filter((i) => i.id !== "coconut") };
     expect(embedOf(render(bill, short)).description!.split("\n")).toEqual([
       "**Receipt total $273.82**",
       "🪙 Gavin paid · 8 people",
-      "⚠️ **Our read comes to $269.82, $4.00 less.**",
-      "Gavin can fix it on the page, then Confirm appears.",
+      "⚠️ **The dishes and tax add up to $269.82, $4.00 less than the receipt.**",
+      "A dish may be missing. Gavin can add it in Open the split, then Confirm appears.",
+    ]);
+  });
+
+  it("asks the payer to fix it when the dishes come to more than the receipt and none stands out", () => {
+    const over = withItem(SAIGON, { id: "extra", label: "Extra rice", cents: 300, claimedBy: ["gavin"] });
+    expect(embedOf(render(bill, over)).description!.split("\n").slice(2)).toEqual([
+      "⚠️ **The dishes and tax add up to $276.82, $3.00 more than the receipt.**",
+      "Gavin can fix it in Open the split, then Confirm appears.",
     ]);
   });
 
@@ -210,7 +218,7 @@ describe("renderBill", () => {
     const text = embedText(embedOf(data));
 
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
-    expect(text).toContain("⚠️ **No receipt total yet.** Gavin can enter it on the page, then Confirm appears.");
+    expect(text).toContain("⚠️ **Couldn't read the receipt's total.** Gavin can enter it in Open the split, then Confirm appears.");
   });
 
   it("offers the payer a picker to add people who were at dinner, on a row of its own", () => {
@@ -289,7 +297,7 @@ describe("renderBill", () => {
       renderBill({ ...bill, status: "confirmed" }, splitBill(input), many, people, [], splitBill(input).shares),
     );
     withinLimits(confirmed);
-    expect(confirmed.description).toMatch(/and \d+ more on the page$/);
+    expect(confirmed.description).toMatch(/and \d+ more in Open the split$/);
     // The total still shows, however much of the list had to go.
     expect(confirmed.description).toMatch(/^\*\*Total \$/);
   });
@@ -298,7 +306,7 @@ describe("renderBill", () => {
     const input = withItem(draftState, { id: "long", label: "Z".repeat(500), cents: 100, claimedBy: [] });
     const text = embedText(embedOf(render(bill, input, ["long"])));
     expect(text).not.toContain("Z".repeat(200));
-    expect(text).toMatch(/least sure of Z+… \$1\.00\. Gavin can fix it/);
+    expect(text).toMatch(/Probably misread: Z+… \$1\.00\. Gavin can fix it/);
   });
 
   it("shows what each person owes the payer once confirmed, with pay controls and the payer's Reopen and Delete", () => {
@@ -345,8 +353,8 @@ describe("renderBill", () => {
   it("never leaves a dangling escape where a long label it points at is cut", () => {
     // Markdown characters right where the label is cut.
     const input = withItem(draftState, { id: "stars", label: "*".repeat(100), cents: 100, claimedBy: [] });
-    const line = lineFor(embedText(embedOf(render(bill, input, ["stars"]))), "least sure of");
-    const label = line.slice(line.indexOf("of ") + "of ".length, line.lastIndexOf(" $1.00"));
+    const line = lineFor(embedText(embedOf(render(bill, input, ["stars"]))), "Probably misread");
+    const label = line.slice(line.indexOf(": ") + ": ".length, line.lastIndexOf(" $1.00"));
 
     // Every "*" stays escaped, and no backslash is left escaping the cut mark.
     expect(label).not.toMatch(/(^|[^\\])\*/);

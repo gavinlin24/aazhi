@@ -73,10 +73,12 @@ function fitLines(lines: string[], budget: number, more: (n: number) => string):
   return kept.join("\n");
 }
 
-// A read that doesn't add up leads with the receipt's own total, since the
-// total of what was read is the number in doubt. Both sides of the comparison
-// are before tip, which is how the receipt prints it. The least-confident
-// lines are named because the page does not point them out.
+// A bill that doesn't add up leads with the receipt's own total, since the
+// total of the dishes as read is the number in doubt. Both sides of the
+// comparison are before tip, which is how the receipt prints it. The dishes
+// read with the least confidence are named because the page does not point
+// them out. Everything is said in what the reader can see: dishes, the
+// receipt, and the buttons by their labels.
 function readProblem(
   bill: BillRow,
   items: LineItem[],
@@ -85,11 +87,11 @@ function readProblem(
 ): { headline: string | null; lines: string[] } | null {
   const check = reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents });
   if (check.ok) return null;
-  const fix = `${payerName} can fix it on the page, then Confirm appears.`;
+  const then = "in Open the split, then Confirm appears.";
   if (bill.printedTotalCents === null || check.discrepancyCents === null) {
     return {
       headline: null,
-      lines: [`⚠️ **No receipt total yet.** ${payerName} can enter it on the page, then Confirm appears.`],
+      lines: [`⚠️ **Couldn't read the receipt's total.** ${payerName} can enter it ${then}`],
     };
   }
   const gap = check.discrepancyCents;
@@ -97,11 +99,20 @@ function readProblem(
     .map((id) => items.find((i) => i.id === id))
     .filter((i): i is LineItem => i !== undefined)
     .map((i) => `${escapeMarkdown(clip(i.label, MAX_LABEL))} ${formatCents(i.cents)}`);
+  // Too little with nothing doubtful usually means a dish the receipt reader
+  // skipped, not a price it got wrong.
+  const next =
+    suspects.length > 0
+      ? `Probably misread: ${suspects.join(", ")}. ${payerName} can fix it ${then}`
+      : gap < 0
+        ? `A dish may be missing. ${payerName} can add it ${then}`
+        : `${payerName} can fix it ${then}`;
   return {
     headline: `**Receipt total ${formatCents(bill.printedTotalCents)}**`,
     lines: [
-      `⚠️ **Our read comes to ${formatCents(bill.printedTotalCents + gap)}, ${formatCents(Math.abs(gap))} ${gap > 0 ? "more" : "less"}.**`,
-      suspects.length > 0 ? `We're least sure of ${and(suspects)}. ${fix}` : fix,
+      `⚠️ **The dishes and tax add up to ${formatCents(bill.printedTotalCents + gap)}, ` +
+        `${formatCents(Math.abs(gap))} ${gap > 0 ? "more" : "less"} than the receipt.**`,
+      next,
     ],
   };
 }
@@ -129,7 +140,7 @@ function draftSummary(
       ? `◌ **${formatCents(result.unclaimedCents)} unclaimed.** Open the split to claim what you had.`
       : problem
         ? null
-        : `✓ **Every line is claimed.** ${payerName} can confirm.`;
+        : `✓ **Every dish is claimed.** ${payerName} can confirm.`;
   const lines = [
     problem?.headline ?? totalLine(result),
     `${PAYER_MARK} ${payerName} paid · ${count}`,
@@ -208,7 +219,7 @@ function superseded(bill: BillRow): APIInteractionResponseCallbackData {
     embeds: [
       {
         title: titleOf(bill),
-        description: "A newer split in this channel replaced this one. Claim your items on the newer message.",
+        description: "A newer split in this channel replaced this one. Claim your dishes on the newer message.",
         color: COLOR.superseded,
       },
     ],
@@ -284,7 +295,7 @@ function oweCard(
   };
   const head = `${totalLine(result)}\n${PAYER_MARK} Pay ${payer} your share.\n\n`;
   const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
-  embed.description = head + fitLines(rows, budget, (n) => `and ${n} more on the page`);
+  embed.description = head + fitLines(rows, budget, (n) => `and ${n} more in Open the split`);
 
   const button = (
     style: ButtonStyle.Success | ButtonStyle.Primary | ButtonStyle.Secondary,
