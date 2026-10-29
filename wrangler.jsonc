@@ -7,7 +7,7 @@
     {
       "binding": "DB",
       "database_name": "aazhi",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "3dda71d2-8137-4644-ab44-d0c2523ddfd4",
       "migrations_dir": "migrations"
     }
   ]
