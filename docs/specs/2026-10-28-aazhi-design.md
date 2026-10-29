@@ -23,8 +23,9 @@ Two further intents shape the design and should not be traded away:
 
 - **It has to be good enough to still be in use in a year.** This is not a
   demo. Friction anywhere in the common path is a defect.
-- **It has to be free to run, permanently.** No subscription, no server to
-  keep alive, no component whose death is discovered at dinner.
+- **It has to be free to host, permanently.** No subscription, no server to
+  keep alive, no component whose death is discovered at dinner. Reading a
+  receipt is the one paid call, at about $0.00083 each.
 
 A third, secondary intent: the author wants to be able to explain this
 project in a job interview. That argues for correctness being provable
@@ -68,8 +69,9 @@ than hand-waved.
 Things that would make this a failure even if it technically worked:
 
 - **A bill that doesn't reconcile.** If the eight shares don't add up to
-  the printed total, to the penny, the system has lied about money to
-  people who trust each other. This is the one unrecoverable failure.
+  the printed total plus the tip, to the penny, the system has lied about
+  money to people who trust each other. This is the one unrecoverable
+  failure.
 - **A silent amount change.** Any adjustment to what someone owes after
   they've been told a number must be stated out loud, never quietly
   applied.
@@ -81,8 +83,9 @@ Things that would make this a failure even if it technically worked:
 
 ## Constraints
 
-- **Free tier, permanently.** Compute, database, and receipt reading all
-  have to sit inside free allowances at friend-group volume.
+- **Free tier, permanently, for everything but receipt reading.** Compute,
+  database, and the page have to sit inside free allowances at friend-group
+  volume. Receipt reading is paid per call, at about $0.00083 a receipt.
 - **Discord's interaction model.** A bot that reads messages posted in a
   channel needs a permanently open socket plus the privileged Message
   Content intent. That means an always-on process, which conflicts with
@@ -325,7 +328,9 @@ anti-goal.
 The payer can waive any diner's share. The pardon is applied **after**
 shares are computed, so the payer absorbs it out of their own pocket and
 nobody else's share moves. Pardoning is a gift from the payer, not a
-redistribution across the table.
+redistribution across the table. Because it is that payer's gift, handing
+a reopened bill to a different payer clears every pardon; the new payer
+forgives only what they choose to.
 
 ## The money arithmetic
 
@@ -376,8 +381,10 @@ Naive per-person rounding does not, and a column that doesn't add up to
 the paper is the project's one unrecoverable failure.
 
 **The payer** is a diner like anyone else and has a share. What they are
-owed is the distributable total, less their own share, less anything
-pardoned.
+owed is the sum of everyone else's shares, less anything pardoned. During
+the draft that counts only claimed lines, so the unclaimed shortfall is
+never shown as money owed; once every line is claimed it equals the
+distributable total less the payer's own share.
 
 **Property test, not example test.** For randomly generated bills,
 assignments, tax, and tips: the shares must always sum to the
@@ -438,13 +445,13 @@ after a quiet period.
 a daily row budget orders of magnitude above friend-group traffic. One
 platform, one deploy, one place for things to go wrong.
 
-**Gemini's free tier** for receipt extraction, currently around 1,500
-requests a day at no cost, which is roughly 1,500 dinners. The known
-cost: free-tier terms permit the provider to train on submitted content.
-Restaurant receipts are an acceptable thing to send under those terms,
-but the author should know it rather than discover it. Extraction asks
-for structured JSON against a fixed schema and retries on schema
-violation.
+**Claude Haiku 5.5 on the Anthropic API** for receipt extraction, at
+roughly $0.00083 per receipt, so a dollar covers about 1,200 dinners.
+Gemini's free tier was considered and rejected: Google no longer
+publishes its free-tier request limits in its documentation, and
+free-tier content is used to improve Google's products, with human
+review. Extraction asks for structured JSON against a fixed schema and
+retries on schema violation.
 
 **No image storage.** Discord already hosts the attachment. The bot fetches
 it at scan time, extracts, and persists only the parsed data. That
