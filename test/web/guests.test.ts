@@ -30,8 +30,7 @@ const BILL = "bill-1";
 const API = "https://discord.com/api/v10";
 const APP_ID = "app-1";
 const EPHEMERAL = 1 << 6;
-// The Saigon printed total plus the 2000 line Sam claims.
-const WITH_LOBSTER = 27382 + 2000;
+const SAIGON_KITCHEN = "Saigon Kitchen, Oct 28, 2026";
 
 let keypair: TestKeypair;
 const ready = generateKeypair().then((k) => (keypair = k));
@@ -113,12 +112,24 @@ function addGuest(as: string, body: unknown, billId = BILL) {
   return send("POST", `/b/${billId}/guest`, as, body);
 }
 
+function rename(as: string, guestId: string, name: unknown) {
+  return send("PATCH", `/b/${BILL}/guest/${guestId}`, as, { name });
+}
+
+function takeOff(as: string, guestId: string) {
+  return send("DELETE", `/b/${BILL}/guest/${guestId}`, as);
+}
+
+function markPaid(as: string, guestId: string, paid = true) {
+  return send("POST", `/b/${BILL}/guest/${guestId}/paid`, as, { paid });
+}
+
 function pardon(as: string, participantId: string, pardoned = true, billId = BILL) {
   return send("POST", `/b/${billId}/pardon`, as, { participantId, pardoned });
 }
 
-function claimFor(as: string, itemId: string, participantId: string) {
-  return send("POST", `/b/${BILL}/claim`, as, { itemId, participantId, claimed: true });
+function claimFor(as: string, itemId: string, participantId: string, billId = BILL) {
+  return send("POST", `/b/${billId}/claim`, as, { itemId, participantId, claimed: true });
 }
 
 async function run(body: unknown): Promise<any> {
@@ -162,6 +173,11 @@ function tap(customId: string, who: unknown) {
   };
 }
 
+// The payer picking one payment from the Undo a payment menu.
+function undoPick(settlementId: string) {
+  return { ...tap(`undopick:${BILL}`, GAVIN), data: { custom_id: `undopick:${BILL}`, component_type: 3, values: [settlementId] } };
+}
+
 function ledgerCommand(who: unknown) {
   return {
     id: "int-4",
@@ -194,22 +210,35 @@ async function confirmed(billId = BILL): Promise<void> {
   expect(await confirmBill(db, billId, bill.revision, "gavin")).toMatchObject({ ok: true });
 }
 
-// Dani brought Sam, who had the lobster. The payer puts Sam on the bill (only
-// the payer adds guests) and names Dani as who Sam came with.
-async function withGuest(name = "Sam", companion = "dani", billId = BILL): Promise<string> {
-  const reply = await addGuest("gavin", { name, with: companion }, billId);
+async function revision(): Promise<number> {
+  return (await getBill(db, BILL))!.revision;
+}
+
+function guestIdOf(reply: Reply, name: string): string {
+  return reply.body.participants.find((p: any) => p.kind === "guest" && p.displayName === name).id;
+}
+
+// Dani brought Sam, who had the lobster. Dani puts Sam on the bill, which
+// makes Sam Dani's to answer for, and taps Sam onto the lobster.
+async function withGuest(name = "Sam", adder = "dani", billId = BILL): Promise<string> {
+  const reply = await addGuest(adder, { name }, billId);
   expect(reply.status).toBe(200);
-  const guest = (await getParticipants(db, billId)).find((p) => p.kind === "guest" && p.displayName === name)!;
+  const guest = guestIdOf(reply, name);
   const item = `${billId}-lobster-${name}`;
   await addItem(db, billId, { id: item, label: "Lobster", cents: 2000, source: "manual" });
-  await setBillAmounts(db, billId, { printedTotalCents: WITH_LOBSTER });
-  const claim = await send("POST", `/b/${billId}/claim`, "gavin", { itemId: item, participantId: guest.id, claimed: true });
+  const printed = (await getBill(db, billId))!.printedTotalCents!;
+  await setBillAmounts(db, billId, { printedTotalCents: printed + 2000 });
+  const claim = await claimFor(adder, item, guest, billId);
   expect(claim.status).toBe(200);
-  return guest.id;
+  return guest;
 }
 
 async function owedOf(who: string, billId = BILL): Promise<number> {
   return (await getShares(db, billId)).find((s) => s.participant === who)!.owedCents;
+}
+
+async function standing(who: string) {
+  return (await outstanding(db, BILL)).find((o) => o.participant === who);
 }
 
 async function settledAt(who: string): Promise<string | null> {
@@ -226,18 +255,22 @@ function cardRows(card: ReturnType<typeof renderBill>): string[] {
   return (card.embeds![0]!.description ?? "").split("\n");
 }
 
-describe("guests", () => {
+function inState(body: any, id: string): any {
+  return body.participants.find((p: any) => p.id === id);
+}
+
+describe("adding a guest", () => {
   it("adds a guest scoped to one bill with no global identity", async () => {
     await seedSaigon(db, BILL);
     await seedSaigon(db, "bill-2", { bill: { channelId: "chan-2", messageId: "msg-2" } });
 
-    const first = await addGuest("gavin", { name: "Sam", with: "dani" });
-    const second = await addGuest("gavin", { name: "Sam", with: "dani" }, "bill-2");
+    const first = await addGuest("dani", { name: "Sam" });
+    const second = await addGuest("dani", { name: "Sam" }, "bill-2");
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     const guest = first.body.participants.find((p: any) => p.kind === "guest");
-    expect(guest).toMatchObject({ kind: "guest", displayName: "Sam", addedBy: "dani" });
+    expect(guest).toMatchObject({ kind: "guest", displayName: "Sam", addedBy: "dani", paidToPayer: false, paidToHost: false });
 
     const one = (await getParticipants(db, BILL)).find((p) => p.kind === "guest")!;
     const two = (await getParticipants(db, "bill-2")).find((p) => p.kind === "guest")!;
@@ -248,91 +281,222 @@ describe("guests", () => {
     expect(one.id).not.toBe("Sam");
   });
 
-  it("bills a guest's share to the member who added them", async () => {
-    // Dani adds Sam, Sam claims a 2000 item
+  it("lets anyone on the bill add a guest, who is then theirs", async () => {
     await seedSaigon(db, BILL);
-    const sam = await withGuest();
-    await confirmed();
 
-    const card = renderBill(
-      (await getBill(db, BILL))!,
-      splitBill((await getBillSnapshot(db, BILL))!.input),
-      (await getBillSnapshot(db, BILL))!.input.items,
-      await getParticipants(db, BILL),
-      [],
-      await getShares(db, BILL),
-    );
-    expect(JSON.stringify(card)).toContain("Dani, including Sam");
+    for (const [as, name] of [
+      ["marcus", "Kim"],
+      ["gavin", "Lee"],
+      ["dani", "Sam"],
+    ] as const) {
+      expect((await addGuest(as, { name })).status, as).toBe(200);
+    }
 
-    const together = (await owedOf("dani")) + (await owedOf(sam));
-    const rows = cardRows(card);
-    const dani = rows.find((r) => r.includes("Dani, including Sam"))!;
-    expect(dani).toContain(formatCents(together));
-    // One amount for the pair: Sam has no row of their own.
-    expect(rows.filter((r) => r.includes("Sam"))).toEqual([dani]);
-    expect((await outstanding(db, BILL)).find((o) => o.participant === "dani")!.owedCents).toBe(together);
-    expect((await outstanding(db, BILL)).some((o) => o.participant === sam)).toBe(false);
+    const guests = (await getParticipants(db, BILL)).filter((p) => p.kind === "guest");
+    expect(guests.map((g) => [g.displayName, g.addedBy]).sort()).toEqual([
+      ["Kim", "marcus"],
+      ["Lee", "gavin"],
+      ["Sam", "dani"],
+    ]);
   });
 
-  it("refuses a non-payer adding a guest", async () => {
+  it("refuses a guest from anyone who isn't a member on the bill", async () => {
     await seedSaigon(db, BILL);
-    const before = (await getBill(db, BILL))!.revision;
+    const sam = guestIdOf(await addGuest("dani", { name: "Sam" }), "Sam");
+    const before = await revision();
 
-    for (const as of ["marcus", "dani"]) {
-      const reply = await addGuest(as, { name: "Sam", with: "dani" });
-      expect(reply.status).toBe(403);
-      expect(reply.body.error).toMatch(/Gavin/);
+    for (const as of ["zoe", sam]) {
+      const reply = await addGuest(as, { name: "Kim" });
+      expect(reply.status, as).toBe(403);
+      expect(reply.body.error).toMatch(/not on this bill/);
     }
-    expect((await getParticipants(db, BILL)).some((p) => p.kind === "guest")).toBe(false);
-    expect((await getBill(db, BILL))!.revision).toBe(before);
+    expect((await getParticipants(db, BILL)).filter((p) => p.kind === "guest").map((g) => g.displayName)).toEqual(["Sam"]);
+    expect(await revision()).toBe(before);
   });
 
   it("takes a guest's name trimmed, 1 to 40 characters, unlike anyone else's on the bill", async () => {
     await seedSaigon(db, BILL);
 
     for (const name of ["", "   ", "x".repeat(41), "dani", "  GAVIN "]) {
-      const reply = await addGuest("gavin", { name, with: "dani" });
+      const reply = await addGuest("dani", { name });
       expect(reply.status, JSON.stringify(name)).toBe(400);
       expect(reply.body.error.length).toBeGreaterThan(0);
     }
-    expect((await addGuest("gavin", { name: "  Sam  ", with: "dani" })).status).toBe(200);
-    expect((await addGuest("gavin", { name: "sAM", with: "marcus" })).status).toBe(400);
-    expect((await addGuest("gavin", { name: "y".repeat(40), with: "marcus" })).status).toBe(200);
+    expect((await addGuest("dani", { name: "  Sam  " })).status).toBe(200);
+    expect((await addGuest("marcus", { name: "sAM" })).status).toBe(400);
+    expect((await addGuest("marcus", { name: "y".repeat(40) })).status).toBe(200);
 
     const guests = (await getParticipants(db, BILL)).filter((p) => p.kind === "guest");
-    expect(guests.map((g) => g.displayName)).toEqual(["Sam", "y".repeat(40)]);
+    expect(guests.map((g) => g.displayName).sort()).toEqual(["Sam", "y".repeat(40)]);
   });
 
-  it("adds a guest only with a member of the roster, in the exact request shape", async () => {
+  it("takes only a name, so a request still saying who the guest came with is refused", async () => {
     await seedSaigon(db, BILL);
-    const sam = (await addGuest("gavin", { name: "Sam", with: "dani" })).body.participants.find((p: any) => p.kind === "guest").id;
 
-    const refused = [
-      { name: "Kim", with: sam },
-      { name: "Kim", with: "zoe" },
-      { name: "Kim" },
-      { name: "Kim", with: "dani", extra: 1 },
-      { name: 42, with: "dani" },
-    ];
-    for (const body of refused) {
-      const reply = await addGuest("gavin", body);
+    for (const body of [{ name: "Kim", with: "dani" }, {}, { name: 42 }, { name: "Kim", extra: 1 }]) {
+      const reply = await addGuest("dani", body);
       expect(reply.status, JSON.stringify(body)).toBe(400);
     }
-    expect((await getParticipants(db, BILL)).filter((p) => p.kind === "guest")).toHaveLength(1);
+    expect((await getParticipants(db, BILL)).some((p) => p.kind === "guest")).toBe(false);
   });
 
   it("refuses a guest on a bill that is no longer a draft", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
 
-    const reply = await addGuest("gavin", { name: "Sam", with: "dani" });
+    const reply = await addGuest("dani", { name: "Sam" });
 
     expect(reply.status).toBe(409);
     expect(reply.body.error).toMatch(/confirmed/i);
     expect((await getParticipants(db, BILL)).some((p) => p.kind === "guest")).toBe(false);
   });
+});
 
-  it("asks a member for their guest's share too, in Pay my share and I paid", async () => {
+describe("tapping a guest onto lines", () => {
+  it("lets whoever added a guest tap them on, and the payer, but nobody else", async () => {
+    await seedSaigon(db, BILL);
+    const sam = guestIdOf(await addGuest("dani", { name: "Sam" }), "Sam");
+    const kim = guestIdOf(await addGuest("marcus", { name: "Kim" }), "Kim");
+    await addItem(db, BILL, { id: "lobster", label: "Lobster", cents: 2000, source: "manual" });
+    await addItem(db, BILL, { id: "fries", label: "Fries", cents: 700, source: "manual" });
+
+    expect((await claimFor("dani", "lobster", sam)).status).toBe(200);
+    expect((await claimFor("gavin", "fries", sam)).status).toBe(200);
+    expect((await claimFor("marcus", "fries", kim)).status).toBe(200);
+    for (const [as, guest] of [
+      ["marcus", sam],
+      ["dani", kim],
+    ] as const) {
+      const refused = await claimFor(as, "lobster", guest);
+      expect(refused.status, as).toBe(403);
+      expect(refused.body.error).toBe("Only Gavin can tap other people onto a line. Tap your own chip for what you had, or a guest's you added.");
+    }
+
+    const items = (await getBillSnapshot(db, BILL))!.input.items;
+    expect(items.find((i) => i.id === "lobster")!.claimedBy).toEqual([sam]);
+    expect([...items.find((i) => i.id === "fries")!.claimedBy].sort()).toEqual([sam, kim].sort());
+  });
+});
+
+describe("renaming and taking off a guest", () => {
+  it("lets whoever added a guest or the payer rename them, and nobody else", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+
+    expect((await rename("dani", sam, "Sammy")).status).toBe(200);
+    const byPayer = await rename("gavin", sam, "  Sam L ");
+    expect(byPayer.status).toBe(200);
+    expect(inState(byPayer.body, sam)).toMatchObject({ displayName: "Sam L", addedBy: "dani" });
+
+    const before = await revision();
+    const refused = await rename("marcus", sam, "Nope");
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("Only Dani, who added Sam L, or Gavin can rename them.");
+    expect(await revision()).toBe(before);
+    expect((await getParticipants(db, BILL)).find((p) => p.id === sam)!.displayName).toBe("Sam L");
+  });
+
+  it("holds a new name to the same rules, the guest's own name aside", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await addGuest("marcus", { name: "Kim" });
+
+    for (const name of ["", "   ", "x".repeat(41), "marcus", "kim", 7]) {
+      expect((await rename("dani", sam, name)).status, JSON.stringify(name)).toBe(400);
+    }
+    expect((await rename("dani", sam, "Kim")).body.error).toBe(
+      "Kim is already on this bill. Give the guest a name that tells them apart, like one with an initial.",
+    );
+    expect((await send("PATCH", `/b/${BILL}/guest/${sam}`, "dani", { name: "Sammy", with: "dani" })).status).toBe(400);
+    expect((await rename("dani", sam, "SAM")).status).toBe(200);
+    expect((await getParticipants(db, BILL)).find((p) => p.id === sam)!.displayName).toBe("SAM");
+  });
+
+  it("takes a guest off with their lines, for whoever added them or the payer", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    const kim = await withGuest("Kim", "marcus");
+
+    const refused = await takeOff("marcus", sam);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("Only Dani, who added Sam, or Gavin can take them off.");
+
+    const before = await revision();
+    const gone = await takeOff("dani", sam);
+    expect(gone.status).toBe(200);
+    expect(inState(gone.body, sam)).toBeUndefined();
+    expect(await revision()).toBeGreaterThan(before);
+    expect((await takeOff("gavin", kim)).status).toBe(200);
+
+    expect((await getParticipants(db, BILL)).some((p) => p.kind === "guest")).toBe(false);
+    const items = (await getBillSnapshot(db, BILL))!.input.items;
+    expect(items.find((i) => i.id === `${BILL}-lobster-Sam`)!.claimedBy).toEqual([]);
+    expect(items.find((i) => i.id === `${BILL}-lobster-Kim`)!.claimedBy).toEqual([]);
+  });
+
+  it("answers that the guest is gone for someone not on the bill, or a member", async () => {
+    await seedSaigon(db, BILL);
+
+    for (const id of ["guest-nobody", "marcus"]) {
+      for (const reply of [await rename("gavin", id, "Kim"), await takeOff("gavin", id)]) {
+        expect(reply.status, id).toBe(404);
+        expect(reply.body.error).toBe("That guest isn't on this bill any more.");
+      }
+    }
+    expect((await getParticipants(db, BILL)).find((p) => p.id === "marcus")!.displayName).toBe("Marcus");
+  });
+
+  it("changes a guest only while the bill is a draft", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+
+    for (const reply of [await rename("dani", sam, "Sammy"), await takeOff("dani", sam)]) {
+      expect(reply.status).toBe(409);
+      expect(reply.body.error).toMatch(/confirmed/i);
+    }
+    expect((await getParticipants(db, BILL)).find((p) => p.id === sam)!.displayName).toBe("Sam");
+  });
+
+  it("keeps a guest on a reopened bill while a payment counts toward what they owe", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    const kim = await withGuest("Kim", "marcus");
+    await confirmed();
+    await recordSettlement(db, BILL, "dani", 500, "dani");
+    await reopenBill(db, BILL);
+
+    const refused = await takeOff("dani", sam);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe(
+      "There's already a payment toward Sam's share on this bill, so they can't be taken off now. " +
+        "Take Sam off their lines instead, and their share drops to nothing.",
+    );
+    expect((await getParticipants(db, BILL)).some((p) => p.id === sam)).toBe(true);
+    // Marcus has paid nothing, so his guest can go.
+    expect((await takeOff("marcus", kim)).status).toBe(200);
+    expect((await getParticipants(db, BILL)).some((p) => p.id === kim)).toBe(false);
+  });
+});
+
+describe("a guest another member added", () => {
+  it("bills the guest's share to the member who added them", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+
+    const card = await renderedCard();
+    const together = (await owedOf("dani")) + (await owedOf(sam));
+    const rows = cardRows(card);
+    const dani = rows.find((r) => r.includes("Dani, including Sam"))!;
+    expect(dani).toContain(formatCents(together));
+    // One amount for the pair: Sam has no row of their own.
+    expect(rows.filter((r) => r.includes("Sam"))).toEqual([dani]);
+    expect((await standing("dani"))!.owedCents).toBe(together);
+    expect(await standing(sam)).toBeUndefined();
+  });
+
+  it("asks the member for their guest's share too, in Pay my share and I paid", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -362,7 +526,7 @@ describe("guests", () => {
     expect(await settledAt(sam)).not.toBeNull();
   });
 
-  it("never records a payment against a guest", async () => {
+  it("never takes an I paid payment for a guest, who has no Discord account", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -371,7 +535,7 @@ describe("guests", () => {
     expect(await listSettlements(db, BILL)).toEqual([]);
   });
 
-  it("never lists a guest in /ledger, and rolls their share into their companion's", async () => {
+  it("never lists the guest in /ledger, and rolls their share into the member's", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -386,29 +550,7 @@ describe("guests", () => {
     expect(reply.data.content.split("\n").find((l: string) => l.includes("Dani"))).toContain(formatCents(together));
   });
 
-  it("lets the payer absorb the share of a guest who came with them", async () => {
-    await seedSaigon(db, BILL);
-    const kim = await withGuest("Kim", "gavin");
-    await confirmed();
-
-    expect((await outstanding(db, BILL)).map((o) => o.participant)).not.toContain(kim);
-    expect((await ledger(db, "gavin")).map((r) => r.participant)).not.toContain(kim);
-    const card = await renderedCard();
-    const row = cardRows(card).find((r) => r.includes("Gavin, including Kim"))!;
-    expect(row).toContain(formatCents((await owedOf("gavin")) + (await owedOf(kim))));
-    expect(row).toMatch(/paid the bill/);
-
-    const page = await send("GET", `/b/${BILL}/state`, "gavin");
-    const others = (await getShares(db, BILL))
-      .filter((s) => s.participant !== "gavin" && s.participant !== kim)
-      .reduce((sum, s) => sum + s.owedCents, 0);
-    expect(page.body.payerCollectsCents).toBe(others);
-
-    const refused = await pardon("gavin", kim);
-    expect(refused.status).toBe(400);
-  });
-
-  it("shows a member their guest's lines in a separate block in Show my math", async () => {
+  it("shows the member their guest's lines in a separate block in Show my math", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -416,7 +558,7 @@ describe("guests", () => {
     const reply = await run(tap(`math:${BILL}`, DANI));
     const text: string = reply.data.content;
     expect(reply.data.flags).toBe(EPHEMERAL);
-    const block = text.indexOf("Sam");
+    const block = text.indexOf("**Sam, your guest**");
     expect(block).toBeGreaterThan(text.indexOf("Garlic noodles"));
     expect(text.slice(block)).toContain("Lobster");
     expect(text.slice(0, block)).not.toContain("Lobster");
@@ -425,7 +567,7 @@ describe("guests", () => {
     expect(text.length).toBeLessThanOrEqual(2000);
   });
 
-  it("says out loud how a pair's amount moved when the bill is confirmed again", async () => {
+  it("says out loud how the member's amount moved when the bill is confirmed again", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -434,14 +576,350 @@ describe("guests", () => {
 
     expect(await reopenBill(db, BILL)).toEqual([]);
     await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
-    await setBillAmounts(db, BILL, { printedTotalCents: WITH_LOBSTER + 1000 });
-    const reply = await run(tap(`confirm:${BILL}:${(await getBill(db, BILL))!.revision}`, GAVIN));
+    await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
+    const reply = await run(tap(`confirm:${BILL}:${await revision()}`, GAVIN));
 
     const now = (await owedOf("dani")) + (await owedOf(sam));
     expect(now).not.toBe(was);
     expect(reply.data.flags ?? 0).toBe(0);
     expect(reply.data.content).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
     expect(reply.data.content).not.toContain("Sam paid");
+  });
+});
+
+describe("a guest the payer added", () => {
+  it("owes the payer directly, with a row of their own everywhere", async () => {
+    await seedSaigon(db, BILL);
+    const kim = await withGuest("Kim", "gavin");
+    await confirmed();
+    const kimOwes = await owedOf(kim);
+
+    expect(await standing(kim)).toEqual({ participant: kim, owedCents: kimOwes, settledCents: 0 });
+    expect((await ledger(db, "gavin")).find((r) => r.participant === kim)).toEqual({
+      participant: kim,
+      displayName: "Kim",
+      kind: "guest",
+      place: "Saigon Kitchen",
+      owedCents: kimOwes,
+      settledCents: 0,
+      billCount: 1,
+    });
+    const lines: string[] = (await run(ledgerCommand(GAVIN))).data.content.split("\n");
+    expect(lines.filter((l) => l.includes("Kim"))).toEqual([`- Kim: ${formatCents(kimOwes)} (your guest at Saigon Kitchen)`]);
+
+    const rows = cardRows(await renderedCard());
+    expect(rows.filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ${formatCents(kimOwes)} · Lobster`]);
+    expect(rows.find((r) => r.startsWith("<@gavin>"))).toContain(`${formatCents(await owedOf("gavin"))} (paid the bill)`);
+
+    const state = await send("GET", `/b/${BILL}/state`, "gavin");
+    const others = (await getShares(db, BILL)).filter((s) => s.participant !== "gavin").reduce((sum, s) => sum + s.owedCents, 0);
+    expect(state.body.payerCollectsCents).toBe(others);
+    expect(inState(state.body, kim)).toMatchObject({ addedBy: "gavin", paidToPayer: false, paidToHost: false });
+  });
+
+  it("tells the payer only their own part in Pay my share", async () => {
+    await seedSaigon(db, BILL);
+    await withGuest("Kim", "gavin");
+    await confirmed();
+
+    const pay = await run(tap(`pay:${BILL}`, GAVIN));
+    expect(pay.data.content).toContain(`Your own part of it was ${formatCents(await owedOf("gavin"))}.`);
+    expect(pay.data.content).not.toContain("Kim");
+  });
+
+  it("can be forgiven like anyone else who owes the payer", async () => {
+    await seedSaigon(db, BILL);
+    const kim = await withGuest("Kim", "gavin");
+    await confirmed();
+    const kimOwes = formatCents(await owedOf(kim));
+
+    expect((await pardon("gavin", kim)).status).toBe(200);
+
+    expect((await standing(kim))!.owedCents).toBe(0);
+    expect(cardRows(await renderedCard()).filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ~~${kimOwes}~~ forgiven · Lobster`]);
+    expect(channelPosts().map((p) => p.body.content)).toEqual([`Gavin forgave Kim's ${kimOwes} for ${SAIGON_KITCHEN}, so Kim owes nothing.`]);
+  });
+
+  it("is marked paid by the payer, as the guest paying the payer", async () => {
+    await seedSaigon(db, BILL);
+    const kim = await withGuest("Kim", "gavin");
+    await confirmed();
+    const cents = await owedOf(kim);
+
+    const paid = await markPaid("gavin", kim);
+
+    expect(paid.status).toBe(200);
+    expect(inState(paid.body, kim)).toMatchObject({ paidToPayer: true, paidToHost: false });
+    expect(await listSettlements(db, BILL)).toMatchObject([{ participant: kim, cents, recordedBy: "gavin" }]);
+    expect(await standing(kim)).toEqual({ participant: kim, owedCents: cents, settledCents: cents });
+    expect(await settledAt(kim)).not.toBeNull();
+    expect((await ledger(db, "gavin")).some((r) => r.participant === kim)).toBe(false);
+
+    const back = await markPaid("gavin", kim, false);
+    expect(back.status).toBe(200);
+    expect(inState(back.body, kim)).toMatchObject({ paidToPayer: false, paidToHost: false });
+    expect(await listSettlements(db, BILL)).toEqual([]);
+    expect(await settledAt(kim)).toBeNull();
+
+    expect(channelPosts().map((p) => p.body)).toEqual([
+      { content: `Kim paid Gavin ${formatCents(cents)} for ${SAIGON_KITCHEN}. Kim is all paid up.`, allowed_mentions: { parse: [] } },
+      {
+        content: `Gavin removed Kim's ${formatCents(cents)} payment on ${SAIGON_KITCHEN}. Kim has ${formatCents(cents)} left to pay.`,
+        allowed_mentions: { parse: [] },
+      },
+    ]);
+  });
+
+  it("is the payer's alone to change or mark paid", async () => {
+    await seedSaigon(db, BILL);
+    const kim = await withGuest("Kim", "gavin");
+
+    expect((await rename("dani", kim, "Kimberly")).body.error).toBe("Only Gavin, who added Kim, can rename them.");
+    expect((await claimFor("dani", `${BILL}-lobster-Kim`, kim)).status).toBe(403);
+    await confirmed();
+    const refused = await markPaid("dani", kim);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("Only Gavin, who added Kim, can mark them paid.");
+    expect(await listSettlements(db, BILL)).toEqual([]);
+  });
+});
+
+describe("marking a guest paid", () => {
+  it("takes what a guest paid the payer directly off what the member who added them owes", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const samOwes = await owedOf(sam);
+    const daniOwes = await owedOf("dani");
+    const before = await revision();
+
+    const reply = await markPaid("gavin", sam);
+
+    expect(reply.status).toBe(200);
+    expect(inState(reply.body, sam)).toMatchObject({ addedBy: "dani", paidToPayer: true, paidToHost: false });
+    expect(await revision()).toBe(before + 1);
+    expect(await listSettlements(db, BILL)).toMatchObject([{ participant: sam, cents: samOwes, recordedBy: "gavin" }]);
+    expect(await standing("dani")).toEqual({ participant: "dani", owedCents: daniOwes, settledCents: 0 });
+    expect((await ledger(db, "gavin")).find((r) => r.participant === "dani")).toMatchObject({ owedCents: daniOwes, settledCents: 0 });
+    expect(channelPosts().map((p) => p.body)).toEqual([
+      {
+        content: `Sam paid Gavin ${formatCents(samOwes)} directly for ${SAIGON_KITCHEN}. Dani has ${formatCents(daniOwes)} left to pay.`,
+        allowed_mentions: { parse: [] },
+      },
+    ]);
+
+    const pay = (await run(tap(`pay:${BILL}`, DANI))).data.content as string;
+    expect(pay).toContain(`You owe Gavin **${formatCents(daniOwes)}** for ${SAIGON_KITCHEN}.`);
+    expect(pay).toContain("Sam paid Gavin directly, so that share is off your total.");
+    const math = (await run(tap(`math:${BILL}`, DANI))).data.content as string;
+    expect(math).toContain(`Sam paid Gavin ${formatCents(samOwes)} directly, so that's off your total.`);
+    expect(math).toContain(`= ${formatCents(daniOwes)}**`);
+    const paid = await run(tap(`paid:${BILL}`, DANI));
+    expect(customIds(paid.data)).toEqual([`paidall:${BILL}:${daniOwes}`, `paidpart:${BILL}`]);
+
+    await run(tap(`paidall:${BILL}:${daniOwes}`, DANI));
+    expect(await settledAt("dani")).not.toBeNull();
+    expect(await settledAt(sam)).not.toBeNull();
+  });
+
+  it("puts the guest's share back on the member when the payer takes the mark back", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const samOwes = formatCents(await owedOf(sam));
+    const together = (await owedOf("dani")) + (await owedOf(sam));
+    await markPaid("gavin", sam);
+    const before = await revision();
+
+    const reply = await markPaid("gavin", sam, false);
+
+    expect(reply.status).toBe(200);
+    expect(inState(reply.body, sam)).toMatchObject({ paidToPayer: false, paidToHost: false });
+    expect(await revision()).toBe(before + 1);
+    expect(await listSettlements(db, BILL)).toEqual([]);
+    expect(await standing("dani")).toEqual({ participant: "dani", owedCents: together, settledCents: 0 });
+    expect(channelPosts().map((p) => p.body.content)[1]).toBe(
+      `Gavin removed Sam's ${samOwes} payment on ${SAIGON_KITCHEN}. Dani has ${formatCents(together)} left to pay.`,
+    );
+  });
+
+  it("keeps the member's mark between them and their guest, with no money moving", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const together = (await owedOf("dani")) + (await owedOf(sam));
+    const before = await revision();
+
+    const reply = await markPaid("dani", sam);
+
+    expect(reply.status).toBe(200);
+    expect(inState(reply.body, sam)).toMatchObject({ paidToPayer: false, paidToHost: true });
+    expect(await revision()).toBe(before + 1);
+    expect(await listSettlements(db, BILL)).toEqual([]);
+    expect(await standing("dani")).toEqual({ participant: "dani", owedCents: together, settledCents: 0 });
+    expect(channelPosts()).toEqual([]);
+    expect((await run(tap(`pay:${BILL}`, DANI))).data.content).toContain(`You owe Gavin **${formatCents(together)}**`);
+
+    // The two marks are separate facts, so one never moves the other.
+    expect(inState((await markPaid("gavin", sam)).body, sam)).toMatchObject({ paidToPayer: true, paidToHost: true });
+    expect(inState((await markPaid("dani", sam, false)).body, sam)).toMatchObject({ paidToPayer: true, paidToHost: false });
+    expect(await listSettlements(db, BILL)).toHaveLength(1);
+  });
+
+  it("changes nothing and posts nothing when the mark already says that", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const start = await revision();
+
+    expect((await markPaid("gavin", sam, false)).status).toBe(200);
+    expect((await markPaid("dani", sam, false)).status).toBe(200);
+    expect(await revision()).toBe(start);
+
+    await markPaid("gavin", sam);
+    await markPaid("dani", sam);
+    const marked = await revision();
+    expect((await markPaid("gavin", sam)).status).toBe(200);
+    expect((await markPaid("dani", sam)).status).toBe(200);
+
+    expect(await revision()).toBe(marked);
+    expect(await listSettlements(db, BILL)).toHaveLength(1);
+    expect(channelPosts()).toHaveLength(1);
+  });
+
+  it("refuses a mark from anyone but the member who added the guest and the payer", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+
+    for (const as of ["marcus", "zoe"]) {
+      const reply = await markPaid(as, sam);
+      expect(reply.status, as).toBe(403);
+      expect(reply.body.error).toBe("Only Dani, who added Sam, or Gavin can mark them paid.");
+    }
+    expect((await markPaid("gavin", "marcus")).status).toBe(404);
+    expect(await listSettlements(db, BILL)).toEqual([]);
+    expect(inState((await send("GET", `/b/${BILL}/state`, "dani")).body, sam)).toMatchObject({ paidToPayer: false, paidToHost: false });
+  });
+
+  it("marks a guest paid only on a confirmed bill", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+
+    for (const as of ["gavin", "dani"]) {
+      const reply = await markPaid(as, sam);
+      expect(reply.status, as).toBe(409);
+      expect(reply.body.error).toMatch(/isn't confirmed/);
+    }
+    await confirmed();
+    await reopenBill(db, BILL);
+    expect((await markPaid("gavin", sam)).status).toBe(409);
+    expect(await listSettlements(db, BILL)).toEqual([]);
+  });
+
+  it("refuses a direct payment the member already paid, or one the payer forgave", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    const kim = await withGuest("Kim", "marcus");
+    await confirmed();
+    await recordSettlement(db, BILL, "dani", (await owedOf("dani")) + (await owedOf(sam)), "dani");
+    await pardon("gavin", kim);
+
+    const covered = await markPaid("gavin", sam);
+    expect(covered.status).toBe(409);
+    expect(covered.body.error).toBe(
+      "Dani has already paid you Sam's share, so it can't be paid twice. " +
+        "If Sam paid you instead, undo Dani's payment with Undo a payment in Discord first.",
+    );
+    const forgiven = await markPaid("gavin", kim);
+    expect(forgiven.status).toBe(409);
+    expect(forgiven.body.error).toBe("Gavin forgave Kim's share, so there's nothing for them to pay.");
+
+    expect((await listSettlements(db, BILL)).map((s) => s.participant)).toEqual(["dani"]);
+    expect(channelPosts().map((p) => p.body.content)).toEqual([expect.stringMatching(/^Gavin forgave Kim's/)]);
+  });
+
+  it("takes a direct payment on top of part of what the member paid", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    await recordSettlement(db, BILL, "dani", 1000, "dani");
+    const daniOwes = await owedOf("dani");
+
+    expect((await markPaid("gavin", sam)).status).toBe(200);
+
+    expect(await standing("dani")).toEqual({ participant: "dani", owedCents: daniOwes, settledCents: 1000 });
+    expect((await run(tap(`pay:${BILL}`, DANI))).data.content).toContain(
+      `You have **${formatCents(daniOwes - 1000)}** left to pay Gavin for ${SAIGON_KITCHEN}: you've paid $10.00 of ${formatCents(daniOwes)}.`,
+    );
+  });
+
+  it("refuses to forgive the member or their guest once the guest paid the payer", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    await markPaid("gavin", sam);
+
+    for (const who of [sam, "dani"]) {
+      const reply = await pardon("gavin", who);
+      expect(reply.status, who).toBe(409);
+      expect(reply.body.error).toMatch(/^There's already a payment toward what Dani owes on this bill/);
+    }
+    expect((await getShares(db, BILL)).some((s) => s.pardoned)).toBe(false);
+  });
+
+  it("tells the channel the member's balance when the payer undoes the guest's payment in Discord", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    const samOwes = formatCents(await owedOf(sam));
+    const together = formatCents((await owedOf("dani")) + (await owedOf(sam)));
+    await markPaid("gavin", sam);
+
+    const menu = await run(tap(`undo:${BILL}`, GAVIN));
+    const [option] = menu.data.components[0].components[0].options;
+    expect(option.label).toBe(`Sam paid ${samOwes}`);
+    expect(option.description).toMatch(/ by Gavin$/);
+
+    const reply = await run(undoPick(option.value));
+    expect(reply.data.content).toBe(`Gavin removed Sam's ${samOwes} payment on ${SAIGON_KITCHEN}. Dani has ${together} left to pay.`);
+    expect(inState((await send("GET", `/b/${BILL}/state`, "dani")).body, sam)).toMatchObject({ paidToPayer: false });
+  });
+
+  it("nets a guest's direct payment out of the member's amount when the bill is confirmed again", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    await confirmed();
+    await recordSettlement(db, BILL, "dani", 1000, "dani");
+    await markPaid("gavin", sam);
+    const direct = await owedOf(sam);
+
+    await reopenBill(db, BILL);
+    await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
+    await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
+    const reply = await run(tap(`confirm:${BILL}:${await revision()}`, GAVIN));
+
+    const now = (await owedOf("dani")) + (await owedOf(sam)) - direct;
+    expect(reply.data.content).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
+    expect(reply.data.content).not.toContain("Sam paid");
+  });
+
+  it("reports both marks for every guest in the page state, and neither for members", async () => {
+    await seedSaigon(db, BILL);
+    const sam = await withGuest();
+    const kim = await withGuest("Kim", "gavin");
+    await confirmed();
+    await markPaid("dani", sam);
+    await markPaid("gavin", kim);
+
+    const state = (await send("GET", `/b/${BILL}/state`, "marcus")).body;
+
+    expect(inState(state, sam)).toMatchObject({ addedBy: "dani", paidToPayer: false, paidToHost: true });
+    expect(inState(state, kim)).toMatchObject({ addedBy: "gavin", paidToPayer: true, paidToHost: false });
+    for (const p of state.participants.filter((p: any) => p.kind === "member")) {
+      expect(p, p.id).not.toHaveProperty("paidToPayer");
+      expect(p, p.id).not.toHaveProperty("paidToHost");
+    }
   });
 });
 
@@ -459,7 +937,7 @@ describe("pardons", () => {
     expect(after.map((s) => [s.participant, s.owedCents])).toEqual(before.map((s) => [s.participant, s.owedCents]));
     expect(after.filter((s) => s.pardoned).map((s) => s.participant)).toEqual(["marcus"]);
     expect(reply.body.payerCollectsCents).toBe(collects - 4446);
-    expect((await outstanding(db, BILL)).find((o) => o.participant === "marcus")!.owedCents).toBe(0);
+    expect((await standing("marcus"))!.owedCents).toBe(0);
 
     const [edit] = messageEdits();
     const marcusRow = (edit!.body.embeds[0].description as string).split("\n").find((l) => l.includes("<@marcus>"))!;
@@ -500,7 +978,7 @@ describe("pardons", () => {
     expect((await getShares(db, BILL)).some((s) => s.pardoned)).toBe(false);
   });
 
-  it("refuses to pardon someone who has paid, or a guest whose companion has", async () => {
+  it("refuses to pardon someone who has paid, or a guest whose member has", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -528,17 +1006,17 @@ describe("pardons", () => {
     expect(back.status).toBe(200);
     expect(await settledAt("marcus")).toBeNull();
     expect((await getShares(db, BILL)).some((s) => s.pardoned)).toBe(false);
-    expect((await outstanding(db, BILL)).find((o) => o.participant === "marcus")!.owedCents).toBe(4446);
+    expect((await standing("marcus"))!.owedCents).toBe(4446);
   });
 
-  it("forgives a guest's share alone, leaving their companion's", async () => {
+  it("forgives a guest's share alone, leaving the member's own", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
 
     expect((await pardon("gavin", sam)).status).toBe(200);
 
-    expect((await outstanding(db, BILL)).find((o) => o.participant === "dani")!.owedCents).toBe(await owedOf("dani"));
+    expect((await standing("dani"))!.owedCents).toBe(await owedOf("dani"));
     const row = cardRows(await renderedCard()).find((r) => r.includes("Dani, including Sam"))!;
     expect(row).toContain(formatCents(await owedOf("dani")));
     expect(row).toMatch(/Sam forgiven/);
@@ -572,11 +1050,11 @@ describe("pardons", () => {
     const posts = channelPosts();
     expect(posts.map((p) => p.body)).toEqual([
       {
-        content: "Gavin forgave Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes nothing.",
+        content: `Gavin forgave Marcus's $44.46 for ${SAIGON_KITCHEN}, so Marcus owes nothing.`,
         allowed_mentions: { parse: [] },
       },
       {
-        content: "Gavin took back forgiving Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes $44.46 again.",
+        content: `Gavin took back forgiving Marcus's $44.46 for ${SAIGON_KITCHEN}, so Marcus owes $44.46 again.`,
         allowed_mentions: { parse: [] },
       },
     ]);
@@ -587,19 +1065,17 @@ describe("pardons", () => {
     await seedSaigon(db, BILL);
     await confirmed();
     expect((await pardon("gavin", "marcus")).status).toBe(200);
-    const revision = (await getBill(db, BILL))!.revision;
+    const before = await revision();
 
     expect((await pardon("gavin", "marcus")).status).toBe(200);
     expect((await pardon("gavin", "jess", false)).status).toBe(200);
 
-    expect((await getBill(db, BILL))!.revision).toBe(revision);
+    expect(await revision()).toBe(before);
     expect((await getShares(db, BILL)).filter((s) => s.pardoned).map((s) => s.participant)).toEqual(["marcus"]);
-    expect(channelPosts().map((p) => p.body.content)).toEqual([
-      "Gavin forgave Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes nothing.",
-    ]);
+    expect(channelPosts().map((p) => p.body.content)).toEqual([`Gavin forgave Marcus's $44.46 for ${SAIGON_KITCHEN}, so Marcus owes nothing.`]);
   });
 
-  it("names a guest's companion and says what the pair owes after a guest's pardon", async () => {
+  it("names the member and says what they owe in all after a guest's pardon", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -612,13 +1088,12 @@ describe("pardons", () => {
     expect((await pardon("gavin", sam, false)).status).toBe(200);
     expect((await pardon("gavin", "dani", false)).status).toBe(200);
 
-    const bill = "Saigon Kitchen, Oct 28, 2026";
     expect(channelPosts().map((p) => p.body.content)).toEqual([
-      `Gavin forgave Sam's ${samOwes} for ${bill}, so Dani, including Sam, owes ${daniOwes}.`,
-      `Gavin forgave Dani's ${daniOwes} for ${bill}, so Dani, including Sam, owes nothing.`,
+      `Gavin forgave Sam's ${samOwes} for ${SAIGON_KITCHEN}, so Dani, including Sam, owes ${daniOwes}.`,
+      `Gavin forgave Dani's ${daniOwes} for ${SAIGON_KITCHEN}, so Dani, including Sam, owes nothing.`,
       // Dani's own share is still forgiven, so this is not what the pair owed before.
-      `Gavin took back forgiving Sam's ${samOwes} for ${bill}, so Dani, including Sam, owes ${samOwes}.`,
-      `Gavin took back forgiving Dani's ${daniOwes} for ${bill}, so Dani, including Sam, owes ${together} again.`,
+      `Gavin took back forgiving Sam's ${samOwes} for ${SAIGON_KITCHEN}, so Dani, including Sam, owes ${samOwes}.`,
+      `Gavin took back forgiving Dani's ${daniOwes} for ${SAIGON_KITCHEN}, so Dani, including Sam, owes ${together} again.`,
     ]);
     expect(channelPosts().every((p) => JSON.stringify(p.body.allowed_mentions) === JSON.stringify({ parse: [] }))).toBe(true);
   });
@@ -639,7 +1114,7 @@ describe("pardons", () => {
     expect(channelPosts()).toEqual([]);
   });
 
-  it("asks for nothing in Pay my share once the whole pair is forgiven", async () => {
+  it("asks for nothing in Pay my share once the member and their guest are both forgiven", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -655,21 +1130,18 @@ describe("pardons", () => {
 });
 
 describe("the page", () => {
-  it("offers the payer a guest form on a draft, listing only members to come with", async () => {
+  it("offers everyone on a draft bill the guest form, with nobody to pick", async () => {
     await seedSaigon(db, BILL);
-    await addGuest("gavin", { name: "Sam", with: "dani" });
     const snapshot = (await getBillSnapshot(db, BILL))!;
-    const html = renderPage(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, "gavin");
+    const view = (viewer: string) => renderPage(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, viewer);
 
-    const form = await one(html, "form[data-guest-form]");
-    expect("hidden" in form.attrs).toBe(false);
-    const options = await select(html, "form[data-guest-form] select option");
-    const values = options.map((o) => o.attrs.value).filter(Boolean);
-    expect(values).toEqual(snapshot.participants.filter((p) => p.kind === "member").map((p) => p.id));
-    expect(await select(html, "form[data-guest-form] input[name=name][maxlength='40']")).toHaveLength(1);
-
-    const diner = renderPage(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, "marcus");
-    expect(await select(diner, "form[data-guest-form]")).toEqual([]);
+    for (const viewer of ["gavin", "marcus"]) {
+      const html = view(viewer);
+      expect("hidden" in (await one(html, "form[data-guest-form]")).attrs, viewer).toBe(false);
+      expect(await select(html, "form[data-guest-form] select"), viewer).toEqual([]);
+      expect(await select(html, "form[data-guest-form] input[name=name][maxlength='40']"), viewer).toHaveLength(1);
+    }
+    expect(await select(view("zoe"), "form[data-guest-form]")).toEqual([]);
   });
 
   it("gives the payer a forgive toggle per person on a confirmed bill, off for anyone who has paid", async () => {
@@ -686,8 +1158,8 @@ describe("the page", () => {
     const toggles = await select(html, "button[data-forgive]");
     const ids = toggles.map((t) => t.attrs["data-forgive"]);
     expect(ids).not.toContain("gavin");
-    expect(ids).not.toContain(kim);
-    expect(ids).toEqual(expect.arrayContaining(["marcus", "jess", "dani"]));
+    // Kim owes the payer directly, so the payer can forgive Kim like anyone else.
+    expect(ids).toEqual(expect.arrayContaining(["marcus", "jess", "dani", kim]));
     const by = (id: string) => toggles.find((t) => t.attrs["data-forgive"] === id)!;
     expect(by("marcus").text).toBe("Undo");
     expect(by("dani").text).toBe("Forgive");

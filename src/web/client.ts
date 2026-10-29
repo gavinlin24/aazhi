@@ -96,10 +96,10 @@ export const CLIENT_SCRIPT = String.raw`
     return parts.length <= 1 ? parts.join("") : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
   }
 
-  // Mirrors debtorOf on the server: a guest's share is asked of whoever
-  // brought them.
-  function debtorOf(p) {
-    return p.kind === "guest" && p.addedBy ? p.addedBy : p.id;
+  // Mirrors debtorOf on the server: a guest's share is asked of whoever added
+  // them, unless that is the payer, whom the guest owes directly.
+  function debtorOf(p, payerId) {
+    return p.kind === "guest" && p.addedBy && p.addedBy !== payerId ? p.addedBy : p.id;
   }
 
   // The viewer's own share and their guests', in roster order, or null.
@@ -107,7 +107,7 @@ export const CLIENT_SCRIPT = String.raw`
     const own = s.result.shares.find((x) => x.participant === s.viewer);
     if (!own) return null;
     const guests = s.participants
-      .filter((p) => p.kind === "guest" && p.addedBy === s.viewer)
+      .filter((p) => p.id !== s.viewer && debtorOf(p, s.payerId) === s.viewer)
       .map((p) => s.result.shares.find((x) => x.participant === p.id))
       .filter(Boolean);
     const owed = [own].concat(guests).reduce((n, x) => n + (x.pardoned ? 0 : x.owedCents), 0);
@@ -340,7 +340,7 @@ export const CLIENT_SCRIPT = String.raw`
 
   function chipNode(s, item, p, mode) {
     const isViewer = p.id === s.viewer;
-    const canTap = mode === "all" || (mode === "self" && isViewer);
+    const canTap = mode === "all" || (mode === "self" && (isViewer || (p.kind === "guest" && p.addedBy === s.viewer)));
     return el("button", {
       type: "button",
       class: "chip" + (isViewer ? " is-viewer" : ""),
@@ -443,7 +443,7 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   function forgiveSlot(s, p, share, paid) {
-    if (!share || debtorOf(p) === s.payerId) return el("span", { class: "forgive-slot" });
+    if (!share || debtorOf(p, s.payerId) === s.payerId) return el("span", { class: "forgive-slot" });
     return el("span", { class: "forgive-slot" }, el("button", {
       type: "button",
       class: "btn forgive",
@@ -453,7 +453,7 @@ export const CLIENT_SCRIPT = String.raw`
       // Busy rather than disabled while its answer is out, so the button
       // keeps keyboard focus across the redraw.
       "aria-busy": forgiving.has(p.id) ? "true" : null,
-      disabled: paid.has(debtorOf(p)) || stopped,
+      disabled: paid.has(debtorOf(p, s.payerId)) || stopped,
     }, share.pardoned ? "Undo" : "Forgive"));
   }
 
@@ -469,7 +469,7 @@ export const CLIENT_SCRIPT = String.raw`
     const names = namesOf(s);
     const shares = new Map(s.result.shares.map((x) => [x.participant, x]));
     const paid = new Set(s.paid);
-    const blocked = s.participants.some((p) => shares.has(p.id) && debtorOf(p) !== s.payerId && paid.has(debtorOf(p)));
+    const blocked = s.participants.some((p) => shares.has(p.id) && debtorOf(p, s.payerId) !== s.payerId && paid.has(debtorOf(p, s.payerId)));
     const note = root.querySelector("[data-forgive-note]");
     if (note) {
       note.hidden = !forgive;
@@ -487,8 +487,7 @@ export const CLIENT_SCRIPT = String.raw`
       if (p.id === s.payerId) tags.push("paid");
       if (p.kind === "guest") {
         const host = p.addedBy ? names.get(p.addedBy) : undefined;
-        if (p.addedBy && p.addedBy === s.payerId) tags.push(p.addedBy === s.viewer ? "covered by you" : "covered by " + (host || "the payer"));
-        else tags.push(host ? "guest of " + host : "guest");
+        tags.push(host ? "guest of " + host : "guest");
       }
       if (share && share.pardoned) tags.push("forgiven");
       return el("li", { class: "person" + (p.id === s.viewer ? " is-viewer" : "") }, [
@@ -503,28 +502,17 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
-  // Like the payer picker, the options follow the roster but a pick or a name
-  // being typed is never taken away by a poll.
+  // A name being typed is never taken away by a poll.
   function renderGuestForm(s) {
     const form = root.querySelector("form[data-guest-form]");
     if (!form) return;
-    form.hidden = !(s.viewerIsPayer && s.status === "draft" && !stopped);
+    form.hidden = !(s.status === "draft" && s.editable !== "none" && !stopped);
     if (form.hidden) return;
-    const select = form.elements.with;
-    const members = s.participants.filter((p) => p.kind === "member");
-    const key = JSON.stringify(members.map((p) => [p.id, p.displayName]));
-    if (select._key !== undefined && select._key !== key) {
-      const picked = select.value;
-      select.replaceChildren.apply(select, [el("option", { value: "", disabled: true }, "Pick someone")]
-        .concat(members.map((p) => el("option", { value: p.id }, p.displayName))));
-      select.value = members.some((p) => p.id === picked) ? picked : "";
-    }
-    select._key = key;
     guestReady(form);
   }
 
   function guestReady(form) {
-    form.querySelector("button[type=submit]").disabled = form._busy || form.elements.name.value.trim() === "" || form.elements.with.value === "";
+    form.querySelector("button[type=submit]").disabled = form._busy || form.elements.name.value.trim() === "";
   }
 
   function renderTotals(s) {
@@ -915,10 +903,10 @@ export const CLIENT_SCRIPT = String.raw`
   async function addGuest(form) {
     const msg = form.querySelector(".editor-msg");
     const name = form.elements.name.value.trim();
-    if (name === "" || form.elements.with.value === "") return;
+    if (name === "") return;
     msg.textContent = "";
     setFormBusy(form, true);
-    const failure = await write("POST", "/guest", { name, with: form.elements.with.value });
+    const failure = await write("POST", "/guest", { name });
     setFormBusy(form, false);
     if (failure) {
       msg.textContent = failure.message;
@@ -926,7 +914,6 @@ export const CLIENT_SCRIPT = String.raw`
       return;
     }
     form.elements.name.value = "";
-    form.elements.with.value = "";
     guestReady(form);
     form.elements.name.focus();
   }

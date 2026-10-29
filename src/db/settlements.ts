@@ -1,5 +1,6 @@
 import type { Cents, ParticipantId } from "../money/types";
 import { BillNotConfirmedError, settledAtStatement } from "./bills";
+import { debtorOfSql, debtorSql, groupOwedSql, groupPaidSql, ownPaidSql } from "./debt";
 
 export interface Settlement {
   id: string;
@@ -10,6 +11,10 @@ export interface Settlement {
   recordedBy: ParticipantId;
 }
 
+// A debtor's standing on one bill. What their guests paid the payer directly
+// is taken off `owedCents` rather than added to `settledCents`, so "you've
+// paid" only ever counts the person's own payments; the difference, what is
+// left, is the same either way.
 export interface Outstanding {
   participant: ParticipantId;
   owedCents: Cents;
@@ -19,6 +24,10 @@ export interface Outstanding {
 export interface LedgerRow {
   participant: ParticipantId;
   displayName: string;
+  // A guest the payer added owes them directly, so has a row of their own,
+  // always for one bill; `place` is that bill's, to tell the row apart.
+  kind: "member" | "guest";
+  place: string | null;
   owedCents: Cents; // across bills, after pardons
   settledCents: Cents;
   billCount: number;
@@ -65,21 +74,13 @@ function toSettlement(r: SettlementDbRow): Settlement {
   };
 }
 
-// What member `who` is asked for on `bill` (both SQL expressions): every share
-// they answer for, their own and their guests', where a pardoned share asks
-// for nothing.
-function owedSql(bill: string, who: string): string {
-  return `(SELECT COALESCE(SUM(CASE WHEN g.pardoned = 1 THEN 0 ELSE g.owed_cents END), 0)
-    FROM shares g JOIN participants q ON q.bill_id = g.bill_id AND q.id = g.participant_id
-    WHERE g.bill_id = ${bill} AND COALESCE(q.added_by, q.id) = ${who})`;
-}
+const REMAINING = `(${groupOwedSql("?1", "?3")} - ${groupPaidSql("?1", "?3")})`;
 
-// Every payment counts, since partial payments are ordinary.
-function paidSql(bill: string, who: string): string {
-  return `(SELECT COALESCE(SUM(x.cents), 0) FROM settlements x WHERE x.bill_id = ${bill} AND x.participant_id = ${who})`;
+// A debtor's standing as Outstanding reports it: asked for, less what their
+// guests paid directly, against what they paid themselves.
+function standingSql(bill: string, who: string): string {
+  return `${groupOwedSql(bill, who)} - ${groupPaidSql(bill, who)} + ${ownPaidSql(bill, who)} AS owed, ${ownPaidSql(bill, who)} AS settled`;
 }
-
-const REMAINING = `(${owedSql("?1", "?3")} - ${paidSql("?1", "?3")})`;
 
 // Every rule is in the INSERT's own WHERE, so a reopen, an undo or a second
 // tap landing between the person's look at the card and this write cannot
@@ -214,16 +215,15 @@ export async function undoSettlement(db: D1Database, settlementId: string): Prom
   throw new BillNotConfirmedError(settlement.billId);
 }
 
-// Every member on the bill but the payer, cleared or not, with what they are
-// asked for after any pardon (their guests' shares included) and what they
-// have paid so far. A guest is never a row: their companion answers for them,
-// and a guest who came with the payer is the payer's to absorb.
+// Everyone on the bill who answers for a share, cleared or not, but the payer:
+// every other member, and any guest the payer added. A guest another member
+// added is never a row; that member answers for them.
 export async function outstanding(db: D1Database, billId: string): Promise<Outstanding[]> {
   const { results } = await db
     .prepare(
-      `SELECT p.id AS participant_id, ${owedSql("?1", "p.id")} AS owed, ${paidSql("?1", "p.id")} AS settled
+      `SELECT p.id AS participant_id, ${standingSql("?1", "p.id")}
        FROM participants p JOIN bills b ON b.id = p.bill_id
-       WHERE p.bill_id = ?1 AND p.kind = 'member' AND p.id <> b.payer_id
+       WHERE p.bill_id = ?1 AND p.id <> b.payer_id AND ${debtorSql("p", "b.payer_id")} = p.id
          AND EXISTS (SELECT 1 FROM shares s WHERE s.bill_id = ?1 AND s.participant_id = p.id)
        ORDER BY p.id`,
     )
@@ -235,38 +235,178 @@ export async function outstanding(db: D1Database, billId: string): Promise<Outst
 // Who still owes `payerId`, one row per person across every confirmed bill
 // they paid for (or one server's, with `guildId`). A person is their Discord
 // user id on every bill, so the same friend rolls up across servers; a guest
-// is a label on one bill, so their share rolls into their companion's row and
-// never appears on its own. Only bills with money still owed count: a share
-// overpaid after a correction is money the payer owes back, which a "who owes
-// me" total must not quietly net against someone's other debts.
+// is a label on one bill, so a guest another member added rolls into that
+// member's row, and one the payer added is a row for that bill alone. Only
+// bills with money still owed count: a share overpaid after a correction is
+// money the payer owes back, which a "who owes me" total must not quietly net
+// against someone's other debts.
 export async function ledger(db: D1Database, payerId: ParticipantId, guildId?: string): Promise<LedgerRow[]> {
   const { results } = await db
     .prepare(
       `WITH per_bill AS (
-         SELECT p.id AS participant, p.display_name, b.created_at, b.rowid AS seq,
-           ${owedSql("b.id", "p.id")} AS owed,
-           ${paidSql("b.id", "p.id")} AS settled
+         SELECT p.id AS participant, p.display_name, p.kind, b.place, b.created_at, b.rowid AS seq,
+           ${standingSql("b.id", "p.id")}
          FROM bills b
-         JOIN participants p ON p.bill_id = b.id AND p.kind = 'member'
-         WHERE b.payer_id = ?1 AND b.status = 'confirmed' AND p.id <> ?1
+         JOIN participants p ON p.bill_id = b.id
+         WHERE b.payer_id = ?1 AND b.status = 'confirmed' AND p.id <> ?1 AND ${debtorSql("p", "b.payer_id")} = p.id
            AND (?2 IS NULL OR b.guild_id = ?2)
            AND EXISTS (SELECT 1 FROM shares s WHERE s.bill_id = b.id AND s.participant_id = p.id)
        ),
-       owing AS (SELECT * FROM per_bill WHERE owed > settled)
-       SELECT participant,
-         (SELECT o.display_name FROM owing o WHERE o.participant = owing.participant
-          ORDER BY o.created_at DESC, o.seq DESC LIMIT 1) AS display_name,
-         SUM(owed) AS owed, SUM(settled) AS settled, COUNT(*) AS bills
-       FROM owing GROUP BY participant
-       ORDER BY SUM(owed) - SUM(settled) DESC, participant`,
+       owing AS (SELECT * FROM per_bill WHERE owed > settled),
+       latest AS (
+         SELECT participant, display_name, kind, place,
+           ROW_NUMBER() OVER (PARTITION BY participant ORDER BY created_at DESC, seq DESC) AS n
+         FROM owing
+       )
+       SELECT o.participant, l.display_name, l.kind, l.place,
+         SUM(o.owed) AS owed, SUM(o.settled) AS settled, COUNT(*) AS bills
+       FROM owing o JOIN latest l ON l.participant = o.participant AND l.n = 1
+       GROUP BY o.participant
+       ORDER BY SUM(o.owed) - SUM(o.settled) DESC, o.participant`,
     )
     .bind(payerId, guildId ?? null)
-    .all<{ participant: string; display_name: string; owed: number; settled: number; bills: number }>();
+    .all<{ participant: string; display_name: string; kind: "member" | "guest"; place: string | null; owed: number; settled: number; bills: number }>();
   return results.map((r) => ({
     participant: r.participant,
     displayName: r.display_name,
+    kind: r.kind,
+    place: r.place,
     owedCents: r.owed,
     settledCents: r.settled,
     billCount: r.bills,
   }));
+}
+
+// "forgiven": the payer waived the guest's share, so there is nothing to pay.
+// "covered": the group has less left than the guest's share, because the
+// member who added them already paid it. "changed": the bill moved between
+// the write and the read that explains it.
+export type GuestPaidRefusal = "not-confirmed" | "no-guest" | "no-share" | "forgiven" | "nothing-owed" | "covered" | "changed";
+
+export class GuestPaidRefusedError extends Error {
+  constructor(readonly reason: GuestPaidRefusal) {
+    super(`guest paid mark refused: ${reason}`);
+    this.name = "GuestPaidRefusedError";
+  }
+}
+
+const CONFIRMED_GUEST = `EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'confirmed')
+  AND EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'guest')`;
+const GUEST_PAID = "EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND participant_id = ?2)";
+
+// The payer's mark: the guest paid the payer directly. It is a payment like
+// any other, recorded against the guest for their whole frozen share, so it
+// comes off what the member who added them owes and the caller tells the
+// channel. A guest's share is paid directly whole or not at all; part of it
+// goes through the member, who records it with I paid. Unmarking takes the
+// guest's payment back. `cents` is the payment made or taken back; null means
+// the mark already said that.
+export async function setGuestPaidToPayer(
+  db: D1Database,
+  billId: string,
+  guestId: ParticipantId,
+  paid: boolean,
+): Promise<{ revision: number; cents: Cents } | null> {
+  const debtor = debtorOfSql("?1", "?2");
+  const share = "(SELECT owed_cents FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND pardoned = 0)";
+  const allowed = paid
+    ? `${CONFIRMED_GUEST} AND NOT ${GUEST_PAID} AND ${share} > 0
+       AND ${share} <= ${groupOwedSql("?1", debtor)} - ${groupPaidSql("?1", debtor)}`
+    : `${CONFIRMED_GUEST} AND ${GUEST_PAID}`;
+  const now = new Date().toISOString();
+  // The bump goes first so it judges the bill as the write does, before it.
+  const write = paid
+    ? db
+        .prepare(
+          `INSERT INTO settlements (id, bill_id, participant_id, cents, recorded_at, recorded_by)
+           SELECT ?3, ?1, ?2, s.owed_cents, ?4, b.payer_id FROM shares s JOIN bills b ON b.id = s.bill_id
+           WHERE s.bill_id = ?1 AND s.participant_id = ?2 AND ${allowed}
+           RETURNING cents`,
+        )
+        .bind(billId, guestId, crypto.randomUUID(), now)
+    : db.prepare(`DELETE FROM settlements WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed} RETURNING cents`).bind(billId, guestId);
+  const [bump, written] = await db.batch<{ revision: number; cents: number }>([
+    db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, guestId),
+    write,
+    settledAtStatement(db, billId, guestId, now),
+  ]);
+  const row = bump!.results[0];
+  if (row) return { revision: row.revision, cents: written!.results.reduce((sum, r) => sum + r.cents, 0) };
+
+  const at = await guestStanding(db, billId, guestId);
+  if (at.paid === paid) return null;
+  if (!paid) throw new GuestPaidRefusedError("changed");
+  if (at.pardoned) throw new GuestPaidRefusedError("forgiven");
+  if (at.owed <= 0) throw new GuestPaidRefusedError("nothing-owed");
+  if (at.owed > at.remaining) throw new GuestPaidRefusedError("covered");
+  throw new GuestPaidRefusedError("changed");
+}
+
+// The adder's mark: the guest paid the member who added them. That member
+// still owes the payer the guest's share, so no money moves; it only lets the
+// member keep track. A guest the payer added has only the payer's mark.
+export async function setGuestPaidToHost(
+  db: D1Database,
+  billId: string,
+  guestId: ParticipantId,
+  paid: boolean,
+): Promise<number | null> {
+  const allowed = `${CONFIRMED_GUEST}
+    AND EXISTS (SELECT 1 FROM participants q JOIN bills b ON b.id = q.bill_id
+                WHERE q.bill_id = ?1 AND q.id = ?2 AND q.added_by <> b.payer_id)
+    AND EXISTS (SELECT 1 FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND (paid_to_host_at IS NOT NULL) <> ?3)`;
+  const [bump] = await db.batch<{ revision: number }>([
+    db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, guestId, paid ? 1 : 0),
+    db
+      .prepare(
+        `UPDATE shares SET paid_to_host_at = CASE WHEN ?3 = 1 THEN ?4 ELSE NULL END
+         WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed}`,
+      )
+      .bind(billId, guestId, paid ? 1 : 0, new Date().toISOString()),
+  ]);
+  const row = bump!.results[0];
+  if (row) return row.revision;
+
+  const at = await guestStanding(db, billId, guestId);
+  if (at.paidToHost === paid) return null;
+  throw new GuestPaidRefusedError("changed");
+}
+
+// Why a guest mark changed nothing, read from the bill as it is now. Throws
+// for the reasons both marks share.
+async function guestStanding(
+  db: D1Database,
+  billId: string,
+  guestId: ParticipantId,
+): Promise<{ paid: boolean; paidToHost: boolean; pardoned: boolean; owed: Cents; remaining: Cents }> {
+  const debtor = debtorOfSql("?1", "?2");
+  const row = await db
+    .prepare(
+      `SELECT b.status, p.kind, s.owed_cents, s.pardoned, s.paid_to_host_at IS NOT NULL AS paid_to_host, ${GUEST_PAID} AS paid,
+         ${groupOwedSql("?1", debtor)} - ${groupPaidSql("?1", debtor)} AS remaining
+       FROM bills b
+       LEFT JOIN participants p ON p.bill_id = b.id AND p.id = ?2
+       LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = ?2
+       WHERE b.id = ?1`,
+    )
+    .bind(billId, guestId)
+    .first<{
+      status: string;
+      kind: string | null;
+      owed_cents: number | null;
+      pardoned: number | null;
+      paid_to_host: number;
+      paid: number;
+      remaining: number;
+    }>();
+  if (row?.status !== "confirmed") throw new GuestPaidRefusedError("not-confirmed");
+  if (row.kind !== "guest") throw new GuestPaidRefusedError("no-guest");
+  if (row.owed_cents === null) throw new GuestPaidRefusedError("no-share");
+  return {
+    paid: row.paid === 1,
+    paidToHost: row.paid_to_host === 1,
+    pardoned: row.pardoned === 1,
+    owed: row.owed_cents,
+    remaining: row.remaining,
+  };
 }

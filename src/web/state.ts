@@ -1,6 +1,5 @@
 import { getShares, type BillRow, type BillSnapshot, type Participant } from "../db/bills";
 import { reconciles } from "../extract/claude";
-import { payerCollects } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 
@@ -19,19 +18,32 @@ export interface BillState {
   // Once anyone has paid, the bill can't be handed to another payer: every
   // recorded payment went to this one.
   hasPayments: boolean;
-  // Members with a payment recorded. A pardon would rewrite what their
-  // payments were measured against, so their group can't be forgiven.
+  // Debtors with a payment against their group, their own or a guest's paid
+  // to the payer directly. A pardon would rewrite what those payments were
+  // measured against, so their group can't be forgiven.
   paid: ParticipantId[];
-  // What the payer is owed by everyone else: the engine's figure less the
-  // shares of guests who came with the payer, which nobody else answers for.
+  // What the payer is owed by everyone else, a guest the payer added included.
   payerCollectsCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
   printedTotalCents: Cents | null;
   reconciles: { ok: boolean; discrepancyCents: Cents | null };
   items: LineItem[];
-  participants: Pick<Participant, "id" | "kind" | "displayName" | "addedBy">[];
+  participants: StateParticipant[];
   result: SplitResult;
+}
+
+// A guest also carries the two paid marks. paidToPayer: the guest paid the
+// payer directly, so their share is off the adder's total. paidToHost: the
+// guest paid the member who added them, which changes nothing the member owes.
+export type StateParticipant = Pick<Participant, "id" | "kind" | "displayName" | "addedBy"> & {
+  paidToPayer?: boolean;
+  paidToHost?: boolean;
+};
+
+export interface GuestsPaid {
+  paidToPayer?: ParticipantId[];
+  paidToHost?: ParticipantId[];
 }
 
 // Someone holding a link to a bill they are not on (they opened it while it
@@ -51,7 +63,10 @@ export function billState(
   viewer: ParticipantId,
   hasPayments: boolean,
   paid: ParticipantId[] = [],
+  guestsPaid: GuestsPaid = {},
 ): BillState {
+  const toPayer = new Set(guestsPaid.paidToPayer);
+  const toHost = new Set(guestsPaid.paidToHost);
   return {
     billId: bill.id,
     revision: bill.revision,
@@ -62,13 +77,16 @@ export function billState(
     editable: editableFor(bill, participants, viewer),
     hasPayments,
     paid,
-    payerCollectsCents: payerCollects(result.payerCollectsCents, result.shares, participants, bill.payerId),
+    payerCollectsCents: result.payerCollectsCents,
     taxCents: bill.taxCents,
     tipCents: bill.tipCents,
     printedTotalCents: bill.printedTotalCents,
     reconciles: reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents }),
     items,
-    participants: participants.map((p) => ({ id: p.id, kind: p.kind, displayName: p.displayName, addedBy: p.addedBy })),
+    participants: participants.map((p) => {
+      const base = { id: p.id, kind: p.kind, displayName: p.displayName, addedBy: p.addedBy };
+      return p.kind === "guest" ? { ...base, paidToPayer: toPayer.has(p.id), paidToHost: toHost.has(p.id) } : base;
+    }),
     result,
   };
 }
@@ -94,6 +112,6 @@ export async function pageResult(db: D1Database, snapshot: BillSnapshot): Promis
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
-  const { bill, input, participants, hasPayments, paid } = snapshot;
-  return billState(bill, await pageResult(db, snapshot), input.items, participants, viewer, hasPayments, paid);
+  const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
+  return billState(bill, await pageResult(db, snapshot), input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost });
 }

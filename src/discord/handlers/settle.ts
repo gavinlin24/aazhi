@@ -30,6 +30,7 @@ import {
 import type { Env } from "../../env";
 import { parsePriceCents } from "../../extract/schema";
 import { formatCents, formatDate } from "../../format";
+import { debtorOf } from "../../money/debtors";
 import type { Cents } from "../../money/types";
 import type { InteractionHandler } from "../interactions";
 import { invokerOf } from "../members";
@@ -300,11 +301,16 @@ export const undoPick: InteractionHandler = async (body, env) => {
     throw error;
   }
 
-  const balance = await balanceOf(env, tap.bill.id, settlement.participant);
+  // A guest's payment was toward what the member who added them owes, so the
+  // balance told is that member's.
+  const paidBy = tap.participants.find((p) => p.id === settlement.participant);
+  const debtor = paidBy ? debtorOf(paidBy, tap.bill.payerId) : settlement.participant;
+  const balance = await balanceOf(env, tap.bill.id, debtor);
   const remaining = balance ? left(balance) : 0;
   const who = nameOf(tap.participants, settlement.participant);
+  const answers = nameOf(tap.participants, debtor);
   const payer = nameOf(tap.participants, tap.bill.payerId);
-  const after = remaining > 0 ? `${who} has ${formatCents(remaining)} left to pay.` : `${who} is still all paid up.`;
+  const after = remaining > 0 ? `${answers} has ${formatCents(remaining)} left to pay.` : `${answers} is still all paid up.`;
   return outLoud(
     `${payer} removed ${who}'s ${formatCents(settlement.cents)} payment on ${escapeMarkdown(billName(tap.bill))}. ${after}`,
   );
@@ -316,9 +322,15 @@ function booleanOption(body: APIInteraction, name: string): boolean | null {
   return option?.type === ApplicationCommandOptionType.Boolean ? option.value : null;
 }
 
+// A guest's row is always one bill, so it names the place instead of a count.
 function ledgerLine(row: LedgerRow): string {
   const n = row.billCount;
-  return `- ${escapeMarkdown(clip(row.displayName, MAX_NAME))}: ${formatCents(row.owedCents - row.settledCents)} (${n} ${n === 1 ? "bill" : "bills"})`;
+  const name = escapeMarkdown(clip(row.displayName, MAX_NAME));
+  const where =
+    row.kind === "guest"
+      ? `your guest at ${escapeMarkdown(clip(row.place?.trim() || "dinner", MAX_NAME))}`
+      : `${n} ${n === 1 ? "bill" : "bills"}`;
+  return `- ${name}: ${formatCents(row.owedCents - row.settledCents)} (${where})`;
 }
 
 function moreLine(rows: LedgerRow[]): string {

@@ -25,7 +25,7 @@ import type { Env } from "../../env";
 import { formatCents, formatDate } from "../../format";
 import { debtorOf, groupByDebtor, groupOf, owedAfterPardon, type DebtorGroup } from "../../money/debtors";
 import { itemPieces } from "../../money/split";
-import type { LineItem, Share } from "../../money/types";
+import type { Cents, LineItem, Share } from "../../money/types";
 import { describeHandle, HANDLE_RULES, METHOD_NAMES, normalizeHandle, PAY_METHODS, payLink, type PayMethod } from "../../web/paylink";
 import type { InteractionHandler } from "../interactions";
 import { invokerOf } from "../members";
@@ -121,6 +121,8 @@ function lineCost(lines: string[]): number {
 export interface GuestMath {
   name: string;
   share: Share;
+  // What the guest paid the payer directly, which is off the person's total.
+  paidDirectlyCents?: Cents;
 }
 
 // The person's items, their tax and tip slices, and the fraction of the bill
@@ -164,16 +166,19 @@ export function renderMath(
     const name = escapeMarkdown(g.name);
     const tail = full ? slices(g.share, `${name}'s`) : [sum(g.share)];
     if (g.share.pardoned) tail.push(`${payer} forgave ${name}'s ${formatCents(g.share.owedCents)}, so you don't owe it.`);
-    return { head: [`**${name}, who came with you**`], rows: full ? itemRows(g.share.participant, items) : [], tail };
+    if (g.paidDirectlyCents) tail.push(`${name} paid ${payer} ${formatCents(g.paidDirectlyCents)} directly, so that's off your total.`);
+    return { head: [`**${name}, your guest**`], rows: full ? itemRows(g.share.participant, items) : [], tail };
   };
+  // Not clamped at zero, so the sum is always the amount Pay my share asks for.
+  const guestOwes = (g: GuestMath) => owedAfterPardon(g.share) - (g.paidDirectlyCents ?? 0);
   const closing =
     guests.length === 0
       ? []
       : [
           `**In all: ${[
             `${formatCents(owedAfterPardon(share))} for you`,
-            ...guests.map((g) => `${formatCents(owedAfterPardon(g.share))} for ${escapeMarkdown(g.name)}`),
-          ].join(" + ")} = ${formatCents(owedAfterPardon(share) + guests.reduce((n, g) => n + owedAfterPardon(g.share), 0))}**`,
+            ...guests.map((g) => `${formatCents(guestOwes(g))} for ${escapeMarkdown(g.name)}`),
+          ].join(" + ")} = ${formatCents(owedAfterPardon(share) + guests.reduce((n, g) => n + guestOwes(g), 0))}**`,
         ];
 
   // A long guest list could crowd out everything else, so past the limit each
@@ -211,7 +216,7 @@ export function pardonNotice(
 ): string | null {
   const target = participants.find((p) => p.id === participantId);
   const share = shares.find((s) => s.participant === participantId);
-  const group = target && groupOf(groupByDebtor(shares, participants), debtorOf(target));
+  const group = target && groupOf(groupByDebtor(shares, participants, bill.payerId), debtorOf(target, bill.payerId));
   if (!target || !share || !group) return null;
 
   const names = new Map(participants.map((p) => [p.id, escapeMarkdown(clip(p.displayName, MAX_NAME))]));
@@ -225,6 +230,30 @@ export function pardonNotice(
   // "Again" only when the row is back to what it was before any pardon.
   const stillForgiven = [group.own, ...group.guests].some((s) => s?.pardoned);
   return clip(`${payer} took back forgiving ${whose}, so ${who} owes ${formatCents(group.owedCents)}${stillForgiven ? "" : " again"}.`, MAX_CONTENT);
+}
+
+// What a guest paying the payer directly, or that being taken back, is
+// announced as, worded like I paid and Undo a payment so the channel reads
+// one way. `leftCents` is what the person answering for the guest has left.
+export function guestPaidNotice(
+  bill: BillRow,
+  participants: Participant[],
+  guestId: string,
+  cents: Cents,
+  paid: boolean,
+  leftCents: Cents,
+): string | null {
+  const guest = participants.find((p) => p.id === guestId);
+  if (!guest) return null;
+  const debtor = debtorOf(guest, bill.payerId);
+  const payer = nameOf(participants, bill.payerId);
+  const who = nameOf(participants, guest.id);
+  const answers = nameOf(participants, debtor);
+  const forBill = escapeMarkdown(billName(bill));
+  const after = leftCents > 0 ? `${answers} has ${formatCents(leftCents)} left to pay.` : `${answers} is all paid up.`;
+  if (!paid) return clip(`${payer} removed ${who}'s ${formatCents(cents)} payment on ${forBill}. ${after}`, MAX_CONTENT);
+  const directly = debtor === guest.id ? "" : " directly";
+  return clip(`${who} paid ${payer} ${formatCents(cents)}${directly} for ${forBill}. ${after}`, MAX_CONTENT);
 }
 
 export function paidUp(payer: string, settledCents: number): string {
@@ -269,7 +298,12 @@ export function paused(tap: DinerTap): string {
 
 // Everything the tapper answers for: their own share and their guests'.
 async function frozenGroup(env: Env, tap: DinerTap): Promise<DebtorGroup | undefined> {
-  return groupOf(groupByDebtor(await getShares(env.DB, tap.bill.id), tap.participants), tap.who);
+  return groupOf(groupByDebtor(await getShares(env.DB, tap.bill.id), tap.participants, tap.bill.payerId), tap.who);
+}
+
+// What each person on the bill has paid toward it, by participant.
+async function paidSoFar(env: Env, tap: DinerTap): Promise<Map<string, Cents>> {
+  return new Map((await getSettled(env.DB, tap.bill.id)).map((s) => [s.participant, s.cents]));
 }
 
 function methodList(methods: PayMethod[]): string {
@@ -280,9 +314,15 @@ function guestNames(tap: DinerTap, shares: Share[]): string[] {
   return shares.map((s) => nameOf(tap.participants, s.participant));
 }
 
+function paidDirectlyNote(tap: DinerTap, direct: Share[], payer: string): string {
+  if (direct.length === 0) return "";
+  return ` ${list(guestNames(tap, direct))} paid ${payer} directly, so ${direct.length === 1 ? "that share is" : "those shares are"} off your total.`;
+}
+
 // Who the amount is for, when it is more than the tapper's own share or less.
-function covers(tap: DinerTap, group: DebtorGroup, payer: string): string {
-  const owing = guestNames(tap, group.guests.filter((s) => !s.pardoned));
+// `direct` are the guests who paid the payer themselves.
+function covers(tap: DinerTap, group: DebtorGroup, payer: string, direct: Share[]): string {
+  const owing = guestNames(tap, group.guests.filter((s) => !s.pardoned && !direct.includes(s)));
   const forgiven = guestNames(tap, group.guests.filter((s) => s.pardoned));
   const parts: string[] = [];
   if (owing.length > 0) {
@@ -293,19 +333,16 @@ function covers(tap: DinerTap, group: DebtorGroup, payer: string): string {
     );
   }
   if (forgiven.length > 0) parts.push(`${payer} forgave ${list(forgiven.map((n) => `${n}'s`))} share.`);
-  return parts.map((p) => ` ${p}`).join("");
+  return parts.map((p) => ` ${p}`).join("") + paidDirectlyNote(tap, direct, payer);
 }
 
 const PAYWITH_HINT = "run `/paywith` to add your Venmo, Cash App or Zelle, and every bill you pay for will offer it";
 
+// A guest the payer added owes the payer directly, so the payer's group is
+// only ever their own share.
 async function payerReply(env: Env, tap: DinerTap, group: DebtorGroup | undefined): Promise<Response> {
   const handles = await getPaymentHandles(env.DB, tap.who);
-  const guests = group ? guestNames(tap, group.guests) : [];
-  const own = !group
-    ? ""
-    : guests.length > 0
-      ? ` Your own part of it, with ${list(guests)}, was ${formatCents(group.owedCents)}.`
-      : ` Your own part of it was ${formatCents(group.owedCents)}.`;
+  const own = group ? ` Your own part of it was ${formatCents(group.owedCents)}.` : "";
   const how =
     handles.length === 0
       ? ` Nobody can pay you by link yet: ${PAYWITH_HINT}.`
@@ -327,17 +364,24 @@ export const payTap: InteractionHandler = async (body, env, ctx) => {
   if (group.owedCents <= 0) return privately("You don't owe anything on this bill.");
 
   // What is left, not the frozen amount: a link for the full share after a
-  // partial payment would ask the person to pay twice.
-  const settled = (await getSettled(env.DB, tap.bill.id)).find((s) => s.participant === tap.who)?.cents ?? 0;
-  const remaining = group.owedCents - settled;
-  if (remaining <= 0) return privately(paidUp(payer, settled));
+  // partial payment would ask the person to pay twice. What a guest paid the
+  // payer directly was never the tapper's to pay.
+  const paid = await paidSoFar(env, tap);
+  const settled = paid.get(tap.who) ?? 0;
+  const direct = group.guests.filter((g) => (paid.get(g.participant) ?? 0) > 0);
+  const owed = group.owedCents - direct.reduce((n, g) => n + paid.get(g.participant)!, 0);
+  const remaining = owed - settled;
+  if (remaining <= 0) {
+    const none = settled > 0 ? paidUp(payer, settled) : "You don't owe anything on this bill.";
+    return privately(none + paidDirectlyNote(tap, direct, payer));
+  }
   const amount = formatCents(remaining);
   const forBill = escapeMarkdown(billName(tap.bill));
   const head =
     (settled > 0
-      ? `You have **${amount}** left to pay ${payer} for ${forBill}: you've paid ${formatCents(settled)} of ${formatCents(group.owedCents)}.`
+      ? `You have **${amount}** left to pay ${payer} for ${forBill}: you've paid ${formatCents(settled)} of ${formatCents(owed)}.`
       : `You owe ${payer} **${amount}** for ${forBill}.`) +
-    covers(tap, group, payer) +
+    covers(tap, group, payer, direct) +
     " Tap **I paid** on the bill once you've sent it.";
   const handles = await getPaymentHandles(env.DB, tap.bill.payerId);
   if (handles.length === 0) {
@@ -384,11 +428,12 @@ export const mathTap: InteractionHandler = async (body, env, ctx) => {
       "This bill was reopened, so its amounts are provisional again. Tap **Open the split** to see where they stand.",
     );
   }
-  const [group, items] = await Promise.all([frozenGroup(env, tap), getBillItems(env.DB, tap.bill.id)]);
+  const [group, items, paid] = await Promise.all([frozenGroup(env, tap), getBillItems(env.DB, tap.bill.id), paidSoFar(env, tap)]);
   if (!group?.own) return privately(NO_SHARE);
   const guests = group.guests.map((share) => ({
     name: tap.participants.find((p) => p.id === share.participant)?.displayName ?? "Your guest",
     share,
+    paidDirectlyCents: paid.get(share.participant) ?? 0,
   }));
   return privately(renderMath(group.own, items, tap.bill, { guests, payer: nameOf(tap.participants, tap.bill.payerId) }));
 };
