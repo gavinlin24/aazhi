@@ -13,17 +13,22 @@ import {
   PardonRefusedError,
   PaymentsRecordedError,
   reassignPayer,
+  removeGuest,
+  renameGuest,
   setBillAmounts,
   setClaim,
   setPardon,
   type BillAmounts,
   type BillRow,
   type BillSnapshot,
+  type Participant,
 } from "../db/bills";
-import { pardonNotice } from "../discord/handlers/owe";
+import { GuestPaidRefusedError, outstanding, setGuestPaidToHost, setGuestPaidToPayer } from "../db/settlements";
+import { guestPaidNotice, pardonNotice } from "../discord/handlers/owe";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
+import { debtorOf } from "../money/debtors";
 import type { Cents, ParticipantId } from "../money/types";
 import { stateOf } from "./state";
 import { readToken } from "./token";
@@ -188,9 +193,14 @@ api.post(
     if (snapshot instanceof Response) return snapshot;
     const isPayer = grant.participantId === snapshot.bill.payerId;
     const onBill = (id: ParticipantId) => snapshot.participants.some((p) => p.id === id);
+    // A guest can't tap anything, so the member who added them taps for them.
+    const ownGuest = snapshot.participants.some((p) => p.id === participantId && p.kind === "guest" && p.addedBy === grant.participantId);
 
-    if (!isPayer && participantId !== grant.participantId) {
-      return refuse(403, `Only ${payerName(snapshot)} can tap other people onto a line. Tap your own chip for what you had.`);
+    if (!isPayer && participantId !== grant.participantId && !ownGuest) {
+      return refuse(
+        403,
+        `Only ${payerName(snapshot)} can tap other people onto a line. Tap your own chip for what you had, or a guest's you added.`,
+      );
     }
     if (!onBill(participantId)) {
       return participantId === grant.participantId ? refuse(403, NOT_ON_BILL) : refuse(400, "That person isn't on this bill.");
@@ -303,42 +313,188 @@ function nameTaken(existing: string): string {
   return `${existing} is already on this bill. Give the guest a name that tells them apart, like one with an initial.`;
 }
 
-// A guest is somebody at the table without a Discord account, so the payer
-// puts them on and names the member who answers for what they had.
+function guestName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (name.length === 0 || name.length > MAX_GUEST_NAME) bad(`Give the guest a name of 1 to ${MAX_GUEST_NAME} characters.`);
+  return name;
+}
+
+// Two people with one name would make every row and payment ambiguous. The
+// write checks again; this answers with the name already there.
+function nameClash(snapshot: BillSnapshot, name: string, except: ParticipantId | null = null): Response | null {
+  const clash = snapshot.participants.find((p) => p.id !== except && p.displayName.trim().toLowerCase() === name.toLowerCase());
+  return clash ? refuse(400, nameTaken(clash.displayName)) : null;
+}
+
+const GUEST_GONE = "That guest isn't on this bill any more.";
+
+// A guest is somebody at the table without a Discord account. Whoever adds
+// them answers for what they had, so there is nobody to name but the viewer.
 api.post(
   "/:billId/guest",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, ["name", "with"]);
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (name.length === 0 || name.length > MAX_GUEST_NAME) bad(`Give the guest a name of 1 to ${MAX_GUEST_NAME} characters.`);
-    const companion = text(body.with, "with");
+    expectKeys(body, ["name"]);
+    const name = guestName(body.name);
 
     const snapshot = await loadDraft(c, grant);
     if (snapshot instanceof Response) return snapshot;
-    if (grant.participantId !== snapshot.bill.payerId) {
-      return refuse(403, `Only ${payerName(snapshot)} can add a guest, because they paid. Ask them to add yours.`);
-    }
-    // Two people with one name would make every row and payment ambiguous.
-    const clash = snapshot.participants.find((p) => p.displayName.trim().toLowerCase() === name.toLowerCase());
-    if (clash) return refuse(400, nameTaken(clash.displayName));
-    if (!snapshot.participants.some((p) => p.id === companion && p.kind === "member")) {
-      return refuse(400, "Pick who the guest came with from the people on the bill. Their share goes to that person.");
-    }
+    if (!snapshot.participants.some((p) => p.id === grant.participantId && p.kind === "member")) return refuse(403, NOT_ON_BILL);
+    const clash = nameClash(snapshot, name);
+    if (clash) return clash;
 
     try {
       return await commit(c, grant, snapshot.bill, () =>
-        addGuest(c.env.DB, grant.billId, { id: `guest-${crypto.randomUUID()}`, displayName: name, with: companion }),
+        addGuest(c.env.DB, grant.billId, { id: `guest-${crypto.randomUUID()}`, displayName: name, addedBy: grant.participantId }),
       );
     } catch (error) {
       if (!(error instanceof GuestRefusedError)) throw error;
       // Someone changed the roster between the read above and the write.
+      return error.reason === "name-taken" ? refuse(400, nameTaken(name)) : refuse(403, NOT_ON_BILL);
+    }
+  }),
+);
+
+// The member who added a guest looks after them, and the payer can tidy up
+// anyone's. `action` finishes the sentence "Only X or Y can ...".
+function guestFor(
+  snapshot: BillSnapshot,
+  grant: Grant,
+  guestId: ParticipantId,
+  action: string,
+): Participant | Response {
+  const guest = snapshot.participants.find((p) => p.id === guestId && p.kind === "guest");
+  if (!guest) return refuse(404, GUEST_GONE);
+  if (grant.participantId !== guest.addedBy && grant.participantId !== snapshot.bill.payerId) {
+    const adder = snapshot.participants.find((p) => p.id === guest.addedBy)?.displayName ?? "whoever added them";
+    const or = guest.addedBy === snapshot.bill.payerId ? "" : ` or ${payerName(snapshot)}`;
+    return refuse(403, `Only ${adder}, who added ${guest.displayName},${or} can ${action}.`);
+  }
+  return guest;
+}
+
+api.patch(
+  "/:billId/guest/:guestId",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["name"]);
+    const name = guestName(body.name);
+
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const guest = guestFor(snapshot, grant, c.req.param("guestId") ?? "", "rename them");
+    if (guest instanceof Response) return guest;
+    const clash = nameClash(snapshot, name, guest.id);
+    if (clash) return clash;
+
+    try {
+      return await commit(c, grant, snapshot.bill, () => renameGuest(c.env.DB, grant.billId, guest.id, name));
+    } catch (error) {
+      if (!(error instanceof GuestRefusedError)) throw error;
+      return error.reason === "name-taken" ? refuse(400, nameTaken(name)) : refuse(404, GUEST_GONE);
+    }
+  }),
+);
+
+api.delete(
+  "/:billId/guest/:guestId",
+  route(async (c, grant) => {
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const guest = guestFor(snapshot, grant, c.req.param("guestId") ?? "", "take them off");
+    if (guest instanceof Response) return guest;
+
+    try {
+      return await commit(c, grant, snapshot.bill, () => removeGuest(c.env.DB, grant.billId, guest.id));
+    } catch (error) {
+      if (!(error instanceof GuestRefusedError)) throw error;
+      if (error.reason !== "paid") return refuse(404, GUEST_GONE);
+      // Only on a reopened bill, whose payments stay put until it is confirmed
+      // again; taking the guest off their lines leaves them owing nothing.
       return refuse(
-        400,
-        error.reason === "name-taken"
-          ? nameTaken(name)
-          : "Pick who the guest came with from the people on the bill. Their share goes to that person.",
+        409,
+        `There's already a payment toward ${guest.displayName}'s share on this bill, so they can't be taken off now. ` +
+          `Take ${guest.displayName} off their lines instead, and their share drops to nothing.`,
       );
+    }
+  }),
+);
+
+// Said in the channel like any payment, so the member who added the guest
+// hears that part of what they owe was paid. A failed post is logged and the
+// mark stands.
+async function announceGuestPaid(env: Env, billId: string, guestId: ParticipantId, cents: Cents, paid: boolean): Promise<void> {
+  const [bill, participants, standing] = await Promise.all([getBill(env.DB, billId), getParticipants(env.DB, billId), outstanding(env.DB, billId)]);
+  const guest = participants.find((p) => p.id === guestId);
+  if (!bill || !guest) return;
+  const row = standing.find((o) => o.participant === debtorOf(guest, bill.payerId));
+  const content = guestPaidNotice(bill, participants, guestId, cents, paid, row ? row.owedCents - row.settledCents : 0);
+  if (!content) return;
+  await postChannelMessage(bill.channelId, { content, allowed_mentions: { parse: [] } }, env);
+}
+
+// Two marks on one endpoint, told apart by who sets them. The payer's means
+// the guest paid the payer directly and is a payment; the adder's means the
+// guest paid the adder and is bookkeeping between the two of them. When the
+// payer added the guest, both are the payer's, and so is the meaning.
+api.post(
+  "/:billId/guest/:guestId/paid",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["paid"]);
+    const paid = body.paid;
+    if (typeof paid !== "boolean") bad('"paid" must be true or false.');
+
+    const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
+    if (!snapshot) return refuse(404, NOT_FOUND);
+    const gone = GONE[snapshot.bill.status];
+    if (gone) return refuse(409, gone);
+    const guest = guestFor(snapshot, grant, c.req.param("guestId") ?? "", "mark them paid");
+    if (guest instanceof Response) return guest;
+    const payer = payerName(snapshot);
+    if (snapshot.bill.status !== "confirmed") {
+      return refuse(409, "This bill isn't confirmed, so nobody owes anything on it yet. Mark the guest paid once it's confirmed.");
+    }
+    const debtor = debtorOf(guest, snapshot.bill.payerId);
+    const answers = snapshot.participants.find((p) => p.id === debtor)?.displayName ?? guest.displayName;
+
+    try {
+      return await commit(c, grant, snapshot.bill, async () => {
+        if (grant.participantId !== snapshot.bill.payerId) {
+          return (await setGuestPaidToHost(c.env.DB, grant.billId, guest.id, paid)) ?? snapshot.bill.revision;
+        }
+        const done = await setGuestPaidToPayer(c.env.DB, grant.billId, guest.id, paid);
+        if (done === null) return snapshot.bill.revision;
+        c.executionCtx.waitUntil(
+          announceGuestPaid(c.env, grant.billId, guest.id, done.cents, paid).catch((error) =>
+            console.error("could not announce the guest's payment", error),
+          ),
+        );
+        return done.revision;
+      });
+    } catch (error) {
+      if (!(error instanceof GuestPaidRefusedError)) throw error;
+      switch (error.reason) {
+        case "not-confirmed":
+          return refuse(409, "This bill isn't confirmed any more, so paying is paused. Mark the guest paid once it's confirmed again.");
+        case "no-guest":
+          return refuse(404, GUEST_GONE);
+        case "no-share":
+        case "nothing-owed":
+          return refuse(409, `${guest.displayName} has nothing to pay on this bill.`);
+        case "forgiven":
+          return refuse(409, `${payer} forgave ${guest.displayName}'s share, so there's nothing for them to pay.`);
+        case "covered":
+          // The money already reached the payer through the adder; counting
+          // the guest's too would have the payer owing someone back.
+          return refuse(
+            409,
+            `${answers} has already paid you ${guest.displayName}'s share, so it can't be paid twice. ` +
+              `If ${guest.displayName} paid you instead, undo ${answers}'s payment with Undo a payment in Discord first.`,
+          );
+        case "changed":
+          return refuse(409, "The bill changed while you were doing that. Look again and try once more.");
+      }
     }
   }),
 );
@@ -383,13 +539,8 @@ api.post(
     }
     const target = snapshot.participants.find((p) => p.id === participantId);
     if (!target) return refuse(400, "That person isn't on this bill.");
-    const debtor = target.kind === "guest" && target.addedBy ? target.addedBy : target.id;
-    if (debtor === snapshot.bill.payerId) {
-      return refuse(
-        400,
-        target.id === debtor ? "That's your own share, so there's nobody to forgive." : `${target.displayName} came with you, so their share is already yours.`,
-      );
-    }
+    const debtor = debtorOf(target, snapshot.bill.payerId);
+    if (debtor === snapshot.bill.payerId) return refuse(400, "That's your own share, so there's nobody to forgive.");
 
     try {
       return await commit(c, grant, snapshot.bill, async () => {
@@ -415,8 +566,8 @@ api.post(
           // against an amount nobody owes, so the payments go first.
           return refuse(
             409,
-            `${answers} has already paid you something on this bill, so ${target.id === debtor ? "their" : `${target.displayName}'s`} ` +
-              "share can't be forgiven or brought back now. Undo their payments with Undo a payment in Discord first.",
+            `There's already a payment toward what ${answers} owes on this bill, so ${target.id === debtor ? "their" : `${target.displayName}'s`} ` +
+              "share can't be forgiven or brought back now. Undo the payment with Undo a payment in Discord first.",
           );
         case "changed":
           return refuse(409, "The bill changed while you were doing that. Look again and try once more.");

@@ -3,7 +3,7 @@ import { formatCents, formatDate } from "../format";
 import { debtorOf, groupByDebtor, groupOf } from "../money/debtors";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { CLIENT_SCRIPT } from "./client";
-import { billState, type BillState, type Editable } from "./state";
+import { billState, type BillState, type Editable, type GuestsPaid } from "./state";
 
 export type { Editable } from "./state";
 
@@ -449,7 +449,7 @@ function youExtra(v: View, own: Share, guests: Share[]): string {
 }
 
 function youSummary(v: View): string {
-  const group = groupOf(groupByDebtor(v.result.shares, v.participants), v.viewer);
+  const group = groupOf(groupByDebtor(v.result.shares, v.participants, v.bill.payerId), v.viewer);
   const share = group?.own;
   const draft = v.bill.status === "draft";
   const soFar = draft ? " so far" : "";
@@ -564,7 +564,7 @@ function chipOrder(v: View): Participant[] {
 function chip(v: View, item: LineItem, p: Participant): string {
   const isViewer = p.id === v.viewer;
   const claimed = item.claimedBy.includes(p.id);
-  const canTap = v.editable === "all" || (v.editable === "self" && isViewer);
+  const canTap = v.editable === "all" || (v.editable === "self" && (isViewer || (p.kind === "guest" && p.addedBy === v.viewer)));
   const name = isViewer ? "You" : escapeHtml(v.names.get(p.id) ?? p.id);
   return (
     `<button type="button" class="chip${isViewer ? " is-viewer" : ""}" ` +
@@ -632,14 +632,15 @@ function canForgive(v: View): boolean {
 
 function forgiveSlot(v: View, p: Participant): string {
   const share = v.shares.get(p.id);
-  if (!share || debtorOf(p) === v.bill.payerId) return `<span class="forgive-slot"></span>`;
+  const debtor = debtorOf(p, v.bill.payerId);
+  if (!share || debtor === v.bill.payerId) return `<span class="forgive-slot"></span>`;
   const name = escapeHtml(p.displayName);
   // The label names what a click does next, so it is not a toggle: no
   // aria-pressed, and the script reads data-pardoned to send the opposite.
   const label = share.pardoned ? `Undo forgiving ${name}'s share` : `Forgive ${name}'s share`;
   return (
     `<span class="forgive-slot"><button type="button" class="btn forgive" data-forgive="${escapeHtml(p.id)}" ` +
-    `data-pardoned="${share.pardoned}" aria-label="${label}"${v.paid.has(debtorOf(p)) ? " disabled" : ""}>${share.pardoned ? "Undo" : "Forgive"}</button></span>`
+    `data-pardoned="${share.pardoned}" aria-label="${label}"${v.paid.has(debtor) ? " disabled" : ""}>${share.pardoned ? "Undo" : "Forgive"}</button></span>`
   );
 }
 
@@ -650,8 +651,7 @@ function personRow(v: View, p: Participant): string {
   if (p.id === v.bill.payerId) tags.push("paid");
   if (p.kind === "guest") {
     const host = p.addedBy ? v.names.get(p.addedBy) : undefined;
-    if (p.addedBy && p.addedBy === v.bill.payerId) tags.push(p.addedBy === v.viewer ? "covered by you" : `covered by ${escapeHtml(host ?? "the payer")}`);
-    else tags.push(host ? `guest of ${escapeHtml(host)}` : "guest");
+    tags.push(host ? `guest of ${escapeHtml(host)}` : "guest");
   }
   if (share?.pardoned) tags.push("forgiven");
   const tagHtml = tags.map((t) => `<span class="tag">${t}</span>`).join("");
@@ -659,28 +659,24 @@ function personRow(v: View, p: Participant): string {
 }
 
 function forgiveNote(v: View): string {
-  const blocked = v.participants.some((p) => v.shares.has(p.id) && debtorOf(p) !== v.bill.payerId && v.paid.has(debtorOf(p)));
+  const payer = v.bill.payerId;
+  const blocked = v.participants.some((p) => v.shares.has(p.id) && debtorOf(p, payer) !== payer && v.paid.has(debtorOf(p, payer)));
   return (
     "Forgive a share and you cover it yourself; nobody else's amount changes." +
     (blocked ? " Someone who has paid can't be forgiven until their payments are undone in Discord." : "")
   );
 }
 
-// Rendered (hidden) for the payer off-draft too, like the receipt check, so a
-// reopened bill can offer it again without a reload. Only members are offered
-// as who the guest came with: a guest's share needs someone who can pay it.
+// Rendered (hidden) off-draft too, like the receipt check, so a reopened bill
+// can offer it again without a reload. Any member on the bill can add a guest;
+// whoever adds one answers for them, so there is nobody to pick.
 function guestForm(v: View): string {
-  if (!v.viewerIsPayer) return "";
-  const options = v.participants
-    .filter((p) => p.kind === "member")
-    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.displayName)}</option>`)
-    .join("");
+  if (!v.participants.some((p) => p.id === v.viewer && p.kind === "member")) return "";
   return `<form class="card guest-form needs-js" data-guest-form novalidate${v.bill.status === "draft" ? "" : " hidden"}>
 <h3 class="check-heading">Add a guest</h3>
-<p class="field-note">For someone at dinner who isn't on Discord. What they had is added to the person they came with.</p>
+<p class="field-note">For someone at dinner who isn't on Discord. You tap them onto what they had, and they settle up with you.</p>
 <div class="guest-fields">
-<div class="editor-row"><label for="guest-name">Name</label><input id="guest-name" class="text-input" name="name" maxlength="40" autocomplete="off" enterkeyhint="next"></div>
-<div class="editor-row"><label for="guest-with">Came with</label><select id="guest-with" class="text-input" name="with"><option value="" disabled selected>Pick someone</option>${options}</select></div>
+<div class="editor-row"><label for="guest-name">Name</label><input id="guest-name" class="text-input" name="name" maxlength="40" autocomplete="off" enterkeyhint="done"></div>
 </div>
 <p class="editor-msg" role="status"></p>
 <div class="editor-actions"><button type="submit" class="btn primary" disabled>Add guest</button></div>
@@ -720,9 +716,9 @@ export function renderPage(
   items: LineItem[],
   participants: Participant[],
   viewer: ParticipantId,
-  options: { hasPayments?: boolean; paid?: ParticipantId[] } = {},
+  options: { hasPayments?: boolean; paid?: ParticipantId[] } & GuestsPaid = {},
 ): string {
-  const state = billState(bill, result, items, participants, viewer, options.hasPayments ?? false, options.paid ?? []);
+  const state = billState(bill, result, items, participants, viewer, options.hasPayments ?? false, options.paid ?? [], options);
   const v: View = {
     bill,
     result,

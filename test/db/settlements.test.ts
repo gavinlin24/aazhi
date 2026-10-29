@@ -258,6 +258,8 @@ describe("ledger", () => {
     expect(here.find((r) => r.participant === "marcus")).toEqual({
       participant: "marcus",
       displayName: "Marcus",
+      kind: "member",
+      place: "Saigon Kitchen",
       owedCents: 4446,
       settledCents: 4000,
       billCount: 1,
@@ -268,6 +270,8 @@ describe("ledger", () => {
     expect(everywhere.find((r) => r.participant === "marcus")).toEqual({
       participant: "marcus",
       displayName: "Marcus",
+      kind: "member",
+      place: "Saigon Kitchen",
       owedCents: 8892,
       settledCents: 4000,
       billCount: 2,

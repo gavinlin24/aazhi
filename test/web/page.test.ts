@@ -394,20 +394,14 @@ describe("renderPage", () => {
 
     const tagsOf = async (html: string) => (await select(html, "li.person .tag")).map((t) => t.text);
 
-    it("says covered by you to the payer, for a guest who came with the payer", async () => {
-      expect(await tagsOf(list("gavin"))).toEqual(["you", "paid", "forgiven", "guest of Dani", "covered by you"]);
-    });
-
-    it("says covered by the payer's name to everyone else", async () => {
-      expect(await tagsOf(list("marcus"))).toEqual(["paid", "you", "forgiven", "guest of Dani", "covered by Gavin"]);
-    });
-
-    it("keeps guest of Dani for a guest of any other member, for every viewer", async () => {
+    // A guest the payer added owes the payer like anyone else, so nothing says
+    // the payer covers them.
+    it("names whoever added each guest, the payer included, for every viewer", async () => {
+      expect(await tagsOf(list("gavin"))).toEqual(["you", "paid", "forgiven", "guest of Dani", "guest of Gavin"]);
+      expect(await tagsOf(list("marcus"))).toEqual(["paid", "you", "forgiven", "guest of Dani", "guest of Gavin"]);
       for (const viewer of ["gavin", "marcus", "dani"]) {
         const tags = (await tagsOf(list(viewer))).filter((t) => t.startsWith("guest") || t.startsWith("covered"));
-        expect(tags.filter((t) => t === "guest of Dani"), viewer).toHaveLength(1);
-        expect(tags.filter((t) => t.startsWith("covered by")), viewer).toHaveLength(1);
-        expect(tags, viewer).toHaveLength(2);
+        expect(tags, viewer).toEqual(["guest of Dani", "guest of Gavin"]);
       }
     });
 
@@ -423,11 +417,12 @@ describe("renderPage", () => {
       expect(html).toMatch(/\.money\.is-guest\s*\{[^}]*color:\s*var\(--muted\)/);
     });
 
-    it("does not offer a forgive button for the payer's own guest", async () => {
+    it("offers a forgive button for a guest the payer added, who owes the payer directly", async () => {
       const html = list("gavin");
 
-      expect(await select(html, 'button[data-forgive="guest-kim"]')).toEqual([]);
+      expect(await select(html, 'button[data-forgive="guest-kim"]')).toHaveLength(1);
       expect(await select(html, 'button[data-forgive="guest-sam"]')).toHaveLength(1);
+      expect(await select(html, 'button[data-forgive="gavin"]')).toEqual([]);
     });
   });
 

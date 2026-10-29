@@ -19,7 +19,7 @@ import {
 } from "../db/bills";
 import { reconciles } from "../extract/claude";
 import { formatCents, formatDate } from "../format";
-import { groupByDebtor, groupOf, type DebtorGroup } from "../money/debtors";
+import { debtorOf, groupByDebtor, groupOf, type DebtorGroup } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { LineItem, Share, SplitResult } from "../money/types";
 
@@ -123,14 +123,17 @@ export function groupName(group: DebtorGroup, names: Map<string, string>): strin
   return group.guests.length === 0 ? own : `${own}, including ${and(group.guests.map((g) => names.get(g.participant)!))}`;
 }
 
+// One line per person who answers for a share: every member, and any guest the
+// payer added, who owes the payer directly.
 function owedField(bill: BillRow, result: SplitResult, participants: Participant[], names: Map<string, string>): APIEmbedField {
-  const groups = groupByDebtor(result.shares, participants);
+  const groups = groupByDebtor(result.shares, participants, bill.payerId);
   const lines = participants
-    .filter((p) => p.kind === "member")
+    .filter((p) => debtorOf(p, bill.payerId) === p.id)
     .map((p) => {
       const group = groupOf(groups, p.id) ?? { debtor: p.id, own: undefined, guests: [], owedCents: 0 };
       const paid = p.id === bill.payerId ? " (paid the bill)" : "";
-      return `${groupName(group, names)} ${groupAmount(group, names)}${paid}`;
+      const who = p.kind === "guest" ? `${names.get(p.id)} (guest)` : groupName(group, names);
+      return `${who} ${groupAmount(group, names)}${paid}`;
     });
   const unclaimed = result.unclaimedCents !== 0 ? `**Unclaimed ${formatCents(result.unclaimedCents)}**` : "";
   const budget = LIMITS.fieldValue - (unclaimed ? unclaimed.length + 1 : 0);
@@ -278,7 +281,7 @@ function oweCard(
     names,
     payerName,
   );
-  const rows = groupByDebtor(frozen, participants).map((group) => {
+  const rows = groupByDebtor(frozen, participants, bill.payerId).map((group) => {
     const member = participants.find((p) => p.id === group.debtor);
     const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);
     const paid = group.debtor === bill.payerId ? " (paid the bill)" : "";

@@ -1,7 +1,8 @@
 import { reconciles } from "../extract/claude";
-import { groupByDebtor, groupOf, type Diner } from "../money/debtors";
+import { groupByDebtor, groupOf, paidByDebtor, type Diner } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import { debtorOfSql, debtorSql, groupPaidSql } from "./debt";
 
 export type BillStatus = "reading" | "draft" | "confirmed" | "superseded" | "deleted";
 
@@ -302,9 +303,14 @@ export interface BillSnapshot {
   // Whether anyone has paid against this bill, which is what stops the payer
   // being handed to someone else.
   hasPayments: boolean;
-  // The members anyone has recorded a payment for. Payments only ever name
-  // members: a guest's share is paid by whoever brought them.
+  // Everyone who answers for a share and has a payment against it: their own,
+  // or a guest of theirs paying the payer directly.
   paid: ParticipantId[];
+  // Guests who paid the payer directly: a payment recorded against the guest.
+  paidToPayer: ParticipantId[];
+  // Guests who paid the member who added them. Bookkeeping only, and only
+  // while that member is not the payer, since then the two are one.
+  paidToHost: ParticipantId[];
 }
 
 function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement[] {
@@ -318,12 +324,20 @@ function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement
     itemsStatement(db, billId),
     claimsStatement(db, billId),
     participantsStatement(db, billId),
-    // Two lists in one statement, tagged, so a snapshot stays a fixed number
+    // The lists in one statement, tagged, so a snapshot stays a fixed number
     // of reads however much the bill holds.
     db
       .prepare(
         `SELECT 'pardoned' AS list, participant_id FROM shares WHERE bill_id = ?1 AND pardoned = 1
-         UNION SELECT 'paid', participant_id FROM settlements WHERE bill_id = ?1
+         UNION SELECT 'paid', ${debtorSql("q", "b.payer_id")} FROM settlements x
+           JOIN participants q ON q.bill_id = x.bill_id AND q.id = x.participant_id JOIN bills b ON b.id = x.bill_id
+           WHERE x.bill_id = ?1
+         UNION SELECT 'paidToPayer', x.participant_id FROM settlements x
+           JOIN participants q ON q.bill_id = x.bill_id AND q.id = x.participant_id
+           WHERE x.bill_id = ?1 AND q.kind = 'guest'
+         UNION SELECT 'paidToHost', s.participant_id FROM shares s
+           JOIN participants q ON q.bill_id = s.bill_id AND q.id = s.participant_id JOIN bills b ON b.id = s.bill_id
+           WHERE s.bill_id = ?1 AND s.paid_to_host_at IS NOT NULL AND q.kind = 'guest' AND q.added_by <> b.payer_id
          ORDER BY 1, 2`,
       )
       .bind(billId),
@@ -342,8 +356,9 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
   if (!billRow) return null;
 
   const people = (participants.results as ParticipantDbRow[]).map(toParticipant);
-  const tagged = lists.results as { list: "pardoned" | "paid"; participant_id: string }[];
-  const listed = (which: "pardoned" | "paid") => tagged.filter((r) => r.list === which).map((r) => r.participant_id);
+  type List = "pardoned" | "paid" | "paidToPayer" | "paidToHost";
+  const tagged = lists.results as { list: List; participant_id: string }[];
+  const listed = (which: List) => tagged.filter((r) => r.list === which).map((r) => r.participant_id);
   return {
     bill: toBill(billRow),
     participants: people,
@@ -357,6 +372,8 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
     },
     hasPayments: billRow.has_payments === 1,
     paid: listed("paid"),
+    paidToPayer: listed("paidToPayer"),
+    paidToHost: listed("paidToHost"),
   };
 }
 
@@ -688,31 +705,33 @@ export async function getSettled(db: D1Database, billId: string): Promise<Settle
   return toSettled(await settledStatement(db, billId).all());
 }
 
-// A share is clear when the payments of the member who answers for it reach
-// everything that member is asked for after pardons: their own share and the
-// shares of any guests they brought, so a guest's row settles with its
-// companion's. That is never stored as a decision of its own. settled_at only
-// remembers when it first became true (time-to-settle is a statistic), so
-// every write that moves either side re-derives it in the same batch. The
-// derivation reads nothing but the rows as they stand, so running it after a
-// write that matched nothing changes nothing. The payer owes nobody, so their
-// own row, and any guest they brought, never settles. `debtor` is the member
-// whose rows to re-derive; null re-derives the whole bill.
+// A share is clear when the payments against the group that answers for it
+// reach everything that group is asked for after pardons: the debtor's own
+// share and their guests', so a guest's row settles with the member who added
+// them, whoever of the two paid. That is never stored as a decision of its
+// own. settled_at only remembers when it first became true (time-to-settle is
+// a statistic), so every write that moves either side re-derives it in the
+// same batch. The derivation reads nothing but the rows as they stand, so
+// running it after a write that matched nothing changes nothing. The payer
+// owes nobody, so their own row never settles. `who` picks the group to
+// re-derive, by its debtor or any guest in it; null re-derives the whole bill.
 export function settledAtStatement(
   db: D1Database,
   billId: string,
-  debtor: ParticipantId | null,
+  who: ParticipantId | null,
   now: string,
 ): D1PreparedStatement {
   return db
     .prepare(
       `WITH debt AS (
-         SELECT id AS participant, COALESCE(added_by, id) AS debtor FROM participants WHERE bill_id = ?1
+         SELECT q.id AS participant, ${debtorSql("q", "b.payer_id")} AS debtor
+         FROM participants q JOIN bills b ON b.id = q.bill_id WHERE q.bill_id = ?1
        ),
        owing AS (
          SELECT d.debtor,
            SUM(CASE WHEN s.pardoned = 1 THEN 0 ELSE s.owed_cents END) AS owed,
-           (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x WHERE x.bill_id = ?1 AND x.participant_id = d.debtor) AS paid
+           (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x JOIN debt e ON e.participant = x.participant_id
+            WHERE x.bill_id = ?1 AND e.debtor = d.debtor) AS paid
          FROM shares s JOIN debt d ON d.participant = s.participant_id
          WHERE s.bill_id = ?1
          GROUP BY d.debtor
@@ -722,9 +741,10 @@ export function settledAtStatement(
          WHEN o.paid >= o.owed THEN COALESCE(shares.settled_at, ?3)
          ELSE NULL END
        FROM debt d JOIN owing o ON o.debtor = d.debtor
-       WHERE shares.bill_id = ?1 AND shares.participant_id = d.participant AND (?2 IS NULL OR d.debtor = ?2)`,
+       WHERE shares.bill_id = ?1 AND shares.participant_id = d.participant
+         AND (?2 IS NULL OR d.debtor = (SELECT debtor FROM debt WHERE participant = ?2))`,
     )
-    .bind(billId, debtor, now);
+    .bind(billId, who, now);
 }
 
 export interface AmountChange {
@@ -737,16 +757,24 @@ export interface AmountChange {
 // Only someone who has already paid needs telling: anyone else just sees
 // their new number before they pay it. Shared by reopen and re-confirm so
 // both say the same thing about the same difference. Amounts are what each
-// paying member answers for after pardons, guests included, since that is
-// what their payments were measured against.
-export function amountChanges(frozen: Share[], now: SplitResult, settled: Settled[], diners: Diner[]): AmountChange[] {
-  const was = groupByDebtor(frozen, diners);
-  const owed = groupByDebtor(now.shares, diners);
-  return settled.flatMap(({ participant, cents }) => {
+// paying debtor answers for after pardons, guests included, since that is
+// what their payments were measured against, less whatever their guests paid
+// the payer directly, which was never theirs to pay.
+export function amountChanges(
+  frozen: Share[],
+  now: SplitResult,
+  settled: Settled[],
+  diners: Diner[],
+  payer: ParticipantId,
+): AmountChange[] {
+  const was = groupByDebtor(frozen, diners, payer);
+  const owed = groupByDebtor(now.shares, diners, payer);
+  return [...paidByDebtor(settled, diners, payer)].flatMap(([participant, { ownCents, directCents }]) => {
     const before = groupOf(was, participant);
-    const nowCents = groupOf(owed, participant)?.owedCents ?? 0;
-    if (cents <= 0 || before === undefined || before.owedCents === nowCents) return [];
-    return [{ participant, wasCents: before.owedCents, nowCents, settledCents: cents }];
+    if (ownCents <= 0 || before === undefined) return [];
+    const wasCents = before.owedCents - directCents;
+    const nowCents = (groupOf(owed, participant)?.owedCents ?? 0) - directCents;
+    return wasCents === nowCents ? [] : [{ participant, wasCents, nowCents, settledCents: ownCents }];
   });
 }
 
@@ -785,7 +813,7 @@ export async function confirmBill(
 
   // A bill confirmed before carries its old frozen rows; comparing against
   // them is what lets a re-confirm say out loud whose amount moved.
-  const changes = amountChanges(toShares(results[5]!), split, toSettled(results[6]!), snapshot.participants);
+  const changes = amountChanges(toShares(results[5]!), split, toSettled(results[6]!), snapshot.participants, bill.payerId);
 
   const atRevision = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'draft' AND revision = ?2)";
   // A pardon flag survives a re-confirm. Whether someone is still clear under
@@ -833,7 +861,7 @@ export async function reopenBill(db: D1Database, billId: string): Promise<Amount
   ]);
   if (reopened!.results.length === 0) throw new BillNotConfirmedError(billId);
   const snapshot = assembleSnapshot(rest)!;
-  return amountChanges(toShares(rest[5]!), splitBill(snapshot.input), toSettled(rest[6]!), snapshot.participants);
+  return amountChanges(toShares(rest[5]!), splitBill(snapshot.input), toSettled(rest[6]!), snapshot.participants, snapshot.bill.payerId);
 }
 
 // A soft delete: claims, shares and settlements stay on record, the bill
@@ -923,7 +951,10 @@ export async function reassignPayer(db: D1Database, billId: string, to: Particip
   throw bill?.status === "draft" ? new PaymentsRecordedError(billId) : new BillNotDraftError(billId);
 }
 
-export type GuestRefusal = "not-member" | "name-taken";
+// "no-guest": there is no guest by that id on the bill (any more). "paid": the
+// group the guest belongs to has a payment, which was measured against a total
+// that counted the guest.
+export type GuestRefusal = "not-member" | "name-taken" | "no-guest" | "paid";
 
 export class GuestRefusedError extends Error {
   constructor(readonly reason: GuestRefusal) {
@@ -932,14 +963,31 @@ export class GuestRefusedError extends Error {
   }
 }
 
+// A refused guest write tells the caller nothing, so this reads the bill as
+// it is now. `otherwise` is the write's own rule, the one left when the bill
+// is a draft and the guest is still there.
+async function guestRefusal(db: D1Database, billId: string, guestId: ParticipantId, otherwise: GuestRefusal): Promise<never> {
+  const bill = await getBill(db, billId);
+  if (bill?.status !== "draft") throw new BillNotDraftError(billId);
+  const guest = await db
+    .prepare("SELECT 1 AS found FROM participants WHERE bill_id = ? AND id = ? AND kind = 'guest'")
+    .bind(billId, guestId)
+    .first<{ found: number }>();
+  throw new GuestRefusedError(guest ? otherwise : "no-guest");
+}
+
+// Nobody else on the bill may answer to the same name: two people with one
+// name would make every row and payment ambiguous. lower() folds ASCII only;
+// the caller compares the full names up front.
+const NAME_FREE = "NOT EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id <> ?2 AND lower(trim(display_name)) = lower(?3))";
+
 // A guest is a label on one bill: a generated id, no person behind it, and
-// the member they came with answering for their share. Every rule sits in the
+// the member who added them answering for their share. Every rule sits in the
 // write, so a confirm or a same-named guest landing first changes nothing.
-// lower() folds ASCII only; the caller compares the full names up front.
 export async function addGuest(
   db: D1Database,
   billId: string,
-  guest: { id: ParticipantId; displayName: string; with: ParticipantId },
+  guest: { id: ParticipantId; displayName: string; addedBy: ParticipantId },
 ): Promise<number> {
   const [inserted, bump] = await db.batch<{ revision: number }>([
     db
@@ -948,10 +996,10 @@ export async function addGuest(
          SELECT ?1, ?2, 'guest', ?3, ?4
          WHERE ${WHILE_DRAFT}
            AND EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?4 AND kind = 'member')
-           AND NOT EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND lower(trim(display_name)) = lower(?3))
+           AND ${NAME_FREE}
          RETURNING id`,
       )
-      .bind(billId, guest.id, guest.displayName, guest.with),
+      .bind(billId, guest.id, guest.displayName, guest.addedBy),
     db
       .prepare(
         `UPDATE bills SET revision = revision + 1
@@ -965,17 +1013,55 @@ export async function addGuest(
 
   const bill = await getBill(db, billId);
   if (bill?.status !== "draft") throw new BillNotDraftError(billId);
-  const companion = await db
+  const adder = await db
     .prepare("SELECT kind FROM participants WHERE bill_id = ? AND id = ?")
-    .bind(billId, guest.with)
+    .bind(billId, guest.addedBy)
     .first<{ kind: string }>();
-  throw new GuestRefusedError(companion?.kind === "member" ? "name-taken" : "not-member");
+  throw new GuestRefusedError(adder?.kind === "member" ? "name-taken" : "not-member");
 }
 
-// "payer": the share is the payer's own, or a guest the payer brought, so
-// there is nobody to forgive. "paid": the member answering for it has paid
-// something, and forgiving on top of a payment would make "what is left" two
-// rules instead of one.
+// The bump goes first in both guest writes below, so it judges the bill
+// exactly as the write after it does, before anything changes.
+
+export async function renameGuest(
+  db: D1Database,
+  billId: string,
+  guestId: ParticipantId,
+  displayName: string,
+): Promise<number> {
+  const allowed = `${WHILE_DRAFT} AND EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'guest') AND ${NAME_FREE}`;
+  const [bump] = await db.batch<{ revision: number }>([
+    db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, guestId, displayName),
+    db.prepare(`UPDATE participants SET display_name = ?3 WHERE bill_id = ?1 AND id = ?2 AND ${allowed}`).bind(billId, guestId, displayName),
+  ]);
+  const row = bump!.results[0];
+  return row ? row.revision : guestRefusal(db, billId, guestId, "name-taken");
+}
+
+// Takes the guest off with their claims, and with the share row a reopened
+// bill kept for them. Refused once their group has a payment: a re-confirm
+// tells a person who paid how their amount moved by comparing against the
+// shares they paid on, and the guest's would be gone.
+export async function removeGuest(db: D1Database, billId: string, guestId: ParticipantId): Promise<number> {
+  const allowed = `${WHILE_DRAFT}
+    AND EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'guest')
+    AND ${groupPaidSql("?1", debtorOfSql("?1", "?2"))} = 0`;
+  // Children first: a share row points at its participant.
+  const [bump] = await db.batch<{ revision: number }>([
+    db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, guestId),
+    db
+      .prepare(`DELETE FROM item_claims WHERE participant_id = ?2 AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?1) AND ${allowed}`)
+      .bind(billId, guestId),
+    db.prepare(`DELETE FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed}`).bind(billId, guestId),
+    db.prepare(`DELETE FROM participants WHERE bill_id = ?1 AND id = ?2 AND ${allowed}`).bind(billId, guestId),
+  ]);
+  const row = bump!.results[0];
+  return row ? row.revision : guestRefusal(db, billId, guestId, "paid");
+}
+
+// "payer": the share is the payer's own, so there is nobody to forgive.
+// "paid": the group answering for it has a payment, and forgiving on top of a
+// payment would make "what is left" two rules instead of one.
 export type PardonRefusal = "not-confirmed" | "no-share" | "payer" | "paid" | "changed";
 
 export class PardonRefusedError extends Error {
@@ -995,9 +1081,9 @@ export async function setPardon(
   participantId: ParticipantId,
   pardoned: boolean,
 ): Promise<number | null> {
-  const debtor = "(SELECT COALESCE(added_by, id) FROM participants WHERE bill_id = ?1 AND id = ?2)";
+  const debtor = debtorOfSql("?1", "?2");
   const allowed = `EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'confirmed' AND payer_id <> ${debtor})
-    AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND participant_id = ${debtor})`;
+    AND ${groupPaidSql("?1", debtor)} = 0`;
   // The bump goes first so it sees the flag before the change, as the share
   // write does; both then agree on whether this write changes anything.
   const [bump, changed] = await db.batch<{ revision: number }>([
@@ -1021,11 +1107,9 @@ export async function setPardon(
 
   const now = await db
     .prepare(
-      `SELECT b.status, b.payer_id, COALESCE(p.added_by, p.id) AS debtor, s.participant_id IS NOT NULL AS has_share,
-         s.pardoned,
-         EXISTS (SELECT 1 FROM settlements x WHERE x.bill_id = b.id AND x.participant_id = COALESCE(p.added_by, p.id)) AS paid
+      `SELECT b.status, b.payer_id, ${debtorOfSql("?1", "?2")} AS debtor, s.participant_id IS NOT NULL AS has_share,
+         s.pardoned, ${groupPaidSql("?1", debtorOfSql("?1", "?2"))} > 0 AS paid
        FROM bills b
-       LEFT JOIN participants p ON p.bill_id = b.id AND p.id = ?2
        LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = ?2
        WHERE b.id = ?1`,
     )
