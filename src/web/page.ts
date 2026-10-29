@@ -233,6 +233,7 @@ button.item-line:focus-visible { outline: 3px solid var(--accent); outline-offse
 }
 .text-input { border: 1.5px solid var(--line); border-radius: 10px; padding: 0 12px; background: var(--bg); width: 100%; }
 .text-input:focus { border-color: var(--accent); }
+select.text-input { flex: 1; width: auto; font-size: 17px; }
 .field-note { font-size: 14px; color: var(--muted); min-height: 20px; margin-top: 4px; }
 .btn {
   min-height: 44px;
@@ -458,6 +459,19 @@ function moneyField(name: string, label: string, cents: Cents | null, extra = ""
 </form>`;
 }
 
+// Only members: a guest has no account to collect into.
+function payerField(v: View): string {
+  const options = v.participants
+    .filter((p) => p.kind === "member")
+    .map((p) => `<option value="${escapeHtml(p.id)}"${p.id === v.bill.payerId ? " selected" : ""}>${escapeHtml(p.displayName)}</option>`)
+    .join("");
+  return `<form class="field" data-payer-form novalidate>
+<div class="field-head"><label for="field-payer">Who paid</label></div>
+<div class="field-row"><select id="field-payer" name="payer" class="text-input">${options}</select><button type="submit" class="btn primary" disabled>Save</button></div>
+<p class="field-note" data-note></p>
+</form>`;
+}
+
 // The payer's corrections. The status line is plain HTML, so even without the
 // script the payer sees whether the read adds up; the inputs need the script.
 // Rendered (hidden) for the payer even off-draft, so a reopened bill can bring
@@ -476,6 +490,7 @@ function checkCard(v: View): string {
 ${moneyField("printedTotal", "Printed total", v.bill.printedTotalCents)}
 ${moneyField("tax", "Tax", v.bill.taxCents)}
 ${moneyField("tip", "Tip", v.bill.tipCents, tipMode)}
+${payerField(v)}
 </div>
 </section>`;
 }

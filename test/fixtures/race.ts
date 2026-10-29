@@ -1,18 +1,15 @@
 const WRITE = /^\s*(INSERT|UPDATE|DELETE)\b/i;
 
-// A D1 handle on which the payer's Confirm lands at the worst moment: after
-// the caller has read the bill and seen a draft, just before its first write
-// reaches the database. Only statements that write are watched, so whatever
-// the caller reads up front (with or without a batch) still sees the draft.
-export function confirmingBeforeFirstWrite(db: D1Database, billId: string): { db: D1Database; raced: () => boolean } {
+// A D1 handle on which `sneak` lands at the worst moment: after the caller has
+// read the bill, just before its first write reaches the database. Only
+// statements that write are watched, so whatever the caller reads up front
+// (with or without a batch) still sees the bill as it was.
+export function beforeFirstWrite(
+  db: D1Database,
+  sneak: (db: D1Database) => Promise<unknown>,
+): { db: D1Database; raced: () => boolean } {
   const writes = new WeakSet<object>();
   let fired = false;
-
-  const confirm = () =>
-    db
-      .prepare("UPDATE bills SET status = 'confirmed', confirmed_at = '2026-10-28T22:00:00Z' WHERE id = ?")
-      .bind(billId)
-      .run();
 
   function track(statement: D1PreparedStatement): D1PreparedStatement {
     writes.add(statement);
@@ -29,7 +26,7 @@ export function confirmingBeforeFirstWrite(db: D1Database, billId: string): { db
   async function fire() {
     if (fired) return;
     fired = true;
-    await confirm();
+    await sneak(db);
   }
 
   const wrapped = new Proxy(db, {
@@ -51,4 +48,14 @@ export function confirmingBeforeFirstWrite(db: D1Database, billId: string): { db
     },
   });
   return { db: wrapped, raced: () => fired };
+}
+
+// The payer's Confirm landing in the middle of somebody else's write.
+export function confirmingBeforeFirstWrite(db: D1Database, billId: string): { db: D1Database; raced: () => boolean } {
+  return beforeFirstWrite(db, (real) =>
+    real
+      .prepare("UPDATE bills SET status = 'confirmed', confirmed_at = '2026-10-28T22:00:00Z' WHERE id = ?")
+      .bind(billId)
+      .run(),
+  );
 }

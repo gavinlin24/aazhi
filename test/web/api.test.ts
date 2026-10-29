@@ -201,6 +201,7 @@ describe("a bill that is no longer a draft", () => {
       await editItems("gavin", { op: "delete", itemId: item("noodles") }),
       await patch("gavin", { tip: "10.00" }),
       await patch("gavin", { printedTotal: null }),
+      await patch("gavin", { payer: "priya" }),
     ];
 
     for (const reply of replies) {
@@ -221,6 +222,7 @@ describe("a bill that is no longer a draft", () => {
       ["tip", (d) => patch("gavin", { tip: "10.00" }, d)],
       ["tip percent", (d) => patch("gavin", { tipPercent: 20 }, d)],
       ["printed total", (d) => patch("gavin", { tax: "1.00", printedTotal: null }, d)],
+      ["payer", (d) => patch("gavin", { payer: "priya" }, d)],
     ];
 
     for (const [what, attempt] of attempts) {
@@ -430,6 +432,54 @@ describe("tax, tip and the printed total", () => {
   });
 });
 
+describe("who paid", () => {
+  it("lets the payer hand the bill to whoever's card actually went down", async () => {
+    await seedSaigon(db, BILL);
+
+    const reply = await patch("gavin", { payer: "priya" });
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.payerId).toBe("priya");
+    expect(reply.body.viewerIsPayer).toBe(false);
+    expect(reply.body.editable).toBe("self");
+    expect(reply.body.result.payerCollectsCents).toBe(32412 - 5091);
+    expect((await getBill(db, BILL))!.payerId).toBe("priya");
+    expect(edits).toHaveLength(1);
+    expect(JSON.stringify(edits[0].embeds)).toMatch(/Priya \$50\.91 \(paid the bill\)/);
+
+    // The new payer now holds the payer's controls, and the old one does not.
+    expect((await patch("gavin", { payer: "gavin" })).status).toBe(403);
+    expect((await patch("priya", { payer: "gavin" })).status).toBe(200);
+  });
+
+  it("is for the payer only", async () => {
+    await seedSaigon(db, BILL);
+    const before = await snapshot();
+
+    const reply = await patch("marcus", { payer: "marcus" });
+
+    expect(reply.status).toBe(403);
+    expect(reply.body.error).toMatch(/Gavin/);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("refuses someone who is not on the roster, or a guest", async () => {
+    await seedSaigon(db, BILL, { participants: ["gavin", "marcus", "dani"] });
+    await db
+      .prepare("INSERT INTO participants (bill_id, id, kind, display_name, added_by) VALUES (?, 'guest-sam', 'guest', 'Sam', 'dani')")
+      .bind(BILL)
+      .run();
+    const before = await snapshot();
+
+    for (const payer of ["priya", "zoe", "guest-sam"]) {
+      const reply = await patch("gavin", { payer });
+      expect(reply.status, payer).toBe(400);
+      expect(reply.body.error, payer).toEqual(expect.any(String));
+    }
+    expect(await snapshot()).toEqual(before);
+  });
+});
+
 describe("what every response carries", () => {
   it("returns the recomputed shares with every write", async () => {
     await seedSaigon(db, BILL, { unclaimed: ["tea", "water"] });
@@ -567,6 +617,9 @@ describe("request bodies", () => {
       ["PATCH", "", { printedTotal: 27382 }],
       ["PATCH", "", { tip: null }],
       ["PATCH", "", null],
+      ["PATCH", "", { payer: "" }],
+      ["PATCH", "", { payer: 7 }],
+      ["PATCH", "", { payer: "priya", tip: "1.00" }],
     ];
     for (const [method, path, body] of bad) {
       const reply = await send(method, path ? `/b/${BILL}/${path}` : `/b/${BILL}`, {

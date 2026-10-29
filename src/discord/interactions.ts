@@ -5,6 +5,7 @@ import {
   type APIInteractionResponse,
 } from "discord-api-types/v10";
 import type { Env } from "../env";
+import { confirmTap, deleteConfirmTap, deleteTap, reopenTap, splitOrphansTap } from "./handlers/lifecycle";
 import { openSplit, pickRoster } from "./handlers/roster";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
 
@@ -28,6 +29,11 @@ export const commandHandlers: Record<string, InteractionHandler> = {
 export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
+  "confirm:": confirmTap,
+  "orphans:": splitOrphansTap,
+  "reopen:": reopenTap,
+  "delete:": deleteTap,
+  "delete-confirm:": deleteConfirmTap,
 };
 
 function respond(body: APIInteractionResponse): Response {

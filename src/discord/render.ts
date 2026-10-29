@@ -12,6 +12,7 @@ import {
   getBill,
   getLeastConfidentItemIds,
   getParticipants,
+  getShares,
   toSplitInput,
   type BillRow,
   type Participant,
@@ -19,7 +20,7 @@ import {
 import { reconciles } from "../extract/claude";
 import { formatCents, formatDate } from "../format";
 import { splitBill } from "../money/split";
-import type { LineItem, SplitResult } from "../money/types";
+import type { LineItem, Share, SplitResult } from "../money/types";
 
 // Discord rejects the whole edit if any of these is exceeded, so the renderer
 // trims to fit instead of trusting the receipt to be short.
@@ -27,7 +28,7 @@ const LIMITS = { title: 256, description: 4096, fieldValue: 1024, embed: 6000 };
 const MAX_LABEL = 60;
 const MAX_NAME = 40;
 
-const COLOR = { draft: 0x5865f2, needsFixing: 0xf0b232, superseded: 0x80848e };
+const COLOR = { draft: 0x5865f2, needsFixing: 0xf0b232, confirmed: 0x23a55a, superseded: 0x80848e };
 
 // Receipt labels and display names are other people's text; unescaped, a
 // "*" in a dish name would bold half the message.
@@ -130,10 +131,18 @@ function billField(bill: BillRow, result: SplitResult): APIEmbedField {
   };
 }
 
+function openButton(bill: BillRow): APIButtonComponent {
+  return { type: ComponentType.Button, style: ButtonStyle.Primary, label: "Open the split", custom_id: `open:${bill.id}` };
+}
+
+// Like Confirm and Reopen, everyone sees it and the handler refuses anyone
+// but the payer. It only asks first; nothing is deleted from this tap.
+function deleteButton(bill: BillRow): APIButtonComponent {
+  return { type: ComponentType.Button, style: ButtonStyle.Danger, label: "Delete", custom_id: `delete:${bill.id}` };
+}
+
 function components(bill: BillRow, canConfirm: boolean): APIActionRowComponent<APIComponentInMessageActionRow>[] {
-  const row: APIButtonComponent[] = [
-    { type: ComponentType.Button, style: ButtonStyle.Primary, label: "Open the split", custom_id: `open:${bill.id}` },
-  ];
+  const row: APIButtonComponent[] = [openButton(bill)];
   // The revision rides along so a Confirm tapped on a stale render is refused.
   if (canConfirm) {
     row.push({
@@ -143,6 +152,7 @@ function components(bill: BillRow, canConfirm: boolean): APIActionRowComponent<A
       custom_id: `confirm:${bill.id}:${bill.revision}`,
     });
   }
+  row.push(deleteButton(bill));
   const rows: APIActionRowComponent<APIComponentInMessageActionRow>[] = [{ type: ComponentType.ActionRow, components: row }];
   // Lets the payer put people on the roster who have not tapped, so one person
   // can assign the whole bill at the table. Everyone sees it (a message cannot
@@ -189,16 +199,96 @@ function superseded(bill: BillRow): APIInteractionResponseCallbackData {
   };
 }
 
+function deleted(bill: BillRow, names: Map<string, string>): APIInteractionResponseCallbackData {
+  const payer = names.get(bill.payerId) ?? "The person who paid";
+  return {
+    content: "",
+    embeds: [
+      {
+        title: titleOf(bill),
+        description: `${payer} deleted this split, so there's nothing to claim or pay on it.`,
+        color: COLOR.superseded,
+      },
+    ],
+    components: [],
+    allowed_mentions: { parse: [] },
+  };
+}
+
+// A member is named by mention so the row reads as their Discord name; a
+// guest has no account to mention. allowed_mentions keeps any of it from
+// pinging, and embeds never ping anyway.
+function mention(p: Participant | undefined, names: Map<string, string>, fallback: string): string {
+  if (!p) return fallback;
+  return p.kind === "member" ? `<@${p.id}>` : `${names.get(p.id)} (guest)`;
+}
+
+// Until the owe card arrives, a confirmed bill shows the frozen rows: the
+// numbers locked at confirm, never a recomputation from the lines.
+function confirmed(
+  bill: BillRow,
+  result: SplitResult,
+  participants: Participant[],
+  frozen: Share[],
+  names: Map<string, string>,
+): APIInteractionResponseCallbackData {
+  const payerName = names.get(bill.payerId) ?? "the person who paid";
+  const payer = mention(
+    participants.find((p) => p.id === bill.payerId),
+    names,
+    payerName,
+  );
+  const owed = new Map(frozen.map((s) => [s.participant, s.owedCents]));
+  const rows = participants
+    .filter((p) => owed.has(p.id))
+    .map((p) => {
+      const line = `${mention(p, names, p.id)} · ${formatCents(owed.get(p.id)!)}`;
+      return p.id === bill.payerId ? `${line} · paid the bill` : line;
+    });
+
+  const embed: APIEmbed = {
+    title: titleOf(bill),
+    color: COLOR.confirmed,
+    fields: [billField(bill, result)],
+    footer: { text: `Confirmed: these amounts are locked. Something wrong? ${payerName} can reopen the bill to fix it.` },
+  };
+  const head = `**Confirmed.** Pay ${payer} your share.\n\n`;
+  const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
+  embed.description = head + fitLines(rows, budget, (n) => `and ${n} more on the page`);
+
+  return {
+    content: "",
+    embeds: [embed],
+    components: [
+      {
+        type: ComponentType.ActionRow,
+        components: [
+          openButton(bill),
+          { type: ComponentType.Button, style: ButtonStyle.Secondary, label: "Reopen", custom_id: `reopen:${bill.id}` },
+          deleteButton(bill),
+        ],
+      },
+    ],
+    allowed_mentions: { parse: [] },
+  };
+}
+
+// `frozen` is the confirmed bill's stored share rows; without them a
+// confirmed render falls back to the split the lines give, which is the same
+// thing unless the lines were changed under a frozen bill.
 export function renderBill(
   bill: BillRow,
   result: SplitResult,
   items: LineItem[],
   participants: Participant[],
   leastConfident: string[] = [],
+  frozen?: Share[],
 ): APIInteractionResponseCallbackData {
   if (bill.status === "superseded") return superseded(bill);
 
   const names = new Map(participants.map((p) => [p.id, escapeMarkdown(clip(p.displayName, MAX_NAME))]));
+  if (bill.status === "deleted") return deleted(bill, names);
+  if (bill.status === "confirmed") return confirmed(bill, result, participants, frozen ?? result.shares, names);
   const payerName = names.get(bill.payerId) ?? "Payer";
   const status = readStatus(bill, items, leastConfident, payerName);
 
@@ -229,10 +319,11 @@ export async function loadBillMessage(
   // confirm check refuses, never the other way round.
   const bill = await getBill(db, billId);
   if (!bill) return null;
-  const [input, participants, leastConfident] = await Promise.all([
+  const [input, participants, leastConfident, frozen] = await Promise.all([
     toSplitInput(db, billId),
     getParticipants(db, billId),
     getLeastConfidentItemIds(db, billId),
+    bill.status === "confirmed" ? getShares(db, billId) : undefined,
   ]);
-  return { bill, data: renderBill(bill, splitBill(input), input.items, participants, leastConfident) };
+  return { bill, data: renderBill(bill, splitBill(input), input.items, participants, leastConfident, frozen) };
 }

@@ -140,8 +140,8 @@ describe("renderBill", () => {
   it("renders no pay control while the bill is a draft", () => {
     const buttons = buttonsOf(render(bill, draftState));
 
-    expect(buttons.map((b) => b.custom_id)).toEqual(["open:bill-1", "confirm:bill-1:7"]);
-    expect(buttons.map((b) => b.label)).toEqual(["Open the split", "Confirm"]);
+    expect(buttons.map((b) => b.custom_id)).toEqual(["open:bill-1", "confirm:bill-1:7", "delete:bill-1"]);
+    expect(buttons.map((b) => b.label)).toEqual(["Open the split", "Confirm", "Delete"]);
     expect(JSON.stringify(buttons)).not.toMatch(/pay|settle|venmo|zelle|cash/i);
   });
 
@@ -160,7 +160,7 @@ describe("renderBill", () => {
     const data = render(bill, misread, ["noodles", "comtam"]);
     const text = embedText(embedOf(data));
 
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
     expect(text).toContain("$273.82"); // printed total
     expect(text).toContain("$323.82"); // items plus tax
     expect(text).toContain("$50.00"); // the gap
@@ -182,7 +182,7 @@ describe("renderBill", () => {
     const data = render({ ...bill, printedTotalCents: null }, draftState);
     const text = embedText(embedOf(data));
 
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
     expect(text).toMatch(/couldn't read the printed total/i);
     expect(text).toMatch(/enter it on the page/i);
   });
@@ -268,6 +268,38 @@ describe("renderBill", () => {
     const text = embedText(embedOf(render(bill, input)));
     expect(text).not.toContain("Z".repeat(200));
     expect(text).toContain("Fresh coconut");
+  });
+
+  it("shows each person's frozen amount once confirmed, with the payer's Reopen and Delete", () => {
+    const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
+    // The frozen rows, not a fresh split: Marcus's row says $40.00 here even
+    // though the lines would give him $44.46 today.
+    const frozen = splitBill(SAIGON).shares.map((s) => (s.participant === "marcus" ? { ...s, owedCents: 4000 } : s));
+    const data = renderBill(confirmedBill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), [], frozen);
+    const text = embedText(embedOf(data));
+
+    expect(text).toMatch(/confirmed/i);
+    expect(lineFor(text, "<@marcus>")).toContain("$40.00");
+    expect(text).not.toContain("$44.46");
+    expect(lineFor(text, "<@priya>")).toContain("$50.91");
+    expect(text).toMatch(/<@gavin>[^\n]*\$48\.33[^\n]*paid the bill/i);
+    // The payer is named as the person to pay.
+    expect(text).toMatch(/pay <@gavin>/i);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "reopen:bill-1", "delete:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.label)).toEqual(["Open the split", "Reopen", "Delete"]);
+    expect(JSON.stringify(data.components)).not.toMatch(/confirm:/);
+    expect(data.allowed_mentions).toEqual({ parse: [] });
+  });
+
+  it("tells people a deleted bill was deleted and strips its buttons", () => {
+    const data = render({ ...bill, status: "deleted" }, SAIGON);
+    const embed = embedOf(data);
+
+    expect(data.components).toEqual([]);
+    expect(embed.title).toBe("Saigon Kitchen · Oct 28, 2026");
+    expect(embedText(embed)).toMatch(/Gavin deleted this split/);
+    expect(embedText(embed)).not.toContain("$44.46");
+    expect(data.allowed_mentions).toEqual({ parse: [] });
   });
 
   it("tells people a superseded bill was replaced and strips its buttons", () => {

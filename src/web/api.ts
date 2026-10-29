@@ -6,6 +6,7 @@ import {
   editItem,
   getBill,
   getBillSnapshot,
+  reassignPayer,
   setBillAmounts,
   setClaim,
   type BillAmounts,
@@ -237,12 +238,30 @@ api.post(
   }),
 );
 
+// A separate write from the amounts, because handing the bill over also hands
+// over the right to make every other change.
+async function changePayer(c: Ctx, grant: Grant, body: Record<string, unknown>): Promise<Response> {
+  if (Object.keys(body).length > 1) bad("Change who paid on its own, then the amounts.");
+  const to = text(body.payer, "payer");
+
+  const snapshot = await loadDraft(c, grant);
+  if (snapshot instanceof Response) return snapshot;
+  if (grant.participantId !== snapshot.bill.payerId) {
+    return refuse(403, `Only ${payerName(snapshot)} can hand the bill to someone else.`);
+  }
+  const target = snapshot.participants.find((p) => p.id === to);
+  if (!target) return refuse(400, "That person isn't on this bill. They join it by tapping Open the split in Discord.");
+  if (target.kind !== "member") return refuse(400, "A guest can't be the one who paid. Pick someone with a Discord account.");
+  return commit(c, grant, snapshot.bill, () => reassignPayer(c.env.DB, grant.billId, to));
+}
+
 api.patch(
   "/:billId",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, [], ["tax", "tip", "tipPercent", "printedTotal"]);
+    expectKeys(body, [], ["tax", "tip", "tipPercent", "printedTotal", "payer"]);
     if (Object.keys(body).length === 0) bad("Nothing to change.");
+    if ("payer" in body) return changePayer(c, grant, body);
     if ("tip" in body && "tipPercent" in body) bad("Enter the tip as dollars or as a percentage, not both.");
 
     const amounts: BillAmounts = {};

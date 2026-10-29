@@ -322,6 +322,20 @@ describe("renderPage", () => {
     expect(locked.every((el) => "hidden" in el.attrs)).toBe(true);
   });
 
+  it("lets the payer hand the bill to another member of the roster", async () => {
+    const guest: Participant = { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" };
+    const html = page("gavin", bill, draft, [...participantsOf(draft), guest]);
+
+    const options = await select(html, "[data-check] form[data-payer-form] select#field-payer option");
+    expect(options.map((o) => o.attrs.value)).toEqual(draft.participants);
+    expect(options.map((o) => o.text)).toEqual(draft.participants.map((id) => SAIGON_NAMES[id]));
+    expect(options.filter((o) => "selected" in o.attrs).map((o) => o.attrs.value)).toEqual(["gavin"]);
+    expect(await textOf(html, "label[for=field-payer]")).toBe("Who paid");
+    expect((await one(html, "[data-check] .fields")).text).toContain("Who paid");
+
+    expect(await select(page("marcus"), "[data-payer-form]")).toEqual([]);
+  });
+
   it("is one self-contained, phone-sized page that follows the system theme", () => {
     const html = page("marcus");
 

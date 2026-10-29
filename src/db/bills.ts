@@ -1,4 +1,6 @@
-import type { BillInput, Cents, LineItem, ParticipantId } from "../money/types";
+import { reconciles } from "../extract/claude";
+import { splitBill } from "../money/split";
+import type { BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 
 export type BillStatus = "reading" | "draft" | "confirmed" | "superseded" | "deleted";
 
@@ -294,16 +296,24 @@ export interface BillSnapshot {
   input: BillInput;
 }
 
-// One batch is one transaction, so the revision a page is handed always
-// belongs to the items and claims it is shown beside.
-export async function getBillSnapshot(db: D1Database, billId: string): Promise<BillSnapshot | null> {
-  const [bill, items, claims, participants, pardoned] = await db.batch([
+function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement[] {
+  return [
     db.prepare(`SELECT ${BILL_COLUMNS} FROM bills WHERE id = ?`).bind(billId),
     itemsStatement(db, billId),
     claimsStatement(db, billId),
     participantsStatement(db, billId),
     db.prepare("SELECT participant_id FROM shares WHERE bill_id = ? AND pardoned = 1").bind(billId),
-  ]);
+  ];
+}
+
+// One batch is one transaction, so the revision a page is handed always
+// belongs to the items and claims it is shown beside.
+export async function getBillSnapshot(db: D1Database, billId: string): Promise<BillSnapshot | null> {
+  return assembleSnapshot(await db.batch(snapshotStatements(db, billId)));
+}
+
+function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
+  const [bill, items, claims, participants, pardoned] = results as [D1Result, D1Result, D1Result, D1Result, D1Result];
   const billRow = (bill.results as BillDbRow[])[0];
   if (!billRow) return null;
 
@@ -537,5 +547,275 @@ export async function setBillAmounts(db: D1Database, billId: string, amounts: Bi
 
   return mutateDraft(db, billId, [
     db.prepare(`UPDATE bills SET ${sets.join(", ")} WHERE id = ?1 AND status = 'draft'`).bind(billId, ...values),
+  ]);
+}
+
+export class BillChangedError extends Error {
+  constructor(billId: string) {
+    super(`bill ${billId} changed since the revision the caller saw`);
+    this.name = "BillChangedError";
+  }
+}
+
+export class BillNotConfirmedError extends Error {
+  constructor(billId: string) {
+    super(`bill ${billId} is not confirmed`);
+    this.name = "BillNotConfirmedError";
+  }
+}
+
+export class BillGoneError extends Error {
+  constructor(billId: string) {
+    super(`bill ${billId} is already gone`);
+    this.name = "BillGoneError";
+  }
+}
+
+export class NobodyClaimedError extends Error {
+  constructor(billId: string) {
+    super(`nobody has claimed anything on bill ${billId}`);
+    this.name = "NobodyClaimedError";
+  }
+}
+
+export class NotOnRosterError extends Error {
+  constructor(billId: string, who: ParticipantId) {
+    super(`${who} is not a member on the roster of bill ${billId}`);
+    this.name = "NotOnRosterError";
+  }
+}
+
+interface ShareDbRow {
+  participant_id: string;
+  subtotal_cents: number;
+  tax_cents: number;
+  tip_cents: number;
+  owed_cents: number;
+  pardoned: number;
+}
+
+export interface Settled {
+  participant: ParticipantId;
+  cents: Cents;
+}
+
+function sharesStatement(db: D1Database, billId: string) {
+  return db
+    .prepare(
+      `SELECT participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents, pardoned
+       FROM shares WHERE bill_id = ? ORDER BY participant_id`,
+    )
+    .bind(billId);
+}
+
+function settledStatement(db: D1Database, billId: string) {
+  return db
+    .prepare(
+      `SELECT participant_id, SUM(cents) AS cents FROM settlements
+       WHERE bill_id = ? GROUP BY participant_id ORDER BY participant_id`,
+    )
+    .bind(billId);
+}
+
+function toShares(result: D1Result): Share[] {
+  return (result.results as ShareDbRow[]).map((r) => ({
+    participant: r.participant_id,
+    subtotalCents: r.subtotal_cents,
+    taxCents: r.tax_cents,
+    tipCents: r.tip_cents,
+    owedCents: r.owed_cents,
+    pardoned: r.pardoned === 1,
+  }));
+}
+
+function toSettled(result: D1Result): Settled[] {
+  return (result.results as { participant_id: string; cents: number }[]).map((r) => ({
+    participant: r.participant_id,
+    cents: r.cents,
+  }));
+}
+
+// The numbers frozen at the last confirm, not a recomputation.
+export async function getShares(db: D1Database, billId: string): Promise<Share[]> {
+  return toShares(await sharesStatement(db, billId).all());
+}
+
+// What each person has paid towards this bill so far, summed over every
+// settlement row, since partial payments are ordinary.
+export async function getSettled(db: D1Database, billId: string): Promise<Settled[]> {
+  return toSettled(await settledStatement(db, billId).all());
+}
+
+export interface AmountChange {
+  participant: ParticipantId;
+  wasCents: Cents;
+  nowCents: Cents;
+  settledCents: Cents;
+}
+
+// Only someone who has already paid needs telling: anyone else just sees
+// their new number before they pay it. Shared by reopen and re-confirm so
+// both say the same thing about the same difference.
+export function amountChanges(frozen: Share[], now: SplitResult, settled: Settled[]): AmountChange[] {
+  const was = new Map(frozen.map((s) => [s.participant, s.owedCents]));
+  const owed = new Map(now.shares.map((s) => [s.participant, s.owedCents]));
+  return settled.flatMap(({ participant, cents }) => {
+    const wasCents = was.get(participant);
+    const nowCents = owed.get(participant) ?? 0;
+    if (cents <= 0 || wasCents === undefined || wasCents === nowCents) return [];
+    return [{ participant, wasCents, nowCents, settledCents: cents }];
+  });
+}
+
+export type ConfirmRefusal = "stale" | "unreconciled" | "not-payer" | "not-draft" | "unclaimed";
+export type ConfirmResult = { ok: true; changes: AmountChange[] } | { ok: false; reason: ConfirmRefusal };
+
+function refused(reason: ConfirmRefusal): ConfirmResult {
+  return { ok: false, reason };
+}
+
+// `revision` is the one the payer's Confirm was drawn from. Every check runs
+// against one consistent read, and every write of the freeze repeats the
+// draft-at-that-revision condition in its own WHERE: a batch is one
+// transaction, but a write that matches nothing does not roll the others
+// back, so a guard on the last statement alone would still let shares land
+// for a bill that changed after the checks.
+export async function confirmBill(
+  db: D1Database,
+  billId: string,
+  revision: number,
+  actor: ParticipantId,
+): Promise<ConfirmResult> {
+  const results = await db.batch([...snapshotStatements(db, billId), sharesStatement(db, billId), settledStatement(db, billId)]);
+  const snapshot = assembleSnapshot(results);
+  if (!snapshot || snapshot.bill.status !== "draft") return refused("not-draft");
+  const { bill, input } = snapshot;
+  if (actor !== bill.payerId) return refused("not-payer");
+  if (bill.revision !== revision) return refused("stale");
+  if (!reconciles({ items: input.items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents }).ok) {
+    return refused("unreconciled");
+  }
+  const split = splitBill(input);
+  // With every line claimed the claimed slice is the whole bill, so the
+  // frozen shares sum to the printed total.
+  if (!split.fullyClaimed) return refused("unclaimed");
+
+  // A bill confirmed before carries its old frozen rows; comparing against
+  // them is what lets a re-confirm say out loud whose amount moved.
+  const changes = amountChanges(toShares(results[5]!), split, toSettled(results[6]!));
+
+  const atRevision = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'draft' AND revision = ?2)";
+  // A pardon flag survives a re-confirm. A settled_at survives only if the
+  // amount did not move; whether a moved amount is still covered is for the
+  // settlement records to say, not for a stale timestamp.
+  const upsert = db.prepare(
+    `INSERT INTO shares (bill_id, participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents)
+     SELECT ?1, ?3, ?4, ?5, ?6, ?7 WHERE ${atRevision}
+     ON CONFLICT (bill_id, participant_id) DO UPDATE SET
+       subtotal_cents = excluded.subtotal_cents,
+       tax_cents = excluded.tax_cents,
+       tip_cents = excluded.tip_cents,
+       owed_cents = excluded.owed_cents,
+       settled_at = CASE WHEN shares.owed_cents = excluded.owed_cents THEN shares.settled_at ELSE NULL END`,
+  );
+  const freeze = db
+    .prepare(
+      `UPDATE bills SET status = 'confirmed', confirmed_at = ?3, revision = revision + 1
+       WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision`,
+    )
+    .bind(billId, revision, new Date().toISOString());
+  const written = await db.batch([
+    ...split.shares.map((s) => upsert.bind(billId, revision, s.participant, s.subtotalCents, s.taxCents, s.tipCents, s.owedCents)),
+    freeze,
+  ]);
+  if (written[written.length - 1]!.results.length === 0) {
+    const now = await getBill(db, billId);
+    return refused(now?.status === "draft" ? "stale" : "not-draft");
+  }
+  return { ok: true, changes };
+}
+
+// Back to draft with every claim kept, and the share rows kept too so a
+// re-confirm re-applies their pardon flags. The read rides in the same batch
+// as the status change, so the changes describe exactly the bill reopened.
+export async function reopenBill(db: D1Database, billId: string): Promise<AmountChange[]> {
+  const [reopened, ...rest] = await db.batch([
+    db
+      .prepare("UPDATE bills SET status = 'draft', revision = revision + 1 WHERE id = ? AND status = 'confirmed' RETURNING revision")
+      .bind(billId),
+    ...snapshotStatements(db, billId),
+    sharesStatement(db, billId),
+    settledStatement(db, billId),
+  ]);
+  if (reopened!.results.length === 0) throw new BillNotConfirmedError(billId);
+  const snapshot = assembleSnapshot(rest)!;
+  return amountChanges(toShares(rest[5]!), splitBill(snapshot.input), toSettled(rest[6]!));
+}
+
+// A soft delete: claims, shares and settlements stay on record, the bill
+// just stops being live anywhere.
+export async function deleteBill(db: D1Database, billId: string): Promise<void> {
+  const { meta } = await db
+    .prepare("UPDATE bills SET status = 'deleted', revision = revision + 1 WHERE id = ? AND status IN ('draft', 'confirmed')")
+    .bind(billId)
+    .run();
+  if (meta.changes !== 1) throw new BillGoneError(billId);
+}
+
+// Every line nobody is on goes to everyone who claimed anything, split like
+// any shared dish. With `revision`, only the bill the payer was offered this
+// on is touched; anything that changed since means the offer is void.
+export async function splitOrphansEvenly(
+  db: D1Database,
+  billId: string,
+  options: { revision?: number } = {},
+): Promise<number> {
+  const claimants = await db
+    .prepare(
+      `SELECT COUNT(DISTINCT c.participant_id) AS n
+       FROM item_claims c JOIN bill_items i ON i.id = c.bill_item_id WHERE i.bill_id = ?`,
+    )
+    .bind(billId)
+    .first<{ n: number }>();
+  if (!claimants?.n) throw new NobodyClaimedError(billId);
+
+  const open = "status = 'draft' AND (?2 IS NULL OR revision = ?2)";
+  // SQLite reads the whole SELECT before inserting when it reads the table it
+  // inserts into, so a line's first new claim does not hide it from the rest.
+  const [, bump] = await db.batch<{ revision: number }>([
+    db
+      .prepare(
+        `INSERT INTO item_claims (bill_item_id, participant_id)
+         SELECT i.id, p.id FROM bill_items i JOIN participants p ON p.bill_id = i.bill_id
+         WHERE i.bill_id = ?1
+           AND NOT EXISTS (SELECT 1 FROM item_claims x WHERE x.bill_item_id = i.id)
+           AND EXISTS (
+             SELECT 1 FROM item_claims y JOIN bill_items j ON j.id = y.bill_item_id
+             WHERE j.bill_id = ?1 AND y.participant_id = p.id)
+           AND EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND ${open})
+         ON CONFLICT DO NOTHING`,
+      )
+      .bind(billId, options.revision ?? null),
+    db
+      .prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${open} RETURNING revision`)
+      .bind(billId, options.revision ?? null),
+  ]);
+  const row = bump!.results[0];
+  if (row) return row.revision;
+  const bill = await getBill(db, billId);
+  throw bill?.status === "draft" ? new BillChangedError(billId) : new BillNotDraftError(billId);
+}
+
+// For when somebody else's card went down. Only a member can be the payer: a
+// guest has no account to collect into. Nobody leaves a roster, so the check
+// up front still holds when the write lands.
+export async function reassignPayer(db: D1Database, billId: string, to: ParticipantId): Promise<number> {
+  const target = await db
+    .prepare("SELECT kind FROM participants WHERE bill_id = ? AND id = ?")
+    .bind(billId, to)
+    .first<{ kind: string }>();
+  if (target?.kind !== "member") throw new NotOnRosterError(billId, to);
+  return mutateDraft(db, billId, [
+    db.prepare(`UPDATE bills SET payer_id = ?2 WHERE id = ?1 AND status = 'draft'`).bind(billId, to),
   ]);
 }

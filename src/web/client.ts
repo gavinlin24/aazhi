@@ -240,6 +240,27 @@ export const CLIENT_SCRIPT = String.raw`
       form.querySelector("button[type=submit]").disabled = form._busy || !isDirty(form);
     }
     tipPreview(s);
+    renderPayer(s);
+  }
+
+  // Like the money inputs, a pick not yet saved stays put while polls arrive;
+  // an untouched picker follows whoever the server says paid.
+  function renderPayer(s) {
+    const form = root.querySelector("form[data-payer-form]");
+    if (!form) return;
+    const select = form.elements.payer;
+    const members = s.participants.filter((p) => p.kind === "member");
+    const key = JSON.stringify(members.map((p) => [p.id, p.displayName]));
+    const picked = select.value;
+    const clean = select._shown === undefined || picked === select._shown;
+    if (select._key !== undefined && select._key !== key) {
+      select.replaceChildren.apply(select, members.map((p) => el("option", { value: p.id }, p.displayName)));
+    }
+    select._key = key;
+    select.value = clean ? s.payerId : picked;
+    if (select.value === "") select.value = s.payerId;
+    select._shown = s.payerId;
+    form.querySelector("button[type=submit]").disabled = form._busy || select.value === s.payerId;
   }
 
   function chipOrder(s) {
@@ -442,6 +463,15 @@ export const CLIENT_SCRIPT = String.raw`
 
   function adopt(next) {
     if (!next || typeof next.revision !== "number" || next.revision < state.revision) return;
+    // A change in who may edit what gets a fresh page rather than a redraw:
+    // the server draws the payer's controls only for the payer, so someone
+    // just handed the bill would otherwise have nothing to fix it with.
+    if (next.viewerIsPayer !== state.viewerIsPayer || next.editable !== state.editable) {
+      stopped = true;
+      clearInterval(timer);
+      location.reload();
+      return;
+    }
     const was = state.status;
     state = next;
     if (was !== next.status) {
@@ -761,6 +791,20 @@ export const CLIENT_SCRIPT = String.raw`
     render();
   }
 
+  // Success needs no handling here: the new state says the viewer no longer
+  // paid, and adopting it reloads the page without the payer's controls.
+  async function savePayer(form) {
+    const select = form.elements.payer;
+    if (select.value === state.payerId) return;
+    setFormBusy(form, true);
+    const failure = await write("PATCH", "", { payer: select.value });
+    setFormBusy(form, false);
+    if (failure) {
+      say(form, failure.message, true);
+      render();
+    }
+  }
+
   root.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || !root.contains(target)) return;
@@ -792,6 +836,12 @@ export const CLIENT_SCRIPT = String.raw`
     if (form.dataset.field) saveField(form);
     else if (form.dataset.editor) saveItem(form);
     else if (form.dataset.adder !== undefined) addItem(form);
+    else if (form.dataset.payerForm !== undefined) savePayer(form);
+  });
+
+  root.addEventListener("change", (event) => {
+    const form = event.target instanceof Element ? event.target.closest("form[data-payer-form]") : null;
+    if (form) render();
   });
 
   root.addEventListener("input", (event) => {
