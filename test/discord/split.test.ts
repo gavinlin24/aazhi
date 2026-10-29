@@ -429,8 +429,9 @@ describe("/split", () => {
     const [post] = originalEdits();
     const text = shown(post!.body);
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(text).toMatch(/Doesn't add up:\*\* \$50\.00 over the receipt/);
-    expect(text).toMatch(/Gavin, check Garlic noodles \$82\.00 and Com tam \$9\.50 on the page/);
+    expect(text).toContain("Receipt total $273.82");
+    expect(text).toContain("Our read comes to $323.82, $50.00 more.");
+    expect(text).toMatch(/least sure of Garlic noodles \$82\.00 and Com tam \$9\.50\. Gavin can fix it on the page/);
     // Lines read as confidently as the rest are not worth pointing at.
     expect(text).not.toMatch(/Spring rolls \$15\.00/);
   });
@@ -443,7 +444,7 @@ describe("/split", () => {
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(shown(post!.body)).toMatch(/No receipt total yet.*Gavin, enter it on the page/);
+    expect(shown(post!.body)).toMatch(/No receipt total yet.*Gavin can enter it on the page/);
   });
 
   it.each([

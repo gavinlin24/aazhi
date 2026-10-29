@@ -161,7 +161,7 @@ describe("renderBill", () => {
     expect(text).not.toMatch(/⚠️|add up|receipt total/i);
   });
 
-  it("states the gap in one line, with who fixes it, where, and the lines it is least sure of", () => {
+  it("leads with the receipt's total, then says what was read, the lines it is least sure of, and who fixes it where", () => {
     // The model read Garlic noodles as $82.00; the receipt says $273.82.
     const misread: BillInput = {
       ...draftState,
@@ -172,22 +172,28 @@ describe("renderBill", () => {
     const text = embedText(embed);
 
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
-    expect(lineFor(text, "Doesn't add up")).toBe(
-      "⚠️ **Doesn't add up:** $50.00 over the receipt. Gavin, check Garlic noodles $82.00 and Com tam $9.50 on the page.",
-    );
-    // The arithmetic behind the gap is on the page, beside the lines to fix.
-    expect(text).not.toContain("$273.82");
-    expect(text).not.toContain("$323.82");
+    expect(embed.description!.split("\n").slice(0, 4)).toEqual([
+      "**Receipt total $273.82**",
+      "🪙 Gavin paid · 8 people",
+      "⚠️ **Our read comes to $323.82, $50.00 more.**",
+      "We're least sure of Garlic noodles $82.00 and Com tam $9.50. Gavin can fix it on the page, then Confirm appears.",
+    ]);
+    // The total of a read in doubt is not shown as the bill's total.
+    expect(text).not.toMatch(/\*\*Total/);
+    expect(text).not.toContain("$374.12");
     expect(embed.color).toBe(0x8a520f);
     // Claiming goes on while the payer fixes the read.
     expect(text).toMatch(/\$\d+\.\d\d unclaimed/);
   });
 
-  it("asks the payer to fix the lines when it has none to point at", () => {
+  it("says when the read comes to less than the receipt, and points at no line when none stands out", () => {
     const short: BillInput = { ...SAIGON, items: SAIGON.items.filter((i) => i.id !== "coconut") };
-    expect(lineFor(embedText(embedOf(render(bill, short))), "Doesn't add up")).toBe(
-      "⚠️ **Doesn't add up:** $4.00 under the receipt. Gavin, fix the lines on the page.",
-    );
+    expect(embedOf(render(bill, short)).description!.split("\n")).toEqual([
+      "**Receipt total $273.82**",
+      "🪙 Gavin paid · 8 people",
+      "⚠️ **Our read comes to $269.82, $4.00 less.**",
+      "Gavin can fix it on the page, then Confirm appears.",
+    ]);
   });
 
   it("says when the read comes to less than the printed total", () => {
@@ -204,7 +210,7 @@ describe("renderBill", () => {
     const text = embedText(embedOf(data));
 
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
-    expect(text).toContain("⚠️ **No receipt total yet.** Gavin, enter it on the page.");
+    expect(text).toContain("⚠️ **No receipt total yet.** Gavin can enter it on the page, then Confirm appears.");
   });
 
   it("offers the payer a picker to add people who were at dinner, on a row of its own", () => {
@@ -276,7 +282,7 @@ describe("renderBill", () => {
 
     const draft = embedOf(renderBill({ ...bill, place: "P".repeat(400) }, splitBill(input), many, people, ["i0", "i1", "i2"]));
     withinLimits(draft);
-    expect(draft.description).toMatch(/Total \$/);
+    expect(draft.description).toMatch(/^\*\*Receipt total \$/);
 
     // The guests the payer added owe the payer directly, one row each.
     const confirmed = embedOf(
@@ -292,7 +298,7 @@ describe("renderBill", () => {
     const input = withItem(draftState, { id: "long", label: "Z".repeat(500), cents: 100, claimedBy: [] });
     const text = embedText(embedOf(render(bill, input, ["long"])));
     expect(text).not.toContain("Z".repeat(200));
-    expect(text).toMatch(/Z… \$1\.00 on the page\.$/m);
+    expect(text).toMatch(/least sure of Z+… \$1\.00\. Gavin can fix it/);
   });
 
   it("shows what each person owes the payer once confirmed, with pay controls and the payer's Reopen and Delete", () => {
@@ -339,8 +345,8 @@ describe("renderBill", () => {
   it("never leaves a dangling escape where a long label it points at is cut", () => {
     // Markdown characters right where the label is cut.
     const input = withItem(draftState, { id: "stars", label: "*".repeat(100), cents: 100, claimedBy: [] });
-    const line = lineFor(embedText(embedOf(render(bill, input, ["stars"]))), "Doesn't add up");
-    const label = line.slice(line.indexOf("check ") + "check ".length, line.lastIndexOf(" $1.00"));
+    const line = lineFor(embedText(embedOf(render(bill, input, ["stars"]))), "least sure of");
+    const label = line.slice(line.indexOf("of ") + "of ".length, line.lastIndexOf(" $1.00"));
 
     // Every "*" stays escaped, and no backslash is left escaping the cut mark.
     expect(label).not.toMatch(/(^|[^\\])\*/);

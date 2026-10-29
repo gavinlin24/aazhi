@@ -73,25 +73,37 @@ function fitLines(lines: string[], budget: number, more: (n: number) => string):
   return kept.join("\n");
 }
 
-// Only the problem and who fixes it where. The figures behind the gap are on
-// the page, beside the lines the payer edits to close it. The least-confident
-// lines are named here because the page does not point them out.
-function readProblem(bill: BillRow, items: LineItem[], leastConfident: string[], payerName: string): string | null {
+// A read that doesn't add up leads with the receipt's own total, since the
+// total of what was read is the number in doubt. Both sides of the comparison
+// are before tip, which is how the receipt prints it. The least-confident
+// lines are named because the page does not point them out.
+function readProblem(
+  bill: BillRow,
+  items: LineItem[],
+  leastConfident: string[],
+  payerName: string,
+): { headline: string | null; lines: string[] } | null {
   const check = reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents });
   if (check.ok) return null;
+  const fix = `${payerName} can fix it on the page, then Confirm appears.`;
   if (bill.printedTotalCents === null || check.discrepancyCents === null) {
-    return `⚠️ **No receipt total yet.** ${payerName}, enter it on the page.`;
+    return {
+      headline: null,
+      lines: [`⚠️ **No receipt total yet.** ${payerName} can enter it on the page, then Confirm appears.`],
+    };
   }
   const gap = check.discrepancyCents;
   const suspects = leastConfident
     .map((id) => items.find((i) => i.id === id))
     .filter((i): i is LineItem => i !== undefined)
     .map((i) => `${escapeMarkdown(clip(i.label, MAX_LABEL))} ${formatCents(i.cents)}`);
-  const fix = suspects.length > 0 ? `check ${and(suspects)}` : "fix the lines";
-  return (
-    `⚠️ **Doesn't add up:** ${formatCents(Math.abs(gap))} ${gap > 0 ? "over" : "under"} the receipt. ` +
-    `${payerName}, ${fix} on the page.`
-  );
+  return {
+    headline: `**Receipt total ${formatCents(bill.printedTotalCents)}**`,
+    lines: [
+      `⚠️ **Our read comes to ${formatCents(bill.printedTotalCents + gap)}, ${formatCents(Math.abs(gap))} ${gap > 0 ? "more" : "less"}.**`,
+      suspects.length > 0 ? `We're least sure of ${and(suspects)}. ${fix}` : fix,
+    ],
+  };
 }
 
 function totalLine(result: SplitResult): string {
@@ -118,7 +130,12 @@ function draftSummary(
       : problem
         ? null
         : `✓ **Every line is claimed.** ${payerName} can confirm.`;
-  const lines = [totalLine(result), `${PAYER_MARK} ${payerName} paid · ${count}`, problem, progress];
+  const lines = [
+    problem?.headline ?? totalLine(result),
+    `${PAYER_MARK} ${payerName} paid · ${count}`,
+    ...(problem?.lines ?? []),
+    progress,
+  ];
   return { ok: problem === null, text: lines.filter(Boolean).join("\n") };
 }
 
