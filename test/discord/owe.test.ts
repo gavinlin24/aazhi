@@ -285,7 +285,91 @@ describe("renderMath", () => {
   });
 });
 
+// The amounts on each item line of a math reply (the last amount on the line),
+// read back as integer cents, plus the folded "more lines" row.
+function itemLineCents(text: string): number[] {
+  const lines = text.split("\n");
+  const end = lines.findIndex((l) => l.startsWith("Your items:"));
+  return lines.slice(1, end).map((l) => {
+    const amount = l.match(/\$[\d,]+\.\d{2}/g)!.at(-1)!;
+    return Number(amount.replace(/[$,.]/g, ""));
+  });
+}
+
+describe("renderMath inside Discord's limits", () => {
+  it("stays under 2000 characters with many long shared labels full of markdown, and still adds up", () => {
+    const people = ["ana", "bo", "cy"];
+    const label = "**_Chef's_** `special` ~~platter~~ ||with|| [extra] #sauce > ".repeat(3);
+    const odd: BillInput = {
+      items: Array.from({ length: 30 }, (_, i) => ({ id: `i${i}`, label: `${i} ${label}`, cents: 1000 + i, claimedBy: people })),
+      taxCents: 2232,
+      tipCents: 5030,
+      payer: "ana",
+      participants: people,
+      pardoned: [],
+    };
+    const result = splitBill(odd);
+    const longBill = { ...bill, place: "*_The Very Long Restaurant Name_* ".repeat(20), taxCents: 2232, tipCents: 5030 };
+
+    for (const share of result.shares) {
+      const text = renderMath(share, odd.items, longBill);
+      expect(text.length).toBeLessThanOrEqual(2000);
+      expect(text).toMatch(/\d+ more lines: \$/);
+      expect(itemLineCents(text).reduce((a, b) => a + b, 0)).toBe(share.subtotalCents);
+      expect(text).toContain(`= ${formatCents(share.owedCents)}**`);
+      expect(share.subtotalCents + share.taxCents + share.tipCents).toBe(share.owedCents);
+    }
+  });
+
+  it("lists every line and folds nothing when the person's lines fit", () => {
+    const text = renderMath(marcusShare, items, bill);
+    expect(text).not.toMatch(/more lines/);
+    expect(itemLineCents(text)).toEqual([500, 500, 2450]);
+  });
+
+  it("marks the rounded tax and tip slices as approximate and the closing sum as exact", () => {
+    const text = renderMath(marcusShare, items, bill);
+    expect(text).toContain("Tax: $22.32 × 3450/25150 ≈ $3.06");
+    expect(text).toContain("Tip: $50.30 × 3450/25150 ≈ $6.90");
+    expect(text).toContain("$34.50 + $3.06 + $6.90 = $44.46");
+  });
+});
+
 describe("Pay my share", () => {
+  it("keeps every pay link inside Discord's limit for a long CJK place name", async () => {
+    const place = "西贡厨房越南河粉专门店".repeat(10);
+    await seedSaigon(db, BILL, { bill: { place } });
+    await confirmed();
+    await run(paywith("venmo", "a".repeat(30), GAVIN));
+    await run(paywith("cashapp", "GavinL", GAVIN));
+    await run(paywith("zelle", "gavin@example.com", GAVIN));
+
+    const reply = await run(tap(`pay:${BILL}`, MARCUS));
+
+    expect(reply.type).toBe(4);
+    const urls = linkUrls(reply.data);
+    expect(urls).toHaveLength(2);
+    for (const url of urls) expect(url.href.length).toBeLessThanOrEqual(512);
+    expect(urls[0]!.searchParams.get("amount")).toBe("44.46");
+    expect(place.startsWith(urls[0]!.searchParams.get("note")!.replace(/…$/, ""))).toBe(true);
+    expect(reply.data.content.length).toBeLessThanOrEqual(2000);
+  });
+
+  it("gives a Zelle-only payer's diners instructions and no buttons", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await run(paywith("zelle", "(555) 123-4567", GAVIN));
+
+    const reply = await run(tap(`pay:${BILL}`, MARCUS));
+
+    expect(reply.data.flags).toBe(EPHEMERAL);
+    expect(reply.data.components ?? []).toEqual([]);
+    expect(reply.data.content).toContain("$44.46");
+    expect(reply.data.content).toMatch(/Zelle[^\n]*\(555\) 123-4567/);
+    expect(reply.data.content).toContain("Saigon Kitchen");
+    expect(reply.data.content).not.toMatch(/buttons below/i);
+  });
+
   it("prefills a Venmo link with the amount and note from the payer's handle", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
@@ -472,6 +556,20 @@ describe("That's not mine", () => {
     const reply = await run(tap(`notmine:${BILL}`, MARCUS));
 
     expect(reply.data.content).toContain("Marcus paid $44.46 and now owes $41.10, so Gavin owes Marcus $3.36.");
+  });
+
+  it("lets the payer flag it too, and names them", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+
+    const reply = await run(tap(`notmine:${BILL}`, GAVIN));
+
+    expect(reply.type).toBe(4);
+    expect(reply.data.flags ?? 0).toBe(0);
+    expect(reply.data.content).toMatch(/^Gavin flagged/);
+    expect(reply.data.content).toMatch(/paused/i);
+    expect((await getBill(db, BILL))!.status).toBe("draft");
+    expect(customIds(messageEdits()[0]!.body).some((id) => /^(pay|math|notmine):/.test(id))).toBe(false);
   });
 
   it("refuses someone who is not on the bill and leaves it confirmed", async () => {

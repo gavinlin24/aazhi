@@ -73,6 +73,23 @@ function amountString(cents: Cents): string {
   return `${digits.slice(0, -2)}.${digits.slice(-2)}`;
 }
 
+// Discord refuses a whole reply whose link button carries a longer url.
+const MAX_LINK_URL = 512;
+
+// The longest whole-character prefix of the note whose encoding fits, marked
+// as cut. Characters are counted by code point, because cutting between the
+// halves of an emoji leaves a lone surrogate that encodeURIComponent throws on.
+function fittedNote(note: string, budget: number): string {
+  const encoded = encodeURIComponent(note);
+  if (encoded.length <= budget) return encoded;
+  const chars = Array.from(note);
+  for (let n = chars.length - 1; n > 0; n--) {
+    const cut = encodeURIComponent(`${chars.slice(0, n).join("").trimEnd()}…`);
+    if (cut.length <= budget) return cut;
+  }
+  return "";
+}
+
 // Venmo: the Payment Links format, venmo.com/<username>?txn=pay&amount=&note=,
 // which opens the app with both filled in. Cash App: cash.app/$<cashtag>/<amount>
 // prefills the amount, but no form of the link carries a note. Zelle has no
@@ -86,10 +103,11 @@ export function payLink(
   if (normalizeHandle(method, handle) !== handle) throw new Error(`Not a stored ${METHOD_NAMES[method]} handle`);
   const amount = amountString(cents);
   switch (method) {
-    case "venmo":
-      return {
-        url: `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&amount=${amount}&note=${encodeURIComponent(note)}`,
-      };
+    case "venmo": {
+      const base = `https://venmo.com/${encodeURIComponent(handle)}?txn=pay&amount=${amount}`;
+      const fitted = fittedNote(note, MAX_LINK_URL - base.length - "&note=".length);
+      return { url: fitted ? `${base}&note=${fitted}` : base };
+    }
     case "cashapp":
       return { url: `https://cash.app/$${encodeURIComponent(handle)}/${amount}` };
     case "zelle":

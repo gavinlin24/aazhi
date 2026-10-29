@@ -225,14 +225,15 @@ function mention(p: Participant | undefined, names: Map<string, string>, fallbac
 }
 
 // "Spring rolls (1/3), Bun bo Hue": what a person's amount covers, with the
-// share of any line they split.
+// share of any line they split. Cut while still raw text and escaped after,
+// so the cut can never land between a backslash and the character it guards.
 function coveredBy(participant: string, items: LineItem[]): string {
   const lines = items.flatMap((item) => {
     if (!item.claimedBy.includes(participant)) return [];
-    const label = escapeMarkdown(clip(item.label, MAX_LABEL));
+    const label = clip(item.label, MAX_LABEL);
     return [item.claimedBy.length > 1 ? `${label} (1/${item.claimedBy.length})` : label];
   });
-  return lines.length > 0 ? clip(lines.join(", "), MAX_SUMMARY) : "nothing claimed";
+  return lines.length > 0 ? escapeMarkdown(clip(lines.join(", "), MAX_SUMMARY)) : "nothing claimed";
 }
 
 // The owe card. Amounts are the rows frozen at confirm, never a recomputation

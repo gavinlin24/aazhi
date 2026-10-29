@@ -305,6 +305,22 @@ describe("renderBill", () => {
     expect(data.allowed_mentions).toEqual({ parse: [] });
   });
 
+  it("never leaves a dangling escape where a long item summary is cut", () => {
+    const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
+    // Markdown characters right where the summary is cut.
+    const input: BillInput = {
+      ...SAIGON,
+      items: SAIGON.items.map((i) => (i.claimedBy.includes("marcus") ? { ...i, label: "*".repeat(60) } : i)),
+    };
+    const data = renderBill(confirmedBill, splitBill(input), input.items, participantsOf(input), [], splitBill(input).shares);
+    const row = lineFor(embedOf(data).description!, "<@marcus>");
+
+    // Every "*" stays escaped, and no backslash is left escaping the cut mark.
+    expect(row).not.toMatch(/(^|[^\\])\*/);
+    expect(row).not.toMatch(/\\…/);
+    expect(row).toMatch(/…$/);
+  });
+
   it("tells people a deleted bill was deleted and strips its buttons", () => {
     const data = render({ ...bill, status: "deleted" }, SAIGON);
     const embed = embedOf(data);

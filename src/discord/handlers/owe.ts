@@ -43,19 +43,48 @@ import {
 
 const NOT_ON_BILL = "You're not on this bill, so there's nothing here for you to pay or check.";
 const NO_SHARE = "You have no share on this bill, so there's nothing for you to pay.";
-// An ephemeral message tops out at 2000 characters; past this many lines the
-// rest are summed into one so the arithmetic still closes.
-const MAX_MATH_LINES = 20;
+// Discord refuses an ephemeral reply over 2000 characters, and the diner then
+// sees only "This interaction failed".
+const MAX_CONTENT = 2000;
 const MAX_LABEL = 60;
+const MAX_BILL_NAME = 80;
 const MAX_NOTE = 60;
 
+// By code point, so a cut never splits an emoji into a lone surrogate.
 function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+  const chars = Array.from(text);
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join("").trimEnd()}…`;
 }
 
+// Clipped before anything escapes it, so a cut never strands a backslash.
 function billName(bill: BillRow): string {
   const date = formatDate(bill.billDate);
-  return `${bill.place?.trim() || "dinner"}${date ? `, ${date}` : ""}`;
+  return `${clip(bill.place?.trim() || "dinner", MAX_BILL_NAME)}${date ? `, ${date}` : ""}`;
+}
+
+function moreRow(rest: { piece: number }[]): string {
+  const cents = rest.reduce((sum, { piece }) => sum + piece, 0);
+  return `${rest.length} more lines: ${formatCents(cents)} (all of them are on the page)`;
+}
+
+// Item lines are added while they fit the budget; whatever does not is folded
+// into one row carrying its total, so the listed pieces still add up to the
+// person's subtotal. Each step keeps room for the row that would fold the
+// rest, so the fold always fits when it comes.
+function fitItemLines(rows: { text: string; piece: number }[], budget: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const rest = rows.slice(i + 1);
+    const reserve = rest.length > 0 ? moreRow(rest).length + 1 : 0;
+    if (used + rows[i]!.text.length + 1 + reserve > budget) {
+      kept.push(moreRow(rows.slice(i)));
+      break;
+    }
+    kept.push(rows[i]!.text);
+    used += rows[i]!.text.length + 1;
+  }
+  return kept;
 }
 
 // The person's items, their tax and tip slices, and the fraction of the bill
@@ -65,41 +94,37 @@ function billName(bill: BillRow): string {
 // card says the person owes.
 export function renderMath(share: Share, items: LineItem[], bill: BillRow): string {
   const billSubtotal = items.reduce((sum, item) => sum + item.cents, 0);
-  const mine = items.flatMap((item) => {
+  const rows = items.flatMap((item) => {
     const piece = itemPieces(item).get(share.participant);
-    return piece === undefined ? [] : [{ item, piece }];
-  });
-
-  const shown = mine.length > MAX_MATH_LINES ? mine.slice(0, MAX_MATH_LINES - 1) : mine;
-  const lines = shown.map(({ item, piece }) => {
+    if (piece === undefined) return [];
     const label = escapeMarkdown(clip(item.label, MAX_LABEL));
     const ways = item.claimedBy.length;
-    return ways > 1 ? `${label}: ${formatCents(item.cents)} split ${ways} ways = ${formatCents(piece)}` : `${label}: ${formatCents(piece)}`;
+    const text =
+      ways > 1 ? `${label}: ${formatCents(item.cents)} split ${ways} ways = ${formatCents(piece)}` : `${label}: ${formatCents(piece)}`;
+    return [{ text, piece }];
   });
-  const rest = mine.slice(shown.length);
-  if (rest.length > 0) {
-    const restCents = rest.reduce((sum, { piece }) => sum + piece, 0);
-    lines.push(`${rest.length} more lines: ${formatCents(restCents)} (all of them are on the page)`);
-  }
 
   const ratio = `${share.subtotalCents}/${billSubtotal}`;
   const sum =
     `**${formatCents(share.subtotalCents)} + ${formatCents(share.taxCents)} + ${formatCents(share.tipCents)} = ` +
     `${formatCents(share.owedCents)}**`;
-  const out = [`**Your math for ${escapeMarkdown(billName(bill))}**`, ...lines];
-  if (billSubtotal === 0) {
-    out.push(`Your items: ${formatCents(share.subtotalCents)}. The lines add up to $0.00, so there was no tax or tip to share.`, sum);
-  } else {
-    out.push(
-      `Your items: **${formatCents(share.subtotalCents)}**, which is ${ratio} of the ${formatCents(billSubtotal)} bill subtotal.`,
-      `Tax: ${formatCents(bill.taxCents)} × ${ratio} = ${formatCents(share.taxCents)}`,
-      `Tip: ${formatCents(bill.tipCents)} × ${ratio} = ${formatCents(share.tipCents)}`,
-      sum,
-      "Tax and tip are rounded to the cent so that everyone's shares add up to the bill exactly.",
-    );
-  }
-  if (share.participant === bill.payerId) out.push("You paid the bill, so this is your own part of it.");
-  return out.join("\n");
+  const header = `**Your math for ${escapeMarkdown(billName(bill))}**`;
+  // The slices are the frozen, rounded cents, so against the exact product
+  // they are approximate; only the closing sum is exact.
+  const footer =
+    billSubtotal === 0
+      ? [`Your items: ${formatCents(share.subtotalCents)}. The lines add up to $0.00, so there was no tax or tip to share.`, sum]
+      : [
+          `Your items: **${formatCents(share.subtotalCents)}**, which is ${ratio} of the ${formatCents(billSubtotal)} bill subtotal.`,
+          `Tax: ${formatCents(bill.taxCents)} × ${ratio} ≈ ${formatCents(share.taxCents)}`,
+          `Tip: ${formatCents(bill.tipCents)} × ${ratio} ≈ ${formatCents(share.tipCents)}`,
+          sum,
+          "Tax and tip are rounded to the cent so that everyone's shares add up to the bill exactly.",
+        ];
+  if (share.participant === bill.payerId) footer.push("You paid the bill, so this is your own part of it.");
+
+  const fixed = [header, ...footer].reduce((n, line) => n + line.length + 1, 0);
+  return [header, ...fitItemLines(rows, MAX_CONTENT - fixed), ...footer].join("\n");
 }
 
 interface DinerTap {

@@ -38,6 +38,25 @@ describe("payLink", () => {
     expect(url.hash).toBe("");
   });
 
+  it("keeps a Venmo link inside Discord's 512-character button limit however long the note encodes", () => {
+    // Each CJK character or emoji is 9 to 12 characters once URL-encoded.
+    const notes = ["西贡厨房".repeat(30), "🍜🍲🥢".repeat(20), `${"🍜".repeat(59)}x`];
+    for (const note of notes) {
+      const result = payLink("venmo", "a".repeat(30), 123456789, note);
+      const { url } = result as { url: string };
+      expect(url.length).toBeLessThanOrEqual(512);
+      const kept = new URL(url).searchParams.get("note")!;
+      // Cut on a whole character and marked as cut, never a broken surrogate.
+      expect(kept.endsWith("…")).toBe(true);
+      expect(note.startsWith(kept.slice(0, -1))).toBe(true);
+      expect(kept.length).toBeGreaterThan(1);
+      expect(new URL(url).searchParams.get("amount")).toBe("1234567.89");
+    }
+    // A note that fits is left whole.
+    const short = urlOf(payLink("venmo", "gavin-lin", 4446, "西贡厨房"));
+    expect(short.searchParams.get("note")).toBe("西贡厨房");
+  });
+
   it("puts the amount in a Cash App link and no note, since the link cannot carry one", () => {
     const url = urlOf(payLink("cashapp", "GavinL", 4446, NOTE));
 
