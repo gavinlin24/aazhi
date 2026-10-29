@@ -137,6 +137,13 @@ describe("renderBill", () => {
     expect(lineFor(text, "Marcus $")).not.toMatch(/paid/i);
   });
 
+  // A reopened bill keeps its pardons, so a bare $0.00 would read as a claiming mistake.
+  it("marks a forgiven share in the draft instead of showing a bare $0.00", () => {
+    const text = embedText(embedOf(render(bill, { ...draftState, pardoned: ["marcus"] })));
+    expect(lineFor(text, "Marcus ")).toContain("~~$38.02~~ forgiven");
+    expect(lineFor(text, "Jess $")).not.toMatch(/forgiven/);
+  });
+
   it("renders no pay control while the bill is a draft", () => {
     const buttons = buttonsOf(render(bill, draftState));
 

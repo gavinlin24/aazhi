@@ -130,7 +130,7 @@ function owedField(bill: BillRow, result: SplitResult, participants: Participant
     .map((p) => {
       const group = groupOf(groups, p.id) ?? { debtor: p.id, own: undefined, guests: [], owedCents: 0 };
       const paid = p.id === bill.payerId ? " (paid the bill)" : "";
-      return `${groupName(group, names)} ${formatCents(group.owedCents)}${paid}`;
+      return `${groupName(group, names)} ${groupAmount(group, names)}${paid}`;
     });
   const unclaimed = result.unclaimedCents !== 0 ? `**Unclaimed ${formatCents(result.unclaimedCents)}**` : "";
   const budget = LIMITS.fieldValue - (unclaimed ? unclaimed.length + 1 : 0);
