@@ -552,9 +552,9 @@ button.tile:active { background: var(--fill); }
    guest's avatar, so it is plain which lines are theirs. */
 .mine-group { border-top: 1px solid var(--rule); }
 .mine > .mine-group:first-child { border-top: 0; }
-.mine-guest { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--muted); font-size: 15px; }
+.mine-guest { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; color: var(--muted); font-size: 15px; }
 .mine-guest .av { --s: 24px; }
-.mine-group ul { margin-left: 11px; padding-left: 21px; border-left: 1.5px dashed var(--ring); }
+.mine-group ul { margin: 0 0 8px 11px; padding-left: 21px; border-left: 1.5px dashed var(--ring); }
 
 .drill { margin-top: 12px; padding: 0 6px; }
 .drill-row {
