@@ -8,6 +8,7 @@ import { splitBill } from "../../src/money/split";
 import type { BillInput } from "../../src/money/types";
 import { CLIENT_SCRIPT } from "../../src/web/client";
 import { renderPage } from "../../src/web/page";
+import type { StateExtras } from "../../src/web/state";
 import { mintToken, TOKEN_TTL_MS } from "../../src/web/token";
 import { SAIGON, withItem, withUnclaimed } from "../fixtures/saigon";
 import { SAIGON_NAMES, seedSaigon } from "../fixtures/seed";
@@ -46,8 +47,11 @@ function participantsOf(input: BillInput): Participant[] {
 // Tea and water unclaimed: the spec's mid-dinner draft.
 const draft = withUnclaimed(SAIGON, ["tea", "water"]);
 
+// The day after the dinner, so the header's date drops the year it shares.
+const NOW = Date.parse("2026-10-29T12:00:00.000Z");
+
 function page(viewer: string, b: BillRow = bill, input: BillInput = draft, people: Participant[] = participantsOf(input)) {
-  return renderPage(b, splitBill(input), input.items, people, viewer);
+  return renderPage(b, splitBill(input), input.items, people, viewer, {}, NOW);
 }
 
 function stateOf(html: string): any {
@@ -56,116 +60,149 @@ function stateOf(html: string): any {
   return JSON.parse(match![1]!);
 }
 
+const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
+const sam: Participant = { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" };
+const kim: Participant = { billId: bill.id, id: "guest-kim", kind: "guest", displayName: "Kim", addedBy: "gavin" };
+
 describe("renderPage", () => {
-  it("renders every line item and a chip per participant", async () => {
-    const html = page("marcus");
+  describe("a draft", () => {
+    it("is the receipt: one row per line, with its price and the faces of whoever else had it", async () => {
+      const html = page("marcus");
 
-    const rows = await select(html, "li.item");
-    expect(rows.map((r) => r.attrs["data-item"])).toEqual(SAIGON.items.map((i) => i.id));
-    for (const item of SAIGON.items) {
-      const row = rows.find((r) => r.attrs["data-item"] === item.id)!;
-      expect(row.text).toContain(item.label);
-      const chips = await select(html, `li.item[data-item="${item.id}"] button.chip`);
-      expect(chips.map((c) => c.attrs["data-participant"]).sort()).toEqual([...SAIGON.participants].sort());
-    }
-    expect(await textOf(html, 'li.item[data-item="noodles"] .item-price')).toBe("$32.00");
-  });
-
-  it("fills the chips of the people who claimed a line and flags lines nobody claimed", async () => {
-    const html = page("marcus");
-
-    const rolls = await select(html, 'li.item[data-item="rolls"] button.chip[aria-pressed="true"]');
-    expect(rolls.map((c) => c.attrs["data-participant"]).sort()).toEqual(["dani", "marcus", "omar"]);
-    expect(await select(html, 'li.item[data-item="tea"] button.chip[aria-pressed="true"]')).toEqual([]);
-
-    const flagged = await select(html, "li.item.is-unclaimed");
-    expect(flagged.map((r) => r.attrs["data-item"])).toEqual(["tea", "water"]);
-    expect(flagged[0]!.text).toMatch(/nobody/i);
-  });
-
-  it("marks the viewer so the page knows whose chip is editable", async () => {
-    const html = page("marcus");
-
-    const root = await one(html, "#bill");
-    expect(root.attrs).toMatchObject({
-      "data-bill-id": "bill-1",
-      "data-viewer": "marcus",
-      "data-payer": "gavin",
-      "data-viewer-is-payer": "false",
-      "data-editable": "self",
-      "data-status": "draft",
-      "data-revision": "7",
+      expect((await one(html, "#bill")).attrs["data-layout"]).toBe("receipt");
+      const rows = await select(html, "li.item");
+      expect(rows.map((r) => r.attrs["data-item"])).toEqual(SAIGON.items.map((i) => i.id));
+      for (const item of SAIGON.items) {
+        expect(rows.find((r) => r.attrs["data-item"] === item.id)!.text).toContain(item.label);
+      }
+      expect(await textOf(html, 'li.item[data-item="noodles"] .item-price')).toBe("$32.00");
+      // The viewer is the tick, never a face of their own.
+      expect((await one(html, 'li.item[data-item="rolls"] .who .stack')).attrs["aria-label"]).toBe("Dani, Omar");
+      expect(await select(html, 'li.item[data-item="bun"] .who .stack')).toEqual([]);
+      expect(await select(html, ".items .stack .av.is-viewer")).toEqual([]);
     });
 
-    const mine = await select(html, "button.chip.is-viewer");
-    expect(mine).toHaveLength(SAIGON.items.length);
-    expect(new Set(mine.map((c) => c.attrs["data-participant"]))).toEqual(new Set(["marcus"]));
-    expect(mine.every((c) => !("disabled" in c.attrs))).toBe(true);
+    it("ticks the viewer's lines and rings the ones nobody claimed", async () => {
+      const html = page("marcus");
 
-    const others = await select(html, "button.chip:not(.is-viewer)");
-    expect(others).toHaveLength(SAIGON.items.length * 7);
-    expect(others.every((c) => "disabled" in c.attrs)).toBe(true);
-  });
+      expect((await select(html, "li.item.is-mine")).map((r) => r.attrs["data-item"])).toEqual(["rolls", "bun"]);
+      const pressed = await select(html, '[data-claim][aria-pressed="true"]');
+      expect(pressed.map((b) => b.attrs["data-item"])).toEqual(["rolls", "bun"]);
+      expect((await select(html, "li.item.is-unclaimed")).map((r) => r.attrs["data-item"])).toEqual(["tea", "water"]);
+      expect(html).toMatch(/\.is-unclaimed \.tick\s*\{[^}]*dashed/);
 
-  it("lets the payer edit every chip", async () => {
-    const html = page("gavin");
+      const ring = await one(html, "[data-bar] [data-jump-unclaimed]");
+      expect(ring.text).toBe("2");
+      expect(ring.attrs["aria-label"]).toBe("2 unclaimed");
+      expect(await select(page("marcus", bill, SAIGON), "[data-jump-unclaimed]")).toEqual([]);
+    });
 
-    expect((await one(html, "#bill")).attrs).toMatchObject({ "data-viewer-is-payer": "true", "data-editable": "all" });
-    expect(await select(html, "button.chip[disabled]")).toEqual([]);
-    expect(await select(html, "button.chip")).toHaveLength(SAIGON.items.length * 8);
+    it("shows the viewer's piece of a shared line, and nothing on a line that is theirs alone", async () => {
+      const html = page("marcus");
+
+      expect(await textOf(html, 'li.item[data-item="rolls"] .piece')).toBe("÷3$5.00");
+      expect(await textOf(html, 'li.item[data-item="bun"] .piece')).toBe("");
+      expect(await textOf(html, 'li.item[data-item="banhxeo"] .piece')).toBe("");
+    });
+
+    it("keeps every row the same two lines tall, so a claim landing never moves the list", async () => {
+      const html = page("marcus");
+
+      for (const item of SAIGON.items) {
+        expect(await select(html, `li.item[data-item="${item.id}"] .piece`), item.id).toHaveLength(1);
+        expect(await select(html, `li.item[data-item="${item.id}"] .who`), item.id).toHaveLength(1);
+      }
+      expect(html).toMatch(/\.row\s*\{[^}]*grid-template-rows:\s*23px 22px/);
+    });
+
+    it("marks the viewer, and gives a member one tap per line for their own claim", async () => {
+      const html = page("marcus");
+
+      expect((await one(html, "#bill")).attrs).toMatchObject({
+        "data-bill-id": "bill-1",
+        "data-viewer": "marcus",
+        "data-payer": "gavin",
+        "data-viewer-is-payer": "false",
+        "data-editable": "self",
+        "data-status": "draft",
+        "data-revision": "7",
+      });
+      const claims = await select(html, "button.row[data-claim]");
+      expect(claims).toHaveLength(SAIGON.items.length);
+      expect(new Set(claims.map((c) => c.attrs["data-participant"]))).toEqual(new Set(["marcus"]));
+      expect(await select(html, "[data-open-line], .tick-btn, li.is-locked")).toEqual([]);
+    });
+
+    it("gives the payer their own tick apart from the rest of the line, which opens who had it", async () => {
+      const html = page("gavin");
+
+      expect((await one(html, "#bill")).attrs).toMatchObject({ "data-viewer-is-payer": "true", "data-editable": "all" });
+      const ticks = await select(html, "button.tick-btn[data-claim]");
+      expect(ticks).toHaveLength(SAIGON.items.length);
+      expect(new Set(ticks.map((t) => t.attrs["data-participant"]))).toEqual(new Set(["gavin"]));
+      const lines = await select(html, "button.row[data-open-line]");
+      expect(lines.map((l) => l.attrs["data-open-line"])).toEqual(SAIGON.items.map((i) => i.id));
+      expect(lines.every((l) => l.attrs["aria-haspopup"] === "dialog" && !("data-claim" in l.attrs))).toBe(true);
+    });
+
+    it("gives every tap target a name and a toggle state, and a finger's room", async () => {
+      const html = page("marcus");
+
+      for (const button of await select(html, "button[data-claim]")) {
+        expect(button.attrs.type).toBe("button");
+        expect(["true", "false"]).toContain(button.attrs["aria-pressed"]);
+      }
+      expect((await one(html, 'li.item[data-item="rolls"] button')).attrs["aria-label"]).toBe("Spring rolls, $15.00, with Dani, Omar");
+      expect((await one(html, 'li.item[data-item="bun"] button')).attrs["aria-label"]).toBe("Bun bo Hue, $24.50");
+      expect((await one(page("gavin"), 'li.item[data-item="beef"] .tick-btn')).attrs["aria-label"]).toBe("Shaking beef, Gavin");
+      expect(html).toMatch(/\.tick-btn\s*\{[^}]*width:\s*44px/);
+      expect(html).toMatch(/\.back\s*\{[^}]*min-height:\s*44px/);
+    });
   });
 
   it("lets nobody edit a bill that is no longer a draft", async () => {
     for (const viewer of ["gavin", "marcus"]) {
-      const html = page(viewer, { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" }, SAIGON);
+      const html = page(viewer, confirmedBill, SAIGON);
       expect((await one(html, "#bill")).attrs["data-editable"]).toBe("none");
-      expect(await select(html, "button.chip:not([disabled])")).toEqual([]);
+      expect(await select(html, "[data-claim], [data-open-line], [data-edit-field], [data-add-line], [data-add-guest], [data-open-payer]")).toEqual([]);
+      expect(await select(html, "li.item.is-locked")).toHaveLength(SAIGON.items.length);
     }
   });
 
-  it("gives every chip an accessible name and toggle state, inside a group named for its line", async () => {
+  it("shows the viewer's running amount in the bar and each person's on their tile", async () => {
     const html = page("marcus");
-
-    const chips = await select(html, "button.chip");
-    for (const chip of chips) {
-      expect(chip.attrs.type).toBe("button");
-      expect(["true", "false"]).toContain(chip.attrs["aria-pressed"]);
-      expect(chip.text.length).toBeGreaterThan(0);
-    }
-    const group = await one(html, 'li.item[data-item="tea"] [role="group"]');
-    expect(group.attrs["aria-label"]).toContain("Thai iced tea x3");
-    expect(html).toMatch(/\.chip\s*\{[^}]*min-height:\s*44px/);
-  });
-
-  it("shows the viewer's running amount up front", async () => {
-    const html = page("marcus");
-    const marcus = splitBill(draft).shares.find((s) => s.participant === "marcus")!;
 
     expect(await textOf(html, "[data-you-owed]")).toBe("$38.02");
-    const detail = await textOf(html, "[data-you-detail]");
-    expect(detail).toContain("$29.50");
-    expect(detail).toContain(`$${(marcus.taxCents / 100).toFixed(2)}`);
-    expect(detail).toContain(`$${(marcus.tipCents / 100).toFixed(2)}`);
-    expect(await textOf(html, "[data-you]")).toMatch(/Gavin/);
+    const bar = await one(html, "[data-bar]");
+    expect(bar.text).toContain("$38.02");
+    expect((await one(html, "[data-bar] .stack")).attrs["aria-label"]).toBe("Marcus");
+    expect(await textOf(html, '[data-owed="marcus"]')).toBe("$38.02");
+    expect(await textOf(html, '[data-owed="jess"]')).toBe("$37.38");
+
+    // The viewer first, so the face they look for is always where they look.
+    const tiles = await select(html, "button.tile[data-person]");
+    expect(tiles.map((t) => t.attrs["data-person"])).toEqual(["marcus", "dani", "gavin", "jess", "lena", "omar", "priya", "theo"]);
+    expect(tiles[0]!.attrs["aria-label"]).toBe("Marcus (you), $38.02");
+    expect(tiles[0]!.text).toContain("Marcus");
+    expect(tiles.find((t) => t.attrs["data-person"] === "gavin")!.attrs["aria-label"]).toMatch(/^Gavin, \$[\d.]+, paid the bill$/);
+    expect(await select(html, '[data-person="gavin"] .badge.coin')).toHaveLength(1);
+    expect(await select(html, ".badge.coin")).toHaveLength(1);
   });
 
-  it("tells the payer their own share and what the table owes them", async () => {
+  it("tells the payer what the table owes them", async () => {
     const html = page("gavin");
-    const result = splitBill(draft);
-    const gavin = result.shares.find((s) => s.participant === "gavin")!;
-
-    expect(await textOf(html, "[data-you-owed]")).toBe(`$${(gavin.owedCents / 100).toFixed(2)}`);
-    expect(await textOf(html, "[data-you]")).toContain(`$${(result.payerCollectsCents / 100).toFixed(2)}`);
+    expect(await textOf(html, "[data-you-owed]")).toBe(`$${(splitBill(draft).payerCollectsCents / 100).toFixed(2)}`);
+    expect((await one(html, "[data-bar] .stack")).attrs["aria-label"]).toBe("Dani, Jess, Lena, Marcus, Omar, Priya, Theo");
   });
 
-  it("shows per-person totals, the bill totals and the unclaimed shortfall", async () => {
+  it("shows the bill totals and the unclaimed shortfall once each", async () => {
     const html = page("marcus");
 
-    expect(await textOf(html, '[data-share="marcus"]')).toBe("$38.02");
-    expect(await textOf(html, '[data-share="jess"]')).toBe("$37.38");
     expect(await textOf(html, '[data-total="subtotal"]')).toBe("$251.50");
     expect(await textOf(html, '[data-total="tax"]')).toBe("$22.32");
     expect(await textOf(html, '[data-total="tip"]')).toBe("$50.30");
+    expect(await textOf(html, '[data-field-row="tip"] .pct')).toBe("20%");
+    expect(await textOf(html, ".trow.grand [data-total]")).toBe("$324.12");
     expect(await textOf(html, '[data-total="total"]')).toBe("$324.12");
     expect(await textOf(html, '[data-total="unclaimed"]')).toBe("$27.06");
   });
@@ -178,29 +215,52 @@ describe("renderPage", () => {
   it("puts the place, the date and the payer in the header", async () => {
     const header = await textOf(page("marcus"), "header");
     expect(header).toContain("Saigon Kitchen");
-    expect(header).toContain("Oct 28, 2026");
+    expect(header).toContain("Oct 28");
+    expect(header).not.toContain("2026");
     expect(header).toContain("Gavin");
 
+    const lastYear = renderPage(bill, splitBill(draft), draft.items, participantsOf(draft), "marcus", {}, Date.parse("2027-01-02T00:00:00Z"));
+    expect(await textOf(lastYear, "header")).toContain("Oct 28, 2026");
     const untitled = await textOf(page("marcus", { ...bill, place: null, billDate: null }), "header");
     expect(untitled).toContain("Receipt");
   });
 
-  it("renders a guest's chip like anyone else's", async () => {
+  it("names each person rather than calling anyone You", async () => {
+    const html = page("marcus");
+    expect(html).not.toMatch(/>\s*You\s*</);
+    expect(await textOf(html, '[data-person="marcus"] .tile-name')).toBe("Marcus");
+  });
+
+  it("draws a guest on the tile of whoever brought them, with the guest's share in theirs", async () => {
     const input = withItem({ ...draft, participants: [...draft.participants, "guest-sam"] }, {
       id: "wine",
       label: "Glass of wine",
       cents: 1200,
       claimedBy: ["guest-sam"],
     });
-    const people: Participant[] = [
-      ...participantsOf(draft),
-      { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" },
-    ];
-    const html = page("gavin", bill, input, people);
+    const html = page("gavin", bill, input, [...participantsOf(draft), sam]);
+    const result = splitBill(input);
+    const owed = (id: string) => result.shares.find((x) => x.participant === id)!.owedCents;
 
-    const chip = await one(html, 'li.item[data-item="wine"] button.chip[data-participant="guest-sam"]');
-    expect(chip.attrs["aria-pressed"]).toBe("true");
-    expect(chip.text).toBe("Sam");
+    const face = await one(html, 'li.item[data-item="wine"] .who .stack');
+    expect(face.attrs["aria-label"]).toBe("Sam");
+    expect(await select(html, 'li.item[data-item="wine"] .av.is-guest')).toHaveLength(1);
+    expect(await select(html, '[data-person="guest-sam"]')).toEqual([]);
+    expect(await select(html, '[data-person="dani"] .minis .av.is-guest')).toHaveLength(1);
+    expect((await one(html, '[data-person="dani"]')).attrs["aria-label"]).toContain("with Sam");
+    expect(stateOf(html).owing.dani.owedCents).toBe(owed("dani") + owed("guest-sam"));
+    expect(await textOf(html, '[data-owed="dani"]')).toBe(`$${((owed("dani") + owed("guest-sam")) / 100).toFixed(2)}`);
+  });
+
+  it("offers a guest to anyone on a draft, right among the people", async () => {
+    for (const viewer of ["gavin", "marcus"]) {
+      const slot = await one(page(viewer), "[data-people] li[data-add-guest-slot]");
+      expect(slot.attrs.class).toContain("needs-js");
+      expect(slot.text).toMatch(/^Guest/);
+    }
+    const outsider = participantsOf(draft).filter((p) => p.id !== "marcus");
+    const input = { ...withUnclaimed(draft, ["rolls", "bun"]), participants: draft.participants.filter((p) => p !== "marcus") };
+    expect(await select(page("marcus", bill, input, outsider), "[data-add-guest]")).toEqual([]);
   });
 
   it("escapes text that came from the receipt or from people", async () => {
@@ -246,7 +306,10 @@ describe("renderPage", () => {
       tipCents: 5030,
       printedTotalCents: 27382,
       reconciles: { ok: true, discrepancyCents: null },
+      pay: [],
     });
+    expect(state.owing.marcus).toEqual({ owedCents: 3802, paidCents: 0 });
+    expect(state.owing).not.toHaveProperty("guest-sam");
     expect(state.items).toHaveLength(SAIGON.items.length);
     expect(state.participants.map((p: any) => p.id)).toEqual(SAIGON.participants);
     expect(state.result.unclaimedCents).toBe(2706);
@@ -258,102 +321,72 @@ describe("renderPage", () => {
     const html = page("marcus", bill, input, people);
 
     expect((await one(html, "#bill")).attrs["data-editable"]).toBe("none");
-    expect(await select(html, "button.chip:not([disabled])")).toEqual([]);
+    expect(await select(html, "[data-claim], [data-bar]")).toEqual([]);
     expect(await textOf(html, "[data-you]")).toMatch(/not on this bill/i);
     expect(await textOf(html, "[data-you]")).toMatch(/Open the split/);
-    const hint = await textOf(html, "[data-hint]");
-    expect(hint).toMatch(/not on this bill/i);
-    expect(hint).not.toMatch(/Tap You/);
+    expect((await one(html, "#bill")).attrs.class).not.toContain("has-bar");
   });
 
-  it("names each status for what it is", async () => {
-    expect(await textOf(page("marcus"), "[data-status-label]")).toMatch(/^Draft/);
-    const confirmed = page("marcus", { ...bill, status: "confirmed" }, SAIGON);
-    expect(await textOf(confirmed, "[data-status-label]")).toMatch(/^Confirmed/);
-    expect(await textOf(page("marcus", { ...bill, status: "reading" }, SAIGON), "[data-status-label]")).not.toMatch(
-      /Confirmed/,
-    );
+  it("names each status for what it is, and seals a confirmed bill", async () => {
+    expect(await textOf(page("marcus"), "[data-status-label] .word")).toBe("Draft");
+    expect(await select(page("marcus"), "[data-status-label] .seal")).toEqual([]);
+    const confirmed = page("marcus", confirmedBill, SAIGON);
+    expect(await textOf(confirmed, "[data-status-label] .word")).toBe("Confirmed");
+    expect(await textOf(confirmed, "[data-status-label] .seal")).toBe("定");
+    expect(await textOf(page("marcus", { ...bill, status: "reading" }, SAIGON), "[data-status-label] .word")).toBe("Reading");
   });
 
-  it("keeps one note line on every row, so a claim landing never moves the chips", async () => {
-    const html = page("marcus");
-
-    for (const item of SAIGON.items) {
-      expect(await select(html, `li.item[data-item="${item.id}"] .item-meta`), item.id).toHaveLength(1);
-    }
-    expect(await textOf(html, 'li.item[data-item="rolls"] .item-meta')).toBe("Split 3 ways");
-    expect(await textOf(html, 'li.item[data-item="bun"] .item-meta')).toBe("Just you");
-    expect(await textOf(html, 'li.item[data-item="noodles"] .item-meta')).toBe("Just Dani");
-    expect(await textOf(html, 'li.item[data-item="tea"] .item-meta')).toMatch(/nobody/i);
-    expect(html).toMatch(/\.item-meta\s*\{[^}]*height:\s*20px/);
-    // Pressed and unpressed chips share a weight, so a toggle keeps its width.
-    expect(html).not.toMatch(/\.chip\[aria-pressed="true"\]\s*\{[^}]*font-weight/);
-  });
-
-  it("draws chips the viewer cannot tap as name tags rather than buttons", () => {
-    expect(page("marcus")).toMatch(/\.chip:disabled\s*\{[^}]*border-color:\s*transparent/);
-  });
-
-  it("shows the payer whether the read adds up, with the inputs to fix it", async () => {
+  it("shows the payer whether the read adds up, and lets them fix each amount in place", async () => {
     const adds = page("gavin");
     expect((await one(adds, "[data-reconcile]")).attrs.class).toContain("is-ok");
-    expect(await textOf(adds, "[data-reconcile]")).toBe("Adds up: the items and tax match the printed total of $273.82.");
-    expect((await one(adds, "#field-printedTotal")).attrs.value).toBe("273.82");
-    expect((await one(adds, "#field-tax")).attrs.value).toBe("22.32");
-    expect((await one(adds, "#field-tip")).attrs.value).toBe("50.30");
-    // The inputs need the script; without it the payer still sees the check.
-    expect((await one(adds, "[data-check] .fields")).attrs.class).toContain("needs-js");
+    expect(await textOf(adds, "[data-reconcile] .mark")).toBe("Adds up");
+    expect(await textOf(adds, '[data-total="printed"]')).toBe("$273.82");
+    const fields = await select(adds, "button.amt[data-edit-field]");
+    expect(fields.map((f) => f.attrs["data-edit-field"])).toEqual(["tax", "printedTotal", "tip"]);
+    expect(fields.map((f) => f.attrs["aria-label"])).toEqual(["Tax, $22.32", "Printed total, $273.82", "Tip, $50.30"]);
+    // Adding a line needs the script; without it the payer still sees the check.
     expect(await select(adds, "[data-add-line].needs-js")).toHaveLength(1);
 
     const misread = withItem(SAIGON, { id: "extra", label: "Misread", cents: 5000, claimedBy: [] });
     const over = page("gavin", bill, misread);
     expect((await one(over, "[data-reconcile]")).attrs.class).toContain("is-off");
-    expect(await textOf(over, "[data-reconcile]")).toBe(
-      "Doesn't add up yet: the items and tax come to $323.82, $50.00 more than the printed total of $273.82.",
-    );
+    expect(await textOf(over, "[data-reconcile] .mark")).toBe("+$50.00");
 
     const unread = page("gavin", { ...bill, printedTotalCents: null });
-    expect(await textOf(unread, "[data-reconcile]")).toMatch(/Enter the printed total/);
-    expect((await one(unread, "#field-printedTotal")).attrs.value).toBe("");
+    expect(await textOf(unread, "[data-reconcile] .mark")).toBe("Not entered");
+    expect(await textOf(unread, '[data-total="printed"]')).toBe("—");
+    expect((await one(unread, '[data-edit-field="printedTotal"]')).attrs["aria-label"]).toBe("Printed total, not entered");
 
-    expect(await select(page("marcus"), "[data-check], [data-add-line]")).toEqual([]);
-    const locked = await select(page("gavin", { ...bill, status: "confirmed" }, SAIGON), "[data-check], [data-add-line]");
-    expect(locked).toHaveLength(2);
-    expect(locked.every((el) => "hidden" in el.attrs)).toBe(true);
+    expect(await select(page("marcus"), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
+    expect(await select(page("gavin", confirmedBill, SAIGON), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
   });
 
-  it("lets the payer hand the bill to another member of the roster", async () => {
-    const guest: Participant = { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" };
-    const html = page("gavin", bill, draft, [...participantsOf(draft), guest]);
+  it("lets only the payer hand the bill to someone else, from the payer in the header", async () => {
+    const chip = await one(page("gavin"), "header button.payer-chip[data-open-payer]");
+    expect(chip.attrs["aria-haspopup"]).toBe("dialog");
+    expect(chip.text).toBe("Paid by Gavin");
 
-    const options = await select(html, "[data-check] form[data-payer-form] select#field-payer option");
-    expect(options.map((o) => o.attrs.value)).toEqual(draft.participants);
-    expect(options.map((o) => o.text)).toEqual(draft.participants.map((id) => SAIGON_NAMES[id]));
-    expect(options.filter((o) => "selected" in o.attrs).map((o) => o.attrs.value)).toEqual(["gavin"]);
-    expect(await textOf(html, "label[for=field-payer]")).toBe("Who paid");
-    expect((await one(html, "[data-check] .fields")).text).toContain("Who paid");
-
-    expect(await select(page("marcus"), "[data-payer-form]")).toEqual([]);
+    const diner = page("marcus");
+    expect(await select(diner, "[data-open-payer]")).toEqual([]);
+    expect(await textOf(diner, "header span.payer-chip")).toBe("Paid by Gavin");
   });
 
   it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {
     const reopened = { ...bill, confirmedAt: "2026-10-28T22:00:00.000Z" };
-    const html = renderPage(reopened, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { hasPayments: true });
+    const html = renderPage(reopened, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { hasPayments: true }, NOW);
 
-    expect("hidden" in (await one(html, "form[data-payer-form]")).attrs).toBe(true);
+    expect(await select(html, "[data-open-payer]")).toEqual([]);
+    expect(await select(html, "header span.payer-chip")).toHaveLength(1);
     expect(stateOf(html).hasPayments).toBe(true);
     // The rest of the payer's corrections stay available.
-    expect("hidden" in (await one(html, "[data-check]")).attrs).toBe(false);
+    expect(await select(html, "[data-edit-field]")).toHaveLength(3);
 
     const unpaid = page("gavin");
-    expect("hidden" in (await one(unpaid, "form[data-payer-form]")).attrs).toBe(false);
+    expect(await select(unpaid, "[data-open-payer]")).toHaveLength(1);
     expect(stateOf(unpaid).hasPayments).toBe(false);
   });
 
-  describe("the people list on a confirmed bill", () => {
-    const confirmed: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
-    const sam: Participant = { billId: bill.id, id: "guest-sam", kind: "guest", displayName: "Sam", addedBy: "dani" };
-    const kim: Participant = { billId: bill.id, id: "guest-kim", kind: "guest", displayName: "Kim", addedBy: "gavin" };
+  describe("a confirmed bill", () => {
     const input: BillInput = {
       ...withItem(withItem(SAIGON, { id: "lobster", label: "Lobster", cents: 2000, claimedBy: ["guest-sam"] }), {
         id: "fries",
@@ -365,64 +398,111 @@ describe("renderPage", () => {
       pardoned: ["marcus"],
     };
     const people = [...participantsOf(SAIGON), sam, kim];
+    const result = splitBill(input);
+    const share = (id: string) => result.shares.find((x) => x.participant === id)!;
+    const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-    function list(viewer: string): string {
-      return renderPage(confirmed, splitBill(input), input.items, people, viewer, { paid: [] });
+    function view(viewer: string, extras: StateExtras = {}): string {
+      return renderPage(confirmedBill, result, input.items, people, viewer, { paid: [], ...extras }, NOW);
     }
 
-    it("names the next action on the forgive button and keeps no pressed state", async () => {
-      const html = list("gavin");
+    it("opens on the viewer's share, with the receipt and the people a tap away", async () => {
+      const html = view("dani");
 
-      const marcus = await one(html, 'button[data-forgive="marcus"]');
-      expect(marcus.text).toBe("Undo");
-      expect(marcus.attrs["aria-label"]).toBe("Undo forgiving Marcus's share");
-      const dani = await one(html, 'button[data-forgive="dani"]');
-      expect(dani.text).toBe("Forgive");
-      expect(dani.attrs["aria-label"]).toBe("Forgive Dani's share");
-
-      const buttons = await select(html, "button[data-forgive]");
-      expect(buttons.length).toBeGreaterThan(0);
-      for (const button of buttons) expect(button.attrs).not.toHaveProperty("aria-pressed");
+      expect((await one(html, "#bill")).attrs).toMatchObject({ "data-layout": "share", class: "page" });
+      expect(await select(html, "[data-bar]")).toEqual([]);
+      expect(await select(html, '.view.is-active[data-view="home"] [data-you]')).toHaveLength(1);
+      expect((await select(html, ".view")).map((v) => v.attrs["data-view"])).toEqual(["home", "receipt", "people"]);
+      expect(await select(html, '#receipt[data-view="receipt"] [data-items]')).toHaveLength(1);
+      expect(await select(html, '#people[data-view="people"] [data-people]')).toHaveLength(1);
+      expect((await select(html, "a[data-go]")).map((a) => a.attrs.href)).toEqual(["#receipt", "#people"]);
+      expect(await textOf(html, '[data-go="receipt"] .money')).toBe(money(result.distributableCents));
+      expect(html).toMatch(/\.is-live\[data-layout="share"\] \.view:not\(\.is-active\)\s*\{[^}]*display:\s*none/);
     });
 
-    it("tells the click handler which state a button is in, since the label no longer carries it for scripts", async () => {
-      const html = list("gavin");
+    it("rolls a guest into the share of whoever brought them, food, tax and tip together", async () => {
+      const html = view("dani");
+      const dani = share("dani");
+      const guest = share("guest-sam");
 
-      expect((await one(html, 'button[data-forgive="marcus"]')).attrs["data-pardoned"]).toBe("true");
-      expect((await one(html, 'button[data-forgive="dani"]')).attrs["data-pardoned"]).toBe("false");
+      expect(await textOf(html, "[data-you-owed]")).toBe(money(dani.owedCents + guest.owedCents));
+      expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani, Sam");
+      const detail = await textOf(html, "[data-you-detail]");
+      expect(detail).toContain(money(dani.subtotalCents + guest.subtotalCents));
+      expect(detail).toContain(`Tax ${money(dani.taxCents + guest.taxCents)}`);
+      expect(detail).toContain(`Tip ${money(dani.tipCents + guest.tipCents)}`);
+      const lines = await textOf(html, "[data-mine]");
+      expect(lines).toContain("Garlic noodles");
+      expect(await textOf(html, "[data-mine] .mine-guest")).toContain("Sam");
+      expect(lines).toContain("Lobster");
     });
 
-    const tagsOf = async (html: string) => (await select(html, "li.person .tag")).map((t) => t.text);
+    it("draws a forgiven share as nothing owed, with what it was struck through", async () => {
+      const html = view("marcus");
 
-    // A guest the payer added owes the payer like anyone else, so nothing says
-    // the payer covers them.
-    it("names whoever added each guest, the payer included, for every viewer", async () => {
-      expect(await tagsOf(list("gavin"))).toEqual(["you", "paid", "forgiven", "guest of Dani", "guest of Gavin"]);
-      expect(await tagsOf(list("marcus"))).toEqual(["paid", "you", "forgiven", "guest of Dani", "guest of Gavin"]);
-      for (const viewer of ["gavin", "marcus", "dani"]) {
-        const tags = (await tagsOf(list(viewer))).filter((t) => t.startsWith("guest") || t.startsWith("covered"));
-        expect(tags, viewer).toEqual(["guest of Dani", "guest of Gavin"]);
-      }
+      expect((await one(html, "[data-you]")).attrs.class).toContain("is-forgiven");
+      expect(await textOf(html, "[data-you-owed]")).toBe("$0.00");
+      expect(await textOf(html, "[data-you] .was")).toBe(money(share("marcus").owedCents));
+      expect((await one(html, "[data-you] .gift-mark")).attrs["aria-label"]).toBe("Forgiven");
+      expect(await select(html, "[data-pay], [data-you-detail]")).toEqual([]);
+
+      const tile = await one(view("gavin"), '[data-person="marcus"]');
+      expect(tile.attrs["aria-label"]).toContain("forgiven");
+      expect(await select(view("gavin"), '[data-person="marcus"] .badge.gift')).toHaveLength(1);
+      expect((await one(view("gavin"), '[data-owed="marcus"]')).attrs.class).toContain("is-forgiven");
     });
 
-    it("mutes a guest's amount and nobody else's", async () => {
-      const html = list("gavin");
+    it("stamps a share paid in full, and counts what is still out", async () => {
+      const jess = share("jess").owedCents;
+      const settled = [{ participant: "jess", cents: jess }, { participant: "theo", cents: 100 }];
+      const html = view("jess", { settled, paid: ["jess", "theo"], hasPayments: true });
 
-      for (const id of ["guest-sam", "guest-kim"]) {
-        expect((await one(html, `[data-share="${id}"]`)).attrs.class, id).toContain("is-guest");
-      }
-      for (const id of ["dani", "gavin", "marcus"]) {
-        expect((await one(html, `[data-share="${id}"]`)).attrs.class, id).not.toContain("is-guest");
-      }
-      expect(html).toMatch(/\.money\.is-guest\s*\{[^}]*color:\s*var\(--muted\)/);
+      expect((await one(html, "[data-you]")).attrs.class).toContain("is-paid");
+      expect(await textOf(html, "[data-you-owed]")).toBe("$0.00");
+      expect((await one(html, "[data-you] .stamp")).attrs["aria-label"]).toBe("Paid");
+      expect(await textOf(html, '[data-person="jess"] .stamp')).toBe("付讫");
+      expect(await select(html, '[data-person="theo"] .stamp')).toEqual([]);
+
+      const theo = view("theo", { settled, paid: ["jess", "theo"], hasPayments: true });
+      expect(await textOf(theo, "[data-you-owed]")).toBe(money(share("theo").owedCents - 100));
+      expect(await textOf(theo, "[data-you] .legend:not([data-you-detail])")).toBe(`${money(100)} / ${money(share("theo").owedCents)}`);
+
+      // Everyone who owes something but the forgiven, less the two payments.
+      // Kim, whom the payer added, owes the payer directly.
+      const debtors = ["dani", "jess", "lena", "omar", "priya", "theo", "guest-kim"];
+      const total = debtors.reduce((n, id) => n + share(id).owedCents, 0) + share("guest-sam").owedCents;
+      const payer = view("gavin", { settled, paid: ["jess", "theo"], hasPayments: true });
+      expect(await textOf(payer, "[data-you-owed]")).toBe(money(total - jess - 100));
+      expect(await textOf(payer, "[data-you] .legend")).toBe(`${money(jess + 100)} / ${money(total)}`);
+      expect(await textOf(payer, '[data-go="people"] .count')).toBe(`付讫 1/${debtors.length}`);
     });
 
-    it("offers a forgive button for a guest the payer added, who owes the payer directly", async () => {
-      const html = list("gavin");
+    // A guest the payer added owes the payer directly, so they sit on the
+    // payer's tile but count among the people the payer collects from.
+    it("puts the payer's own guest on the payer's tile, owing the payer directly", async () => {
+      const html = view("gavin");
+      const state = stateOf(html);
 
-      expect(await select(html, 'button[data-forgive="guest-kim"]')).toHaveLength(1);
-      expect(await select(html, 'button[data-forgive="guest-sam"]')).toHaveLength(1);
-      expect(await select(html, 'button[data-forgive="gavin"]')).toEqual([]);
+      expect(await select(html, '[data-person="gavin"] .minis .av')).toHaveLength(1);
+      expect(state.owing.gavin.owedCents).toBe(share("gavin").owedCents);
+      expect(state.owing["guest-kim"].owedCents).toBe(share("guest-kim").owedCents);
+      expect(await textOf(html, '[data-owed="gavin"]')).toBe(money(share("gavin").owedCents));
+      expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toContain("Kim");
+      expect(state.payerCollectsCents).toBe(Object.keys(state.owing).filter((id) => id !== "gavin").reduce((n, id) => n + state.owing[id].owedCents, 0));
+      expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
+    });
+
+    it("offers the viewer the payer's ways to pay, for what they have left", async () => {
+      const handles = [{ method: "venmo" as const, handle: "gavin-l" }];
+      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], handles });
+
+      const link = await one(html, "[data-pay] a.pay");
+      expect(link.attrs.href).toContain("venmo.com/gavin-l");
+      expect(link.attrs.href).toContain(`amount=${((share("theo").owedCents - 100) / 100).toFixed(2)}`);
+      expect(link.attrs).toMatchObject({ target: "_blank", rel: "noopener noreferrer" });
+      expect(link.text).toBe("Venmo");
+      expect(await select(view("gavin", { handles }), "[data-pay]")).toEqual([]);
+      expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
     });
   });
 
@@ -432,9 +512,23 @@ describe("renderPage", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html).toContain('<meta name="viewport" content="width=device-width, initial-scale=1');
     expect(html).toContain("prefers-color-scheme: dark");
-    expect(html).not.toMatch(/\bsrc=|<link\b|@import|url\(|https?:\/\//);
+    expect(html).not.toMatch(/\bsrc=|<link\b|@import/);
+    // Fonts and the paper grain are inlined; the only URL is the SVG
+    // namespace, which names a format and is never fetched.
+    for (const url of html.match(/url\(\s*["']?[^"')]{0,12}/g) ?? []) expect(url).toMatch(/url\(\s*["']?(data:|%23)/);
+    for (const link of html.match(/https?:\/\/[^\s"'<>)]*/g) ?? []) expect(link).toBe("http://www.w3.org/2000/svg");
     expect(html).toContain(CLIENT_SCRIPT);
     expect(CLIENT_SCRIPT).not.toMatch(/<\/script/i);
+  });
+
+  it("spends its font budget on the numerals and the three seal characters only", () => {
+    const html = page("marcus");
+    const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? [];
+    expect(faces).toHaveLength(2);
+    expect(faces.join("")).toContain("unicode-range: U+24, U+2C-2E, U+30-39");
+    expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+8BAB");
+    const bytes = faces.join("").length;
+    expect(bytes).toBeLessThan(8_000);
   });
 });
 
