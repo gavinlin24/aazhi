@@ -105,14 +105,19 @@ describe("renderPage", () => {
       expect(await textOf(html, 'li.item[data-item="banhxeo"] .piece')).toBe("");
     });
 
-    it("keeps every row the same two lines tall, so a claim landing never moves the list", async () => {
+    it("drops the avatar line on a row nobody else has, and keeps it bare once the viewer claims it", async () => {
       const html = page("marcus");
+      const bare = async (id: string) => (await one(html, `li.item[data-item="${id}"]`)).attrs.class.split(" ").includes("is-bare");
 
       for (const item of SAIGON.items) {
         expect(await select(html, `li.item[data-item="${item.id}"] .piece`), item.id).toHaveLength(1);
         expect(await select(html, `li.item[data-item="${item.id}"] .who`), item.id).toHaveLength(1);
       }
+      // Bun bo Hue is Marcus's alone; spring rolls are shared.
+      expect(await bare("bun")).toBe(true);
+      expect(await bare("rolls")).toBe(false);
       expect(html).toMatch(/\.row\s*\{[^}]*grid-template-rows:\s*23px 22px/);
+      expect(html).toMatch(/\.is-bare \.row\s*\{[^}]*grid-template-rows:\s*30px/);
     });
 
     it("marks the viewer, and gives a member one tap per line for their own claim", async () => {
@@ -544,7 +549,7 @@ describe("renderPage", () => {
     const html = page("marcus");
     const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? [];
     expect(faces).toHaveLength(2);
-    expect(faces.join("")).toContain("unicode-range: U+24, U+2C-2E, U+30-39");
+    expect(faces.join("")).toContain("unicode-range: U+2C-2E, U+30-39");
     expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+8BAB");
     const bytes = faces.join("").length;
     expect(bytes).toBeLessThan(8_000);

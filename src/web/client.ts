@@ -362,7 +362,7 @@ export const CLIENT_SCRIPT = String.raw`
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
-    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : ""];
+    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
     const claim = { "data-claim": true, "data-item": item.id, "data-participant": actor, "aria-pressed": String(mine) };
     if (mode === "all") {
       classes.push("has-picker");
@@ -759,7 +759,7 @@ export const CLIENT_SCRIPT = String.raw`
       for (const g of guestsOf(v, v.s.viewer)) {
         const list = mineNodes(v, g.id);
         const paid = guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null;
-        if (list) nodes.push(el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list);
+        if (list) nodes.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list]));
       }
       return nodes;
     });

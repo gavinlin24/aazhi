@@ -135,6 +135,8 @@ a { color: inherit; }
   padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
 }
 .page[data-layout="receipt"].has-bar { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
+/* Keyboard focus and claim mode scroll rows into view; keep them clear of the bar. */
+html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .needs-js { display: none; }
 .is-live .needs-js:not([hidden]) { display: revert; }
 .card {
@@ -218,6 +220,10 @@ button.payer-chip .name { text-decoration: underline dotted var(--ring); text-un
 button.row { cursor: pointer; }
 button.row:active { background: var(--fill); }
 .row > .tick, .tick-btn { grid-area: tick; justify-self: center; }
+/* Nobody else on the line means no avatars and no split, so the second line
+   goes. Claiming it yourself keeps it bare, so your own tap never moves rows. */
+.is-bare .row { grid-template-rows: 30px; grid-template-areas: "tick name price"; }
+.is-bare .who, .is-bare .piece { display: none; }
 .item-label { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
 .item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
@@ -542,7 +548,13 @@ button.tile:active { background: var(--fill); }
 .mine li:last-child { border-bottom: 0; }
 .mine li .item-label { flex: 1; }
 .mine .piece { color: var(--muted); }
-.mine-guest { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; color: var(--muted); font-size: 15px; }
+/* A guest's lines hang off their name under a dashed rule, the same dash as a
+   guest's avatar, so it is plain which lines are theirs. */
+.mine-group { border-top: 1px solid var(--rule); }
+.mine > .mine-group:first-child { border-top: 0; }
+.mine-guest { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--muted); font-size: 15px; }
+.mine-guest .av { --s: 24px; }
+.mine-group ul { margin-left: 11px; padding-left: 21px; border-left: 1.5px dashed var(--ring); }
 
 .drill { margin-top: 12px; padding: 0 6px; }
 .drill-row {
@@ -870,7 +882,7 @@ function itemRow(v: View, item: LineItem): string {
     `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}</span>` +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
-  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : ""];
+  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
   const claim = `data-claim data-item="${id}" data-participant="${escapeHtml(v.s.viewer)}" aria-pressed="${mine}"`;
   if (v.s.editable === "all") {
     classes.push("has-picker");
@@ -1108,7 +1120,7 @@ function mine(v: View): string {
       const list = mineList(v, g.id);
       // These are the viewer's own guests, so either mark is theirs to see.
       const paid = g.paidToPayer || g.paidToHost ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
-      return list ? `<p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}${paid}</p>${list}` : "";
+      return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}${paid}</p>${list}</div>` : "";
     })
     .join("");
   if (!own && !guests) return "";
