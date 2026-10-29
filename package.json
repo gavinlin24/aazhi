@@ -7,7 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "register-commands": "tsx scripts/register-commands.ts"
+    "register-commands": "tsx --env-file-if-exists=.dev.vars scripts/register-commands.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.10",
