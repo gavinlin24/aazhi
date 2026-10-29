@@ -99,7 +99,8 @@ the owe card.
 **7. Paying.** `/paywith` stores the payer's handle (`src/db/handles.ts`).
 **Pay my share** (`src/discord/handlers/owe.ts`) builds Venmo or Cash App links
 with the remaining amount (`src/web/paylink.ts`). Zelle gets written
-instructions.
+instructions. Once the bill is confirmed, the split page shows the same links
+under your share.
 
 **8. Recording.** **I paid** (`src/discord/handlers/settle.ts`) inserts into
 `settlements` (`src/db/settlements.ts`). The checks run inside the insert, so
