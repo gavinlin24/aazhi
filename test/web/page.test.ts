@@ -92,8 +92,8 @@ describe("renderPage", () => {
       expect(html).toMatch(/\.is-unclaimed \.tick\s*\{[^}]*dashed/);
 
       const ring = await one(html, "[data-bar] [data-jump-unclaimed]");
-      expect(ring.text).toBe("2");
-      expect(ring.attrs["aria-label"]).toBe("2 unclaimed");
+      expect(ring.text).toBe("2 left");
+      expect(ring.attrs["aria-label"]).toBe("2 left to claim");
       expect(await select(page("marcus", bill, SAIGON), "[data-jump-unclaimed]")).toEqual([]);
     });
 
@@ -180,7 +180,10 @@ describe("renderPage", () => {
     expect(await textOf(html, "[data-you-owed]")).toBe("$38.02");
     const bar = await one(html, "[data-bar]");
     expect(bar.text).toContain("$38.02");
-    expect((await one(html, "[data-bar] .stack")).attrs["aria-label"]).toBe("Marcus");
+    // Amount, arrow, whoever receives it: the payer.
+    expect(await textOf(html, "[data-bar] .owe")).toBe("you owe $38.02");
+    expect(await textOf(html, "[data-bar] .bar-in > .av.payer")).toBe("G");
+    expect(await select(html, "[data-bar] .stack")).toEqual([]);
     expect(await textOf(html, '[data-owed="marcus"]')).toBe("$38.02");
     expect(await textOf(html, '[data-owed="jess"]')).toBe("$37.38");
 
@@ -197,7 +200,10 @@ describe("renderPage", () => {
   it("tells the payer what the table owes them", async () => {
     const html = page("gavin");
     expect(await textOf(html, "[data-you-owed]")).toBe(`$${(splitBill(draft).payerCollectsCents / 100).toFixed(2)}`);
-    expect((await one(html, "[data-bar] .stack")).attrs["aria-label"]).toBe("Dani, Jess, Lena, Marcus, Omar, Priya, Theo");
+    // The same order as everyone else's bar, with the payer as the one receiving.
+    expect(await textOf(html, "[data-bar] .owe-label")).toBe("to collect");
+    expect((await one(html, "[data-bar] .bar-in > .av.payer")).attrs.class).toContain("is-viewer");
+    expect(await select(html, "[data-bar] .stack")).toEqual([]);
   });
 
   describe("who a tap claims for", () => {
@@ -212,11 +218,9 @@ describe("renderPage", () => {
       expect(row.attrs["aria-label"]).toBe("Claim for");
       const chips = await select(html, "[data-claimers] button.claimer");
       expect(chips.map((c) => [c.attrs["data-claim-as"], c.attrs["aria-pressed"], c.text])).toEqual([
-        ["dani", "true", "DYou"],
+        ["dani", "true", "DDani"],
         ["guest-sam", "false", "SSam"],
       ]);
-      // The chips already say whose amount it is, so no faces beside it.
-      expect(await select(html, "[data-bar] .bar-in .stack")).toEqual([]);
       expect(html).toMatch(/\.claimers\[hidden\]\s*\{\s*display:\s*none/);
     });
 
@@ -393,6 +397,22 @@ describe("renderPage", () => {
 
     expect(await select(page("marcus"), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
     expect(await select(page("gavin", confirmedBill, SAIGON), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
+  });
+
+  it("marks every value the payer can change with a brush, and nothing anyone else sees", async () => {
+    const payer = page("gavin");
+    expect((await one(payer, "section[data-items]")).attrs.class).toContain("is-editable");
+    expect(await select(payer, "li.item .item-price .brush")).toHaveLength(SAIGON.items.length);
+    expect(await select(payer, "button.amt[data-edit-field] > .brush")).toHaveLength(3);
+    expect(await select(payer, "header button.payer-chip .brush")).toHaveLength(1);
+    // Read-only figures on the payer's own receipt stay plain.
+    expect(await select(payer, '[data-total="subtotal"] .brush, [data-total="total"] .brush, .piece .brush')).toEqual([]);
+    expect(payer).toContain('<symbol id="i-brush"');
+
+    for (const html of [page("marcus"), page("gavin", confirmedBill, SAIGON)]) {
+      expect(await select(html, ".brush")).toEqual([]);
+      expect((await one(html, "section[data-items]")).attrs.class).not.toContain("is-editable");
+    }
   });
 
   it("lets only the payer hand the bill to someone else, from the payer in the header", async () => {

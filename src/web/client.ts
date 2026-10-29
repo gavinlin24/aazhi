@@ -330,7 +330,7 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(slot, JSON.stringify([nameOf(v, v.s.payerId), canHand]), () => {
       const inner = [icon("coin"), sr("Paid by "), el("span", { class: "name" }, nameOf(v, v.s.payerId))];
       return canHand
-        ? el("button", { type: "button", class: "payer-chip", "data-open-payer": true, "aria-haspopup": "dialog" }, inner)
+        ? el("button", { type: "button", class: "payer-chip", "data-open-payer": true, "aria-haspopup": "dialog" }, inner.concat(icon("brush", "brush")))
         : el("span", { class: "payer-chip" }, inner);
     });
   }
@@ -362,7 +362,7 @@ export const CLIENT_SCRIPT = String.raw`
     const others = item.claimedBy.filter((id) => id !== actor);
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
-      el("span", { class: "item-price" }, money(item.cents)),
+      el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
@@ -387,6 +387,7 @@ export const CLIENT_SCRIPT = String.raw`
     const mode = editable(v.s);
     const actor = claimFor || v.s.viewer;
     for (const section of root.querySelectorAll("[data-items]")) {
+      section.classList.toggle("is-editable", mode === "all");
       let list = section.querySelector(":scope > ul.items");
       if (v.s.items.length === 0) {
         if (list) list.remove();
@@ -431,7 +432,7 @@ export const CLIENT_SCRIPT = String.raw`
   function amount(mode, field, key, cents, label) {
     const shown = el("span", { "data-total": key }, cents === null ? "—" : money(cents));
     if (mode !== "all") return shown;
-    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, shown);
+    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [shown, icon("brush", "brush")]);
   }
 
   const FIELD_LABEL = { tax: "Tax", tip: "Tip", printedTotal: "Receipt" };
@@ -616,48 +617,40 @@ export const CLIENT_SCRIPT = String.raw`
     return ids;
   }
 
-  // Answers whether the chips are up, which the rest of the bar needs.
   function renderClaimers(v) {
     const row = root.querySelector("[data-bar] > [data-claimers]");
-    if (!row) return false;
+    if (!row) return;
     const ids = editable(v.s) === "none" ? [] : claimerIds(v);
     const actor = claimFor || v.s.viewer;
     row.hidden = ids.length < 2;
     keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
       el("button", { type: "button", class: "claimer", "data-claim-as": id, "aria-pressed": String(id === actor) }, [
         av(v, id),
-        el("span", { class: "label" }, id === v.s.viewer ? "You" : nameOf(v, id)),
+        el("span", { class: "label" }, nameOf(v, id)),
       ])));
-    return !row.hidden;
   }
 
   function renderBar(v) {
-    const choosing = renderClaimers(v);
+    renderClaimers(v);
     const bar = root.querySelector("[data-bar] > .bar-in");
     if (!bar) return;
     const s = v.s;
     const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-    keyedInto(bar, JSON.stringify([s.owing, s.payerCollectsCents, s.participants, s.viewer, s.payerId, open, choosing]), () => {
-      const ring = open > 0 ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " unclaimed" }, String(open)) : null;
-      if (s.viewerIsPayer) {
-        return [
-          stack(v, s.participants.filter((p) => p.kind === "member" && p.id !== s.viewer).map((p) => p.id), 4),
-          icon("arrow", "arrow"),
-          av(v, s.viewer, "payer"),
-          el("span", { class: "amount money", "data-you-owed": true }, money(s.payerCollectsCents)),
-          el("span", { class: "grow" }),
-          ring,
-        ];
-      }
-      return [
-        choosing ? null : stack(v, [s.viewer].concat(guestsOf(v, s.viewer).map((g) => g.id)), 3),
-        el("span", { class: "amount money", "data-you-owed": true }, money(owedOf(v, s.viewer))),
-        icon("arrow", "arrow"),
-        av(v, s.payerId, "payer"),
-        el("span", { class: "grow" }),
-        ring,
-      ];
-    });
+    const cents = s.viewerIsPayer ? s.payerCollectsCents : owedOf(v, s.viewer);
+    keyedInto(bar, JSON.stringify([cents, s.viewerIsPayer, s.participants, s.payerId, open]), () => [
+      el("span", { class: "owe" }, [
+        el("span", { class: "owe-label" }, s.viewerIsPayer ? "to collect" : "you owe"),
+        " ",
+        el("span", { class: "amount money", "data-you-owed": true }, money(cents)),
+      ]),
+      icon("arrow", "arrow"),
+      av(v, s.payerId, "payer"),
+      el("span", { class: "grow" }),
+      open > 0
+        ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " left to claim" },
+          [el("span", { class: "dash-ring", "aria-hidden": "true" }), open + " left"])
+        : null,
+    ]);
   }
 
   // ---- the confirmed bill -------------------------------------------------
@@ -908,7 +901,7 @@ export const CLIENT_SCRIPT = String.raw`
       : el("div", { class: "sheet-head" }, [
           av(v, g.id),
           el("h3", null, draft && manage
-            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, el("span", null, g.displayName))
+            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", null, g.displayName), icon("brush", "brush")])
             : g.displayName),
           guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
