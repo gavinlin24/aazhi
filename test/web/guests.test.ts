@@ -583,6 +583,22 @@ describe("pardons", () => {
     expect(posts.map((p) => p.authorization)).toEqual(["Bot bot-token", "Bot bot-token"]);
   });
 
+  it("posts nothing and leaves the revision alone when the flag already says that", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    expect((await pardon("gavin", "marcus")).status).toBe(200);
+    const revision = (await getBill(db, BILL))!.revision;
+
+    expect((await pardon("gavin", "marcus")).status).toBe(200);
+    expect((await pardon("gavin", "jess", false)).status).toBe(200);
+
+    expect((await getBill(db, BILL))!.revision).toBe(revision);
+    expect((await getShares(db, BILL)).filter((s) => s.pardoned).map((s) => s.participant)).toEqual(["marcus"]);
+    expect(channelPosts().map((p) => p.body.content)).toEqual([
+      "Gavin forgave Marcus's $44.46 for Saigon Kitchen, Oct 28, 2026, so Marcus owes nothing.",
+    ]);
+  });
+
   it("names a guest's companion and says what the pair owes after a guest's pardon", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();

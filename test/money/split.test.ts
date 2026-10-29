@@ -128,6 +128,21 @@ it("absorbs a pardon into the payer and moves nobody else", () => {
   expect(r.payerCollectsCents).toBe(base.payerCollectsCents - 3093);
 });
 
+it("has the payer collect only what claimants owe while lines are unclaimed", () => {
+  const r = splitBill({
+    items: [
+      { id: "a", label: "Dish", cents: 3000, claimedBy: ["bob"] },
+      { id: "b", label: "Dish", cents: 7000, claimedBy: [] },
+    ],
+    taxCents: 0,
+    tipCents: 0,
+    payer: "gavin",
+    participants: ["gavin", "bob"],
+    pardoned: [],
+  });
+  expect(r.payerCollectsCents).toBe(3000);
+});
+
 it("prorates a negative line item like any other", () => {
   const r = splitBill(withItem(SAIGON, { id: "comp", label: "Comped dessert", cents: -800, claimedBy: ["theo"] }));
   expect(r.shares.reduce((s, x) => s + x.owedCents, 0)).toBe(r.distributableCents);

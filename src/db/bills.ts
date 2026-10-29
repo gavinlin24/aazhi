@@ -910,14 +910,14 @@ export async function reassignPayer(db: D1Database, billId: string, to: Particip
     .bind(billId, to)
     .first<{ kind: string }>();
   if (target?.kind !== "member") throw new NotOnRosterError(billId, to);
-  const row = await db
-    .prepare(
-      `UPDATE bills SET payer_id = ?2, revision = revision + 1
-       WHERE id = ?1 AND status = 'draft' AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1)
-       RETURNING revision`,
-    )
-    .bind(billId, to)
-    .first<{ revision: number }>();
+  const open = "status = 'draft' AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1)";
+  const [, moved] = await db.batch<{ revision: number }>([
+    db
+      .prepare(`UPDATE shares SET pardoned = 0 WHERE bill_id = ?1 AND EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND payer_id <> ?2 AND ${open})`)
+      .bind(billId, to),
+    db.prepare(`UPDATE bills SET payer_id = ?2, revision = revision + 1 WHERE id = ?1 AND ${open} RETURNING revision`).bind(billId, to),
+  ]);
+  const row = moved!.results[0];
   if (row) return row.revision;
   const bill = await getBill(db, billId);
   throw bill?.status === "draft" ? new PaymentsRecordedError(billId) : new BillNotDraftError(billId);
@@ -987,28 +987,34 @@ export class PardonRefusedError extends Error {
 
 // Only on a confirmed bill, because a pardon waives an amount that is frozen.
 // The payer absorbs it: nobody else's share is touched, only the flag, and
-// whether the person is now clear is re-derived in the same batch.
+// whether the person is now clear is re-derived in the same batch. Null means
+// the flag already said that, so nothing changed and there is nothing to tell.
 export async function setPardon(
   db: D1Database,
   billId: string,
   participantId: ParticipantId,
   pardoned: boolean,
-): Promise<number> {
+): Promise<number | null> {
   const debtor = "(SELECT COALESCE(added_by, id) FROM participants WHERE bill_id = ?1 AND id = ?2)";
   const allowed = `EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'confirmed' AND payer_id <> ${debtor})
     AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND participant_id = ${debtor})`;
-  const [changed, , bump] = await db.batch<{ revision: number }>([
-    db
-      .prepare(`UPDATE shares SET pardoned = ?3 WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed} RETURNING participant_id`)
-      .bind(billId, participantId, pardoned ? 1 : 0),
-    settledAtStatement(db, billId, null, new Date().toISOString()),
+  // The bump goes first so it sees the flag before the change, as the share
+  // write does; both then agree on whether this write changes anything.
+  const [bump, changed] = await db.batch<{ revision: number }>([
     db
       .prepare(
         `UPDATE bills SET revision = revision + 1
-         WHERE id = ?1 AND EXISTS (SELECT 1 FROM shares WHERE bill_id = ?1 AND participant_id = ?2) AND ${allowed}
+         WHERE id = ?1 AND EXISTS (SELECT 1 FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND pardoned <> ?3) AND ${allowed}
          RETURNING revision`,
       )
-      .bind(billId, participantId),
+      .bind(billId, participantId, pardoned ? 1 : 0),
+    db
+      .prepare(
+        `UPDATE shares SET pardoned = ?3
+         WHERE bill_id = ?1 AND participant_id = ?2 AND pardoned <> ?3 AND ${allowed} RETURNING participant_id`,
+      )
+      .bind(billId, participantId, pardoned ? 1 : 0),
+    settledAtStatement(db, billId, null, new Date().toISOString()),
   ]);
   const row = bump!.results[0];
   if (changed!.results.length === 1 && row) return row.revision;
@@ -1016,6 +1022,7 @@ export async function setPardon(
   const now = await db
     .prepare(
       `SELECT b.status, b.payer_id, COALESCE(p.added_by, p.id) AS debtor, s.participant_id IS NOT NULL AS has_share,
+         s.pardoned,
          EXISTS (SELECT 1 FROM settlements x WHERE x.bill_id = b.id AND x.participant_id = COALESCE(p.added_by, p.id)) AS paid
        FROM bills b
        LEFT JOIN participants p ON p.bill_id = b.id AND p.id = ?2
@@ -1023,10 +1030,11 @@ export async function setPardon(
        WHERE b.id = ?1`,
     )
     .bind(billId, participantId)
-    .first<{ status: string; payer_id: string; debtor: string | null; has_share: number; paid: number }>();
+    .first<{ status: string; payer_id: string; debtor: string | null; has_share: number; pardoned: number | null; paid: number }>();
   if (now?.status !== "confirmed") throw new PardonRefusedError("not-confirmed");
   if (!now.has_share) throw new PardonRefusedError("no-share");
   if (now.debtor === now.payer_id) throw new PardonRefusedError("payer");
   if (now.paid) throw new PardonRefusedError("paid");
+  if (now.pardoned === (pardoned ? 1 : 0)) return null;
   throw new PardonRefusedError("changed");
 }

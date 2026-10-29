@@ -394,6 +394,7 @@ api.post(
     try {
       return await commit(c, grant, snapshot.bill, async () => {
         const revision = await setPardon(c.env.DB, grant.billId, participantId, pardoned);
+        if (revision === null) return snapshot.bill.revision;
         c.executionCtx.waitUntil(
           announcePardon(c.env, grant.billId, participantId, pardoned).catch((error) => console.error("could not announce the pardon", error)),
         );

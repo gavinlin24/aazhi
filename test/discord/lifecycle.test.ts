@@ -18,6 +18,7 @@ import {
   reopenBill,
   setBillAmounts,
   setClaim,
+  setPardon,
   splitOrphansEvenly,
   toSplitInput,
 } from "../../src/db/bills";
@@ -388,6 +389,31 @@ describe("reassignPayer", () => {
     await reassignPayer(db, BILL, "priya");
     const r = splitBill(await toSplitInput(db, BILL));
     expect(r.payerCollectsCents).toBe(32412 - 5091);
+  });
+
+  it("drops the old payer's pardons when a reopened bill changes hands", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await setPardon(db, BILL, "lena", true);
+    await reopenBill(db, BILL);
+
+    await reassignPayer(db, BILL, "priya");
+    expect(await confirmBill(db, BILL, await revision(), "priya")).toMatchObject({ ok: true });
+
+    const r = splitBill(await toSplitInput(db, BILL));
+    expect(r.shares.some((s) => s.pardoned)).toBe(false);
+    expect(r.payerCollectsCents).toBe(32412 - 5091);
+  });
+
+  it("keeps pardons when the payer is handed back to themselves", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await setPardon(db, BILL, "lena", true);
+    await reopenBill(db, BILL);
+
+    await reassignPayer(db, BILL, "gavin");
+
+    expect(splitBill(await toSplitInput(db, BILL)).shares.find((s) => s.participant === "lena")!.pardoned).toBe(true);
   });
 
   it("refuses to reassign the payer to someone off the roster", async () => {

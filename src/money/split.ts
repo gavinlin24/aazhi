@@ -130,8 +130,8 @@ export function splitBill(input: BillInput): SplitResult {
 
   // Pardons never redistribute: the payer simply stops collecting that share.
   const payerCollectsCents = shares.reduce(
-    (total, s) => (s.participant === input.payer || s.pardoned ? total - s.owedCents : total),
-    distributableCents,
+    (total, s) => (s.participant === input.payer || s.pardoned ? total : total + s.owedCents),
+    0,
   );
 
   return {
