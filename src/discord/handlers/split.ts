@@ -10,6 +10,7 @@ import { addParticipant, createBill, insertItems, setBillMessage, supersedeOlder
 import type { Env } from "../../env";
 import { extractReceipt, type Extraction } from "../../extract/claude";
 import type { InteractionHandler } from "../interactions";
+import { displayName } from "../members";
 import { loadBillMessage } from "../render";
 import { editBillMessage, editOriginal, ephemeral } from "../rest";
 
@@ -55,7 +56,7 @@ function context(body: APIInteraction): { guildId: string; channelId: string; in
   return {
     guildId: body.guild_id,
     channelId,
-    invoker: { id: user.id, displayName: member.nick ?? user.global_name ?? user.username },
+    invoker: { id: user.id, displayName: displayName(user, member.nick) },
   };
 }
 

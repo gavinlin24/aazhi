@@ -203,6 +203,7 @@ describe("handleInteraction routing", () => {
       interaction({ type: 1 }) as never,
       testEnv("00"),
       createExecutionContext(),
+      "https://aazhi.test",
     );
 
     expect(await response.json()).toEqual({ type: 1 });

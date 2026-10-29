@@ -5,9 +5,17 @@ import {
   type APIInteractionResponse,
 } from "discord-api-types/v10";
 import type { Env } from "../env";
+import { openSplit, pickRoster } from "./handlers/roster";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
 
-export type InteractionHandler = (body: APIInteraction, env: Env, ctx: ExecutionContext) => Promise<Response>;
+// `origin` is where this Worker was reached, so a handler can link back to the
+// page without a configured URL that would have to be kept in step with the deploy.
+export type InteractionHandler = (
+  body: APIInteraction,
+  env: Env,
+  ctx: ExecutionContext,
+  origin: string,
+) => Promise<Response>;
 
 // The extension point: a later task registers its handler by adding one entry
 // here. Commands are keyed by exact name (the message command by its display
@@ -17,7 +25,10 @@ export const commandHandlers: Record<string, InteractionHandler> = {
   split: splitCommand,
   "Split this receipt": splitMessageCommand,
 };
-export const componentHandlers: Record<string, InteractionHandler> = {};
+export const componentHandlers: Record<string, InteractionHandler> = {
+  "open:": openSplit,
+  "roster:": pickRoster,
+};
 
 function respond(body: APIInteractionResponse): Response {
   return Response.json(body);
@@ -32,18 +43,18 @@ function notSupported(): Response {
   });
 }
 
-export const handleInteraction: InteractionHandler = async (body, env, ctx) => {
+export const handleInteraction: InteractionHandler = async (body, env, ctx, origin) => {
   switch (body.type) {
     case InteractionType.Ping:
       return respond({ type: 1 });
     case InteractionType.ApplicationCommand: {
       const handler = commandHandlers[body.data.name];
-      return handler ? handler(body, env, ctx) : notSupported();
+      return handler ? handler(body, env, ctx, origin) : notSupported();
     }
     case InteractionType.MessageComponent: {
       const customId = body.data.custom_id;
       const prefix = Object.keys(componentHandlers).find((p) => customId.startsWith(p));
-      return prefix ? componentHandlers[prefix]!(body, env, ctx) : notSupported();
+      return prefix ? componentHandlers[prefix]!(body, env, ctx, origin) : notSupported();
     }
     default:
       return notSupported();

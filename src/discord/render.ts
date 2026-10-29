@@ -3,6 +3,7 @@ import {
   ComponentType,
   type APIActionRowComponent,
   type APIButtonComponent,
+  type APIComponentInMessageActionRow,
   type APIEmbed,
   type APIEmbedField,
   type APIInteractionResponseCallbackData,
@@ -16,8 +17,9 @@ import {
   type Participant,
 } from "../db/bills";
 import { reconciles } from "../extract/claude";
+import { formatCents, formatDate } from "../format";
 import { splitBill } from "../money/split";
-import type { Cents, LineItem, SplitResult } from "../money/types";
+import type { LineItem, SplitResult } from "../money/types";
 
 // Discord rejects the whole edit if any of these is exceeded, so the renderer
 // trims to fit instead of trusting the receipt to be short.
@@ -27,30 +29,14 @@ const MAX_NAME = 40;
 
 const COLOR = { draft: 0x5865f2, needsFixing: 0xf0b232, superseded: 0x80848e };
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-export function formatCents(cents: Cents): string {
-  const abs = Math.abs(cents);
-  const remainder = abs % 100;
-  const dollars = String((abs - remainder) / 100).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${cents < 0 ? "-" : ""}$${dollars}.${String(remainder).padStart(2, "0")}`;
-}
-
 // Receipt labels and display names are other people's text; unescaped, a
 // "*" in a dish name would bold half the message.
-function escapeMarkdown(text: string): string {
+export function escapeMarkdown(text: string): string {
   return text.replace(/[\\*_`~|>#[\]]/g, "\\$&");
 }
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
-}
-
-function formatDate(isoDate: string | null): string | null {
-  const match = isoDate ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate) : null;
-  if (!match) return null;
-  const month = MONTHS[Number(match[2]) - 1];
-  return month ? `${month} ${Number(match[3])}, ${match[1]}` : null;
 }
 
 function titleOf(bill: BillRow): string {
@@ -144,7 +130,7 @@ function billField(bill: BillRow, result: SplitResult): APIEmbedField {
   };
 }
 
-function buttons(bill: BillRow, canConfirm: boolean): APIActionRowComponent<APIButtonComponent>[] {
+function components(bill: BillRow, canConfirm: boolean): APIActionRowComponent<APIComponentInMessageActionRow>[] {
   const row: APIButtonComponent[] = [
     { type: ComponentType.Button, style: ButtonStyle.Primary, label: "Open the split", custom_id: `open:${bill.id}` },
   ];
@@ -157,7 +143,26 @@ function buttons(bill: BillRow, canConfirm: boolean): APIActionRowComponent<APIB
       custom_id: `confirm:${bill.id}:${bill.revision}`,
     });
   }
-  return [{ type: ComponentType.ActionRow, components: row }];
+  const rows: APIActionRowComponent<APIComponentInMessageActionRow>[] = [{ type: ComponentType.ActionRow, components: row }];
+  // Lets the payer put people on the roster who have not tapped, so one person
+  // can assign the whole bill at the table. Everyone sees it (a message cannot
+  // hide a component from some viewers), so the handler refuses non-payers.
+  // A select menu takes a whole action row; Discord allows five rows.
+  if (bill.status === "draft") {
+    rows.push({
+      type: ComponentType.ActionRow,
+      components: [
+        {
+          type: ComponentType.UserSelect,
+          custom_id: `roster:${bill.id}`,
+          placeholder: "Add people who were at dinner",
+          min_values: 1,
+          max_values: 25,
+        },
+      ],
+    });
+  }
+  return rows;
 }
 
 function embedLength(embed: APIEmbed): number {
@@ -210,7 +215,7 @@ export function renderBill(
   return {
     content: "",
     embeds: [embed],
-    components: buttons(bill, status.ok),
+    components: components(bill, status.ok),
     allowed_mentions: { parse: [] },
   };
 }

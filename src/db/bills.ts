@@ -300,14 +300,21 @@ export async function insertItems(db: D1Database, billId: string, items: NewItem
 }
 
 export async function addParticipant(db: D1Database, p: Participant): Promise<number> {
-  return mutate(db, p.billId, [
-    db
-      .prepare(
-        `INSERT INTO participants (bill_id, id, kind, display_name, added_by) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (bill_id, id) DO NOTHING`,
-      )
-      .bind(p.billId, p.id, p.kind, p.displayName, p.addedBy),
-  ]);
+  return addParticipants(db, p.billId, [p]);
+}
+
+// One batch for the lot, because the payer's roster picker can add 25 people
+// inside an interaction that has to answer within three seconds.
+export async function addParticipants(db: D1Database, billId: string, people: Participant[]): Promise<number> {
+  const insert = db.prepare(
+    `INSERT INTO participants (bill_id, id, kind, display_name, added_by) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (bill_id, id) DO NOTHING`,
+  );
+  return mutate(
+    db,
+    billId,
+    people.map((p) => insert.bind(billId, p.id, p.kind, p.displayName, p.addedBy)),
+  );
 }
 
 // Checks run before the batch because a batch commits whatever it contains: a

@@ -324,7 +324,11 @@ describe("/split", () => {
     expect(text).toMatch(/Gavin \$0\.00/);
     expect(text).toMatch(/Unclaimed \$273\.82/);
     expect(text).toMatch(/Garlic noodles · \$32\.00/);
-    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `confirm:${bill!.id}:${bill!.revision}`]);
+    expect(customIds(post!.body)).toEqual([
+      `open:${bill!.id}`,
+      `confirm:${bill!.id}:${bill!.revision}`,
+      `roster:${bill!.id}`,
+    ]);
     expect(JSON.stringify(post!.body.components)).not.toMatch(/pay|settle/i);
     expect(post!.body.allowed_mentions).toEqual({ parse: [] });
     // Nothing else to edit: there was no older draft here.
@@ -423,7 +427,7 @@ describe("/split", () => {
     expect(bill!.status).toBe("draft");
     const [post] = originalEdits();
     const text = shown(post!.body);
-    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`]);
+    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `roster:${bill!.id}`]);
     expect(text).toContain("$273.82");
     expect(text).toContain("$323.82");
     expect(text).toContain("$50.00");
@@ -440,7 +444,7 @@ describe("/split", () => {
 
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
-    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`]);
+    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `roster:${bill!.id}`]);
     expect(shown(post!.body)).toMatch(/couldn't read the printed total/i);
   });
 

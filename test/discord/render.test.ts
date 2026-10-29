@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BillRow, Participant } from "../../src/db/bills";
-import { formatCents, renderBill } from "../../src/discord/render";
+import { renderBill } from "../../src/discord/render";
 import { splitBill } from "../../src/money/split";
 import type { BillInput, LineItem } from "../../src/money/types";
 import { SAIGON, withItem, withUnclaimed } from "../fixtures/saigon";
@@ -55,7 +55,7 @@ type Embed = {
   fields?: { name: string; value: string }[];
   footer?: { text: string };
 };
-type Button = { type: number; custom_id?: string; label?: string };
+type Button = { type: number; custom_id?: string; label?: string; placeholder?: string; min_values?: number; max_values?: number };
 
 function render(b: BillRow, input: BillInput, leastConfident: string[] = []) {
   return renderBill(b, splitBill(input), input.items, participantsOf(input), leastConfident);
@@ -66,8 +66,12 @@ function embedOf(data: ReturnType<typeof renderBill>): Embed {
   return data.embeds![0] as Embed;
 }
 
-function buttonsOf(data: ReturnType<typeof renderBill>): Button[] {
+function componentsOf(data: ReturnType<typeof renderBill>): Button[] {
   return ((data.components ?? []) as { components: Button[] }[]).flatMap((row) => row.components);
+}
+
+function buttonsOf(data: ReturnType<typeof renderBill>): Button[] {
+  return componentsOf(data).filter((c) => c.type === 2);
 }
 
 function embedText(e: Embed): string {
@@ -90,21 +94,6 @@ function lineFor(text: string, label: string): string {
   expect(line, `no line mentions ${label}`).toBeDefined();
   return line!;
 }
-
-describe("formatCents", () => {
-  it.each([
-    [3802, "$38.02"],
-    [0, "$0.00"],
-    [5, "$0.05"],
-    [100, "$1.00"],
-    [-800, "-$8.00"],
-    [-1, "-$0.01"],
-    [123456, "$1,234.56"],
-    [100000000, "$1,000,000.00"],
-  ])("formats %i cents as %s", (cents, expected) => {
-    expect(formatCents(cents)).toBe(expected);
-  });
-});
 
 describe("renderBill", () => {
   it("renders the running amount for each participant and the unclaimed shortfall", () => {
@@ -196,6 +185,31 @@ describe("renderBill", () => {
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
     expect(text).toMatch(/couldn't read the printed total/i);
     expect(text).toMatch(/enter it on the page/i);
+  });
+
+  it("offers the payer a picker to add people who were at dinner, on a row of its own", () => {
+    const data = render(bill, draftState);
+    const rows = data.components as { type: number; components: Button[] }[];
+
+    const pickers = componentsOf(data).filter((c) => c.type === 5);
+    expect(pickers).toEqual([
+      {
+        type: 5,
+        custom_id: "roster:bill-1",
+        placeholder: expect.stringMatching(/at dinner/i),
+        min_values: 1,
+        max_values: 25,
+      },
+    ]);
+    const pickerRow = rows.find((r) => r.components.some((c) => c.type === 5))!;
+    expect(pickerRow.components).toHaveLength(1);
+    expect(rows.length).toBeLessThanOrEqual(5);
+    expect(rows.every((r) => r.type === 1)).toBe(true);
+  });
+
+  it("offers no roster picker once the bill is no longer a draft", () => {
+    const confirmed = render({ ...bill, status: "confirmed" }, SAIGON);
+    expect(componentsOf(confirmed).some((c) => c.type === 5)).toBe(false);
   });
 
   it("never pings anyone", () => {

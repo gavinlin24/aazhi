@@ -1,8 +1,12 @@
 import { Hono } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
+import { getBill, getParticipants, toSplitInput } from "./db/bills";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
+import { splitBill } from "./money/split";
+import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
+import { readToken } from "./web/token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -24,7 +28,35 @@ app.post("/interactions", async (c) => {
   } catch {
     return c.text("malformed body", 400);
   }
-  return handleInteraction(interaction, c.env, c.executionCtx as ExecutionContext);
+  return handleInteraction(interaction, c.env, c.executionCtx as ExecutionContext, new URL(c.req.url).origin);
+});
+
+// The token rides in the URL, so no page may leak that URL onward through a
+// Referer header or leave a copy in a shared cache.
+function page(html: string, status: number): Response {
+  return new Response(html, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "referrer-policy": "no-referrer",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+// The token is checked before the bill is even looked up, so a visitor without
+// a valid link cannot tell an existing bill from a missing one.
+app.get("/b/:billId", async (c) => {
+  const billId = c.req.param("billId");
+  const grant = await readToken(c.req.query("t") ?? "", c.env.TOKEN_SIGNING_KEY, Date.now());
+  if (!grant || grant.billId !== billId) return page(renderLinkRefused(), 403);
+
+  const bill = await getBill(c.env.DB, billId);
+  if (!bill) return page(renderBillNotFound(), 404);
+  if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
+
+  const [input, participants] = await Promise.all([toSplitInput(c.env.DB, billId), getParticipants(c.env.DB, billId)]);
+  return page(renderPage(bill, splitBill(input), input.items, participants, grant.participantId), 200);
 });
 
 export default app;
