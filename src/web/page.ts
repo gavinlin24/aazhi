@@ -1,5 +1,6 @@
 import type { BillRow, Participant } from "../db/bills";
 import { formatCents, formatDate } from "../format";
+import { debtorOf, groupByDebtor, groupOf } from "../money/debtors";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { CLIENT_SCRIPT } from "./client";
 import { billState, type BillState, type Editable } from "./state";
@@ -287,6 +288,9 @@ select.text-input { flex: 1; width: auto; font-size: 17px; }
 }
 .person:last-child { border-bottom: 0; }
 .person-name { min-width: 0; overflow-wrap: anywhere; }
+/* Tags wrap under the name flush left, not indented by their own margin. */
+.people .person-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.people .person-name .tag { margin-left: 0; }
 .person.is-viewer { font-weight: 700; }
 .tag {
   display: inline-block;
@@ -306,6 +310,27 @@ select.text-input { flex: 1; width: auto; font-size: 17px; }
 .totals .grand { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; font-size: 18px; font-weight: 700; }
 .totals .grand dt { color: var(--text); }
 .totals .short, .totals .short dt { color: var(--warn); font-weight: 600; }
+.money.is-forgiven { text-decoration: line-through; color: var(--muted); }
+/* The forgive column has a fixed width and every row reserves it, so the
+   amounts line up whether or not a row can be forgiven. */
+.people.has-forgive .person {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 96px;
+  align-items: center;
+  padding: 8px 0;
+  min-height: 61px;
+}
+.forgive-slot { display: flex; justify-content: flex-end; }
+.btn.forgive { width: 100%; padding: 0 10px; font-size: 15px; }
+.btn.forgive[aria-busy="true"] { cursor: progress; }
+.btn.forgive[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent-soft-ink); }
+.guest-form { margin-top: 10px; }
+.guest-form .check-heading { margin: 0 0 2px; }
+.guest-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.guest-form select.text-input { width: 100%; }
+.guest-form .editor-msg { margin-top: 10px; }
+.guest-form .editor-msg:empty { display: none; }
+.guest-form .editor-actions { margin-top: 12px; }
 .notice { margin-top: 18vh; text-align: center; }
 .notice h1 { font-size: 24px; line-height: 1.25; }
 .notice p { color: var(--muted); margin-top: 10px; }
@@ -373,6 +398,7 @@ interface View {
   editable: Editable;
   names: Map<ParticipantId, string>;
   shares: Map<ParticipantId, Share>;
+  paid: Set<ParticipantId>;
 }
 
 // The script in client.ts renders the same words from the same state; a
@@ -402,36 +428,66 @@ function header(v: View): string {
 <p class="live-note" data-live-note role="status" hidden></p>`;
 }
 
+function and(parts: string[]): string {
+  return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+// "Includes Sam's $25.34. Gavin forgave your $43.73." What the viewer's one
+// amount is made of, when it is more than their own share or less.
+function youExtra(v: View, own: Share, guests: Share[]): string {
+  const payer = escapeHtml(v.names.get(v.bill.payerId) ?? "the person who paid");
+  const name = (s: Share) => escapeHtml(v.names.get(s.participant) ?? "your guest");
+  const owing = guests.filter((g) => !g.pardoned).map((g) => `${name(g)}'s ${formatCents(g.owedCents)}`);
+  const forgiven = [
+    ...(own.pardoned ? [`your ${formatCents(own.owedCents)}`] : []),
+    ...guests.filter((g) => g.pardoned).map((g) => `${name(g)}'s ${formatCents(g.owedCents)}`),
+  ];
+  return [owing.length > 0 ? `Includes ${and(owing)}.` : "", forgiven.length > 0 ? `${payer} forgave ${and(forgiven)}.` : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function youSummary(v: View): string {
-  const share = v.shares.get(v.viewer);
+  const group = groupOf(groupByDebtor(v.result.shares, v.participants), v.viewer);
+  const share = group?.own;
   const draft = v.bill.status === "draft";
   const soFar = draft ? " so far" : "";
   const payerName = escapeHtml(v.names.get(v.bill.payerId) ?? "the person who paid");
 
   let label: string;
   let note: string;
-  if (!share) {
+  if (!group || !share) {
     label = "You're not on this bill";
     note = draft
       ? "If you were at dinner, tap <strong>Open the split</strong> on the bill in Discord to join it."
       : "Nothing here is yours to pay.";
   } else if (v.viewerIsPayer) {
     label = `Your share${soFar}`;
-    note = `You paid, so the others owe you <strong class="money">${formatCents(v.result.payerCollectsCents)}</strong>${soFar}.`;
+    note = `You paid, so the others owe you <strong class="money">${formatCents(v.state.payerCollectsCents)}</strong>${soFar}.`;
   } else {
     label = draft ? "Your share so far" : `You owe ${payerName}`;
-    note = draft ? `You'll pay this to ${payerName} once the bill is confirmed.` : `Pay ${payerName} from the bill message in Discord.`;
+    note = draft
+      ? `You'll pay this to ${payerName} once the bill is confirmed.`
+      : group.owedCents === 0 && [share, ...group.guests].some((s) => s.pardoned)
+        ? `${payerName} covered your share, so there's nothing to pay.`
+        : `Pay ${payerName} from the bill message in Discord.`;
   }
 
-  const detail = share
-    ? `<p class="you-detail" data-you-detail>Food <span class="money">${formatCents(share.subtotalCents)}</span> · ` +
-      `Tax <span class="money">${formatCents(share.taxCents)}</span> · ` +
-      `Tip <span class="money">${formatCents(share.tipCents)}</span></p>`
-    : "";
+  // Food, tax and tip of what is still asked for, so the three add up to the
+  // amount above them.
+  const counted = share && group ? [share, ...group.guests].filter((s) => !s.pardoned) : [];
+  const sum = (pick: (s: Share) => Cents) => formatCents(counted.reduce((n, s) => n + pick(s), 0));
+  const detail =
+    counted.length > 0
+      ? `<p class="you-detail" data-you-detail>Food <span class="money">${sum((s) => s.subtotalCents)}</span> · ` +
+        `Tax <span class="money">${sum((s) => s.taxCents)}</span> · ` +
+        `Tip <span class="money">${sum((s) => s.tipCents)}</span></p>`
+      : "";
+  const extra = share && group ? youExtra(v, share, group.guests) : "";
   return `<section class="card you" data-you aria-labelledby="you-label">
 <h2 class="you-label" id="you-label">${label}</h2>
-<p class="you-amount money" data-you-owed>${formatCents(share?.owedCents ?? 0)}</p>
-${detail}
+<p class="you-amount money" data-you-owed>${formatCents(share && group ? group.owedCents : 0)}</p>
+${detail}${extra ? `\n<p class="you-detail" data-you-extra>${extra}</p>` : ""}
 <p class="you-note">${note}</p>
 </section>`;
 }
@@ -567,7 +623,24 @@ ${add}
 </section>`;
 }
 
+// Forgiving is the payer's, on a confirmed bill, for anyone whose share
+// someone other than the payer answers for.
+function canForgive(v: View): boolean {
+  return v.viewerIsPayer && v.bill.status === "confirmed";
+}
+
+function forgiveSlot(v: View, p: Participant): string {
+  const share = v.shares.get(p.id);
+  if (!share || debtorOf(p) === v.bill.payerId) return `<span class="forgive-slot"></span>`;
+  const name = escapeHtml(p.displayName);
+  return (
+    `<span class="forgive-slot"><button type="button" class="btn forgive" data-forgive="${escapeHtml(p.id)}" ` +
+    `aria-pressed="${share.pardoned}" aria-label="Forgive ${name}'s share"${v.paid.has(debtorOf(p)) ? " disabled" : ""}>Forgive</button></span>`
+  );
+}
+
 function personRow(v: View, p: Participant): string {
+  const share = v.shares.get(p.id);
   const tags: string[] = [];
   if (p.id === v.viewer) tags.push("you");
   if (p.id === v.bill.payerId) tags.push("paid");
@@ -575,15 +648,48 @@ function personRow(v: View, p: Participant): string {
     const host = p.addedBy ? v.names.get(p.addedBy) : undefined;
     tags.push(host ? `guest of ${escapeHtml(host)}` : "guest");
   }
+  if (share?.pardoned) tags.push("forgiven");
   const tagHtml = tags.map((t) => `<span class="tag">${t}</span>`).join("");
-  return `<li class="person${p.id === v.viewer ? " is-viewer" : ""}"><span class="person-name">${escapeHtml(p.displayName)}${tagHtml}</span><span class="money" data-share="${escapeHtml(p.id)}">${formatCents(v.shares.get(p.id)?.owedCents ?? 0)}</span></li>`;
+  return `<li class="person${p.id === v.viewer ? " is-viewer" : ""}"><span class="person-name">${escapeHtml(p.displayName)}${tagHtml}</span><span class="money${share?.pardoned ? " is-forgiven" : ""}" data-share="${escapeHtml(p.id)}">${formatCents(share?.owedCents ?? 0)}</span>${canForgive(v) ? forgiveSlot(v, p) : ""}</li>`;
+}
+
+function forgiveNote(v: View): string {
+  const blocked = v.participants.some((p) => v.shares.has(p.id) && debtorOf(p) !== v.bill.payerId && v.paid.has(debtorOf(p)));
+  return (
+    "Forgive a share and you cover it yourself; nobody else's amount changes." +
+    (blocked ? " Someone who has paid can't be forgiven until their payments are undone in Discord." : "")
+  );
+}
+
+// Rendered (hidden) for the payer off-draft too, like the receipt check, so a
+// reopened bill can offer it again without a reload. Only members are offered
+// as who the guest came with: a guest's share needs someone who can pay it.
+function guestForm(v: View): string {
+  if (!v.viewerIsPayer) return "";
+  const options = v.participants
+    .filter((p) => p.kind === "member")
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.displayName)}</option>`)
+    .join("");
+  return `<form class="card guest-form needs-js" data-guest-form novalidate${v.bill.status === "draft" ? "" : " hidden"}>
+<h3 class="check-heading">Add a guest</h3>
+<p class="field-note">For someone at dinner who isn't on Discord. What they had is added to the person they came with.</p>
+<div class="guest-fields">
+<div class="editor-row"><label for="guest-name">Name</label><input id="guest-name" class="text-input" name="name" maxlength="40" autocomplete="off" enterkeyhint="next"></div>
+<div class="editor-row"><label for="guest-with">Came with</label><select id="guest-with" class="text-input" name="with"><option value="" disabled selected>Pick someone</option>${options}</select></div>
+</div>
+<p class="editor-msg" role="status"></p>
+<div class="editor-actions"><button type="submit" class="btn primary" disabled>Add guest</button></div>
+</form>`;
 }
 
 function people(v: View): string {
   const heading = v.bill.status === "draft" ? "Everyone so far" : "Everyone";
-  return `<section aria-labelledby="people-heading">
+  const forgive = canForgive(v);
+  return `<section aria-labelledby="people-heading" data-people>
 <div class="section-head"><h2 id="people-heading" data-people-heading>${heading}</h2></div>
-<ul class="card people">${v.participants.map((p) => personRow(v, p)).join("\n")}</ul>
+<p class="hint" data-forgive-note${forgive ? "" : " hidden"}>${forgive ? forgiveNote(v) : ""}</p>
+<ul class="card people${forgive ? " has-forgive" : ""}">${v.participants.map((p) => personRow(v, p)).join("\n")}</ul>
+${guestForm(v)}
 </section>`;
 }
 
@@ -609,9 +715,9 @@ export function renderPage(
   items: LineItem[],
   participants: Participant[],
   viewer: ParticipantId,
-  options: { hasPayments?: boolean } = {},
+  options: { hasPayments?: boolean; paid?: ParticipantId[] } = {},
 ): string {
-  const state = billState(bill, result, items, participants, viewer, options.hasPayments ?? false);
+  const state = billState(bill, result, items, participants, viewer, options.hasPayments ?? false, options.paid ?? []);
   const v: View = {
     bill,
     result,
@@ -623,6 +729,7 @@ export function renderPage(
     editable: state.editable,
     names: new Map(participants.map((p) => [p.id, p.displayName])),
     shares: new Map(result.shares.map((s) => [s.participant, s])),
+    paid: new Set(state.paid),
   };
 
   const main = `<main class="page" id="bill" data-bill-id="${escapeHtml(bill.id)}" data-viewer="${escapeHtml(viewer)}" data-payer="${escapeHtml(bill.payerId)}" data-viewer-is-payer="${v.viewerIsPayer}" data-editable="${v.editable}" data-status="${bill.status}" data-revision="${bill.revision}">

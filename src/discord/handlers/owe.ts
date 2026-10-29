@@ -23,6 +23,7 @@ import {
 import { getPaymentHandles, setPaymentHandle } from "../../db/handles";
 import type { Env } from "../../env";
 import { formatCents, formatDate } from "../../format";
+import { groupByDebtor, groupOf, owedAfterPardon, type DebtorGroup } from "../../money/debtors";
 import { itemPieces } from "../../money/split";
 import type { LineItem, Share } from "../../money/types";
 import { describeHandle, HANDLE_RULES, METHOD_NAMES, normalizeHandle, PAY_METHODS, payLink, type PayMethod } from "../../web/paylink";
@@ -32,6 +33,7 @@ import { escapeMarkdown } from "../render";
 import { ephemeral } from "../rest";
 import {
   announcement,
+  list,
   nameOf,
   NOT_FOUND,
   NOT_SUPPORTED,
@@ -88,15 +90,14 @@ function fitItemLines(rows: { text: string; piece: number }[], budget: number): 
   return kept;
 }
 
-// The person's items, their tax and tip slices, and the fraction of the bill
-// subtotal that produced them. The fraction stays integer cents over integer
-// cents; a percentage would be a rounded float standing in for the real ratio.
-// Every amount shown is a frozen share figure, so the lines sum to what the
-// card says the person owes.
-export function renderMath(share: Share, items: LineItem[], bill: BillRow): string {
-  const billSubtotal = items.reduce((sum, item) => sum + item.cents, 0);
-  const rows = items.flatMap((item) => {
-    const piece = itemPieces(item).get(share.participant);
+interface ItemRow {
+  text: string;
+  piece: number;
+}
+
+function itemRows(participant: string, items: LineItem[]): ItemRow[] {
+  return items.flatMap((item) => {
+    const piece = itemPieces(item).get(participant);
     if (piece === undefined) return [];
     const label = escapeMarkdown(clip(item.label, MAX_LABEL));
     const ways = item.claimedBy.length;
@@ -104,28 +105,95 @@ export function renderMath(share: Share, items: LineItem[], bill: BillRow): stri
       ways > 1 ? `${label}: ${formatCents(item.cents)} split ${ways} ways = ${formatCents(piece)}` : `${label}: ${formatCents(piece)}`;
     return [{ text, piece }];
   });
+}
 
-  const ratio = `${share.subtotalCents}/${billSubtotal}`;
-  const sum =
-    `**${formatCents(share.subtotalCents)} + ${formatCents(share.taxCents)} + ${formatCents(share.tipCents)} = ` +
-    `${formatCents(share.owedCents)}**`;
-  const header = `**Your math for ${escapeMarkdown(billName(bill))}**`;
+interface MathBlock {
+  head: string[];
+  rows: ItemRow[];
+  tail: string[];
+}
+
+function lineCost(lines: string[]): number {
+  return lines.reduce((n, line) => n + line.length + 1, 0);
+}
+
+export interface GuestMath {
+  name: string;
+  share: Share;
+}
+
+// The person's items, their tax and tip slices, and the fraction of the bill
+// subtotal that produced them. The fraction stays integer cents over integer
+// cents; a percentage would be a rounded float standing in for the real ratio.
+// Every amount shown is a frozen share figure, so the lines sum to what the
+// card says the person owes. A guest's lines come after, in a block of their
+// own, since the person answers for them but did not eat them.
+export function renderMath(
+  share: Share,
+  items: LineItem[],
+  bill: BillRow,
+  extra: { guests?: GuestMath[]; payer?: string } = {},
+): string {
+  const guests = extra.guests ?? [];
+  const payer = extra.payer ?? "the person who paid";
+  const billSubtotal = items.reduce((sum, item) => sum + item.cents, 0);
+  const sum = (s: Share) =>
+    `**${formatCents(s.subtotalCents)} + ${formatCents(s.taxCents)} + ${formatCents(s.tipCents)} = ${formatCents(s.owedCents)}**`;
   // The slices are the frozen, rounded cents, so against the exact product
   // they are approximate; only the closing sum is exact.
-  const footer =
-    billSubtotal === 0
-      ? [`Your items: ${formatCents(share.subtotalCents)}. The lines add up to $0.00, so there was no tax or tip to share.`, sum]
+  const slices = (s: Share, whose: string) => {
+    const ratio = `${s.subtotalCents}/${billSubtotal}`;
+    return billSubtotal === 0
+      ? [`${whose} items: ${formatCents(s.subtotalCents)}. The lines add up to $0.00, so there was no tax or tip to share.`, sum(s)]
       : [
-          `Your items: **${formatCents(share.subtotalCents)}**, which is ${ratio} of the ${formatCents(billSubtotal)} bill subtotal.`,
-          `Tax: ${formatCents(bill.taxCents)} × ${ratio} ≈ ${formatCents(share.taxCents)}`,
-          `Tip: ${formatCents(bill.tipCents)} × ${ratio} ≈ ${formatCents(share.tipCents)}`,
-          sum,
-          "Tax and tip are rounded to the cent so that everyone's shares add up to the bill exactly.",
+          `${whose} items: **${formatCents(s.subtotalCents)}**, which is ${ratio} of the ${formatCents(billSubtotal)} bill subtotal.`,
+          `Tax: ${formatCents(bill.taxCents)} × ${ratio} ≈ ${formatCents(s.taxCents)}`,
+          `Tip: ${formatCents(bill.tipCents)} × ${ratio} ≈ ${formatCents(s.tipCents)}`,
+          sum(s),
         ];
-  if (share.participant === bill.payerId) footer.push("You paid the bill, so this is your own part of it.");
+  };
 
-  const fixed = [header, ...footer].reduce((n, line) => n + line.length + 1, 0);
-  return [header, ...fitItemLines(rows, MAX_CONTENT - fixed), ...footer].join("\n");
+  const ownTail = slices(share, "Your");
+  if (billSubtotal !== 0) ownTail.push("Tax and tip are rounded to the cent so that everyone's shares add up to the bill exactly.");
+  if (share.participant === bill.payerId) ownTail.push("You paid the bill, so this is your own part of it.");
+  if (share.pardoned) ownTail.push(`**${payer} forgave your ${formatCents(share.owedCents)}**, so you don't owe it.`);
+  const own: MathBlock = { head: [`**Your math for ${escapeMarkdown(billName(bill))}**`], rows: itemRows(share.participant, items), tail: ownTail };
+
+  const guestBlock = (g: GuestMath, full: boolean): MathBlock => {
+    const name = escapeMarkdown(g.name);
+    const tail = full ? slices(g.share, `${name}'s`) : [sum(g.share)];
+    if (g.share.pardoned) tail.push(`${payer} forgave ${name}'s ${formatCents(g.share.owedCents)}, so you don't owe it.`);
+    return { head: [`**${name}, who came with you**`], rows: full ? itemRows(g.share.participant, items) : [], tail };
+  };
+  const closing =
+    guests.length === 0
+      ? []
+      : [
+          `**In all: ${[
+            `${formatCents(owedAfterPardon(share))} for you`,
+            ...guests.map((g) => `${formatCents(owedAfterPardon(g.share))} for ${escapeMarkdown(g.name)}`),
+          ].join(" + ")} = ${formatCents(owedAfterPardon(share) + guests.reduce((n, g) => n + owedAfterPardon(g.share), 0))}**`,
+        ];
+
+  // A long guest list could crowd out everything else, so past the limit each
+  // guest shrinks to the sum that matters rather than the reply failing.
+  const fixedCost = (blocks: MathBlock[]) =>
+    blocks.reduce((n, b) => n + lineCost(b.head) + lineCost(b.tail) + (b.rows.length > 0 ? moreRow(b.rows).length + 1 : 0), 0) +
+    lineCost(closing);
+  let blocks = [own, ...guests.map((g) => guestBlock(g, true))];
+  if (fixedCost(blocks) > MAX_CONTENT) blocks = [own, ...guests.map((g) => guestBlock(g, false))];
+
+  // Each block gets what is left after every block's fixed lines, keeping room
+  // for the folded row each later block might need.
+  let budget = MAX_CONTENT - blocks.reduce((n, b) => n + lineCost(b.head) + lineCost(b.tail), 0) - lineCost(closing);
+  const lines: string[] = [];
+  blocks.forEach((block, i) => {
+    const reserve = blocks.slice(i + 1).reduce((n, b) => n + (b.rows.length > 0 ? moreRow(b.rows).length + 1 : 0), 0);
+    const kept = fitItemLines(block.rows, budget - reserve);
+    budget -= lineCost(kept);
+    lines.push(...block.head, ...kept, ...block.tail);
+  });
+  return [...lines, ...closing].join("\n");
 }
 
 export function paidUp(payer: string, settledCents: number): string {
@@ -168,20 +236,45 @@ export function paused(tap: DinerTap): string {
   return `This bill was reopened, so paying is paused until ${nameOf(tap.participants, tap.bill.payerId)} confirms it again.`;
 }
 
-async function frozenShare(env: Env, tap: DinerTap): Promise<Share | undefined> {
-  return (await getShares(env.DB, tap.bill.id)).find((s) => s.participant === tap.who);
+// Everything the tapper answers for: their own share and their guests'.
+async function frozenGroup(env: Env, tap: DinerTap): Promise<DebtorGroup | undefined> {
+  return groupOf(groupByDebtor(await getShares(env.DB, tap.bill.id), tap.participants), tap.who);
 }
 
 function methodList(methods: PayMethod[]): string {
-  const names = methods.map((m) => METHOD_NAMES[m]);
-  return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return list(methods.map((m) => METHOD_NAMES[m]));
+}
+
+function guestNames(tap: DinerTap, shares: Share[]): string[] {
+  return shares.map((s) => nameOf(tap.participants, s.participant));
+}
+
+// Who the amount is for, when it is more than the tapper's own share or less.
+function covers(tap: DinerTap, group: DebtorGroup, payer: string): string {
+  const owing = guestNames(tap, group.guests.filter((s) => !s.pardoned));
+  const forgiven = guestNames(tap, group.guests.filter((s) => s.pardoned));
+  const parts: string[] = [];
+  if (owing.length > 0) {
+    parts.push(
+      group.own?.pardoned
+        ? `It's for ${list(owing)}, since ${payer} forgave your own share.`
+        : `That includes ${list(owing.map((n) => `${n}'s`))} share.`,
+    );
+  }
+  if (forgiven.length > 0) parts.push(`${payer} forgave ${list(forgiven.map((n) => `${n}'s`))} share.`);
+  return parts.map((p) => ` ${p}`).join("");
 }
 
 const PAYWITH_HINT = "run `/paywith` to add your Venmo, Cash App or Zelle, and every bill you pay for will offer it";
 
-async function payerReply(env: Env, tap: DinerTap, share: Share | undefined): Promise<Response> {
+async function payerReply(env: Env, tap: DinerTap, group: DebtorGroup | undefined): Promise<Response> {
   const handles = await getPaymentHandles(env.DB, tap.who);
-  const own = share ? ` Your own part of it was ${formatCents(share.owedCents)}.` : "";
+  const guests = group ? guestNames(tap, group.guests) : [];
+  const own = !group
+    ? ""
+    : guests.length > 0
+      ? ` Your own part of it, with ${list(guests)}, was ${formatCents(group.owedCents)}.`
+      : ` Your own part of it was ${formatCents(group.owedCents)}.`;
   const how =
     handles.length === 0
       ? ` Nobody can pay you by link yet: ${PAYWITH_HINT}.`
@@ -194,24 +287,27 @@ export const payTap: InteractionHandler = async (body, env, ctx) => {
   if (tap instanceof Response) return tap;
   if (tap.bill.status !== "confirmed") return notConfirmed(tap, env, ctx, paused(tap));
 
-  const share = await frozenShare(env, tap);
-  if (tap.who === tap.bill.payerId) return payerReply(env, tap, share);
-  if (!share) return privately(NO_SHARE);
+  const group = await frozenGroup(env, tap);
+  if (tap.who === tap.bill.payerId) return payerReply(env, tap, group);
+  if (!group) return privately(NO_SHARE);
   const payer = nameOf(tap.participants, tap.bill.payerId);
-  if (share.pardoned) return privately(`${payer} covered your share of this bill, so you don't owe anything.`);
-  if (share.owedCents <= 0) return privately("You don't owe anything on this bill.");
+  const shares = [...(group.own ? [group.own] : []), ...group.guests];
+  if (shares.every((s) => s.pardoned)) return privately(`${payer} covered your share of this bill, so you don't owe anything.`);
+  if (group.owedCents <= 0) return privately("You don't owe anything on this bill.");
 
   // What is left, not the frozen amount: a link for the full share after a
   // partial payment would ask the person to pay twice.
   const settled = (await getSettled(env.DB, tap.bill.id)).find((s) => s.participant === tap.who)?.cents ?? 0;
-  const remaining = share.owedCents - settled;
+  const remaining = group.owedCents - settled;
   if (remaining <= 0) return privately(paidUp(payer, settled));
   const amount = formatCents(remaining);
   const forBill = escapeMarkdown(billName(tap.bill));
   const head =
     (settled > 0
-      ? `You have **${amount}** left to pay ${payer} for ${forBill}: you've paid ${formatCents(settled)} of ${formatCents(share.owedCents)}.`
-      : `You owe ${payer} **${amount}** for ${forBill}.`) + " Tap **I paid** on the bill once you've sent it.";
+      ? `You have **${amount}** left to pay ${payer} for ${forBill}: you've paid ${formatCents(settled)} of ${formatCents(group.owedCents)}.`
+      : `You owe ${payer} **${amount}** for ${forBill}.`) +
+    covers(tap, group, payer) +
+    " Tap **I paid** on the bill once you've sent it.";
   const handles = await getPaymentHandles(env.DB, tap.bill.payerId);
   if (handles.length === 0) {
     return privately(
@@ -257,9 +353,13 @@ export const mathTap: InteractionHandler = async (body, env, ctx) => {
       "This bill was reopened, so its amounts are provisional again. Tap **Open the split** to see where they stand.",
     );
   }
-  const [share, items] = await Promise.all([frozenShare(env, tap), getBillItems(env.DB, tap.bill.id)]);
-  if (!share) return privately(NO_SHARE);
-  return privately(renderMath(share, items, tap.bill));
+  const [group, items] = await Promise.all([frozenGroup(env, tap), getBillItems(env.DB, tap.bill.id)]);
+  if (!group?.own) return privately(NO_SHARE);
+  const guests = group.guests.map((share) => ({
+    name: tap.participants.find((p) => p.id === share.participant)?.displayName ?? "Your guest",
+    share,
+  }));
+  return privately(renderMath(group.own, items, tap.bill, { guests, payer: nameOf(tap.participants, tap.bill.payerId) }));
 };
 
 // One person's objection is enough: a bill somebody knows is wrong must not

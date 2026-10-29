@@ -54,10 +54,10 @@ app.get("/b/:billId", async (c) => {
 
   const snapshot = await getBillSnapshot(c.env.DB, billId);
   if (!snapshot) return page(renderBillNotFound(), 404);
-  const { bill, input, participants, hasPayments } = snapshot;
+  const { bill, input, participants, hasPayments, paid } = snapshot;
   if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
 
-  return page(renderPage(bill, splitBill(input), input.items, participants, grant.participantId, { hasPayments }), 200);
+  return page(renderPage(bill, splitBill(input), input.items, participants, grant.participantId, { hasPayments, paid }), 200);
 });
 
 // The page's script talks to these with the same token, as a bearer header.

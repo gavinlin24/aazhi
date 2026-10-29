@@ -45,6 +45,8 @@ export const CLIENT_SCRIPT = String.raw`
   let polling = false;
   let stopped = false;
   let tipMode = "dollars";
+  // Forgive toggles whose answer has not come back, held off a second tap.
+  const forgiving = new Set();
 
   // Same rules as formatCents on the server, in integers only.
   function money(cents) {
@@ -88,6 +90,39 @@ export const CLIENT_SCRIPT = String.raw`
 
   function namesOf(s) {
     return new Map(s.participants.map((p) => [p.id, p.displayName]));
+  }
+
+  function and(parts) {
+    return parts.length <= 1 ? parts.join("") : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+  }
+
+  // Mirrors debtorOf on the server: a guest's share is asked of whoever
+  // brought them.
+  function debtorOf(p) {
+    return p.kind === "guest" && p.addedBy ? p.addedBy : p.id;
+  }
+
+  // The viewer's own share and their guests', in roster order, or null.
+  function youGroup(s) {
+    const own = s.result.shares.find((x) => x.participant === s.viewer);
+    if (!own) return null;
+    const guests = s.participants
+      .filter((p) => p.kind === "guest" && p.addedBy === s.viewer)
+      .map((p) => s.result.shares.find((x) => x.participant === p.id))
+      .filter(Boolean);
+    const owed = [own].concat(guests).reduce((n, x) => n + (x.pardoned ? 0 : x.owedCents), 0);
+    return { own, guests, owed };
+  }
+
+  function youExtra(s, group, names) {
+    const payer = names.get(s.payerId) || "the person who paid";
+    const name = (x) => names.get(x.participant) || "your guest";
+    const owing = group.guests.filter((g) => !g.pardoned).map((g) => name(g) + "'s " + money(g.owedCents));
+    const forgiven = (group.own.pardoned ? ["your " + money(group.own.owedCents)] : [])
+      .concat(group.guests.filter((g) => g.pardoned).map((g) => name(g) + "'s " + money(g.owedCents)));
+    return [owing.length > 0 ? "Includes " + and(owing) + "." : "", forgiven.length > 0 ? payer + " forgave " + and(forgiven) + "." : ""]
+      .filter(Boolean)
+      .join(" ");
   }
 
   function view() {
@@ -139,8 +174,8 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-you]");
     if (!card) return;
     const names = namesOf(s);
-    const share = s.result.shares.find((x) => x.participant === s.viewer);
-    const key = JSON.stringify([share, s.status, s.viewerIsPayer, s.result.payerCollectsCents, names.get(s.payerId)]);
+    const group = youGroup(s);
+    const key = JSON.stringify([group, s.status, s.viewerIsPayer, s.payerCollectsCents, Array.from(names)]);
     if (card._key === key) return;
     card._key = key;
 
@@ -149,28 +184,37 @@ export const CLIENT_SCRIPT = String.raw`
     const payer = names.get(s.payerId) || "the person who paid";
     let label;
     let note;
-    if (!share) {
+    if (!group) {
       label = "You're not on this bill";
       note = draft
         ? ["If you were at dinner, tap ", el("strong", null, "Open the split"), " on the bill in Discord to join it."]
         : "Nothing here is yours to pay.";
     } else if (s.viewerIsPayer) {
       label = "Your share" + soFar;
-      note = ["You paid, so the others owe you ", el("strong", { class: "money" }, money(s.result.payerCollectsCents)), soFar + "."];
+      note = ["You paid, so the others owe you ", el("strong", { class: "money" }, money(s.payerCollectsCents)), soFar + "."];
     } else {
       label = draft ? "Your share so far" : "You owe " + payer;
-      note = draft ? "You'll pay this to " + payer + " once the bill is confirmed." : "Pay " + payer + " from the bill message in Discord.";
+      const forgiven = [group.own].concat(group.guests).some((x) => x.pardoned);
+      note = draft
+        ? "You'll pay this to " + payer + " once the bill is confirmed."
+        : group.owed === 0 && forgiven
+          ? payer + " covered your share, so there's nothing to pay."
+          : "Pay " + payer + " from the bill message in Discord.";
     }
+    const counted = group ? [group.own].concat(group.guests).filter((x) => !x.pardoned) : [];
+    const sum = (pick) => money(counted.reduce((n, x) => n + pick(x), 0));
+    const extra = group ? youExtra(s, group, names) : "";
     card.replaceChildren(
       el("h2", { class: "you-label", id: "you-label" }, label),
-      el("p", { class: "you-amount money", "data-you-owed": true }, money(share ? share.owedCents : 0)),
-      share
+      el("p", { class: "you-amount money", "data-you-owed": true }, money(group ? group.owed : 0)),
+      counted.length > 0
         ? el("p", { class: "you-detail", "data-you-detail": true }, [
-            "Food ", el("span", { class: "money" }, money(share.subtotalCents)),
-            " · Tax ", el("span", { class: "money" }, money(share.taxCents)),
-            " · Tip ", el("span", { class: "money" }, money(share.tipCents)),
+            "Food ", el("span", { class: "money" }, sum((x) => x.subtotalCents)),
+            " · Tax ", el("span", { class: "money" }, sum((x) => x.taxCents)),
+            " · Tip ", el("span", { class: "money" }, sum((x) => x.tipCents)),
           ])
         : "",
+      extra ? el("p", { class: "you-detail", "data-you-extra": true }, extra) : "",
       el("p", { class: "you-note" }, note),
     );
   }
@@ -398,17 +442,46 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
+  function forgiveSlot(s, p, share, paid) {
+    if (!share || debtorOf(p) === s.payerId) return el("span", { class: "forgive-slot" });
+    return el("span", { class: "forgive-slot" }, el("button", {
+      type: "button",
+      class: "btn forgive",
+      "data-forgive": p.id,
+      "aria-pressed": String(share.pardoned),
+      "aria-label": "Forgive " + p.displayName + "'s share",
+      // Busy rather than disabled while its answer is out, so the button
+      // keeps keyboard focus across the redraw.
+      "aria-busy": forgiving.has(p.id) ? "true" : null,
+      disabled: paid.has(debtorOf(p)) || stopped,
+    }, "Forgive"));
+  }
+
   function renderPeople(s) {
     const list = root.querySelector("ul.people");
     if (!list) return;
     const heading = root.querySelector("[data-people-heading]");
     if (heading) heading.textContent = s.status === "draft" ? "Everyone so far" : "Everyone";
-    const owed = new Map(s.result.shares.map((x) => [x.participant, x.owedCents]));
-    const key = JSON.stringify([s.participants, Array.from(owed), s.viewer, s.payerId]);
+    const forgive = s.viewerIsPayer && s.status === "confirmed";
+    const key = JSON.stringify([s.participants, s.result.shares, s.viewer, s.payerId, forgive, s.paid, stopped, Array.from(forgiving)]);
     if (list._key === key) return;
     list._key = key;
     const names = namesOf(s);
+    const shares = new Map(s.result.shares.map((x) => [x.participant, x]));
+    const paid = new Set(s.paid);
+    const blocked = s.participants.some((p) => shares.has(p.id) && debtorOf(p) !== s.payerId && paid.has(debtorOf(p)));
+    const note = root.querySelector("[data-forgive-note]");
+    if (note) {
+      note.hidden = !forgive;
+      note.textContent = forgive
+        ? "Forgive a share and you cover it yourself; nobody else's amount changes." +
+          (blocked ? " Someone who has paid can't be forgiven until their payments are undone in Discord." : "")
+        : "";
+    }
+    const focused = list.contains(document.activeElement) ? document.activeElement.dataset.forgive : undefined;
+    list.classList.toggle("has-forgive", forgive);
     list.replaceChildren.apply(list, s.participants.map((p) => {
+      const share = shares.get(p.id);
       const tags = [];
       if (p.id === s.viewer) tags.push("you");
       if (p.id === s.payerId) tags.push("paid");
@@ -416,11 +489,41 @@ export const CLIENT_SCRIPT = String.raw`
         const host = p.addedBy ? names.get(p.addedBy) : undefined;
         tags.push(host ? "guest of " + host : "guest");
       }
+      if (share && share.pardoned) tags.push("forgiven");
       return el("li", { class: "person" + (p.id === s.viewer ? " is-viewer" : "") }, [
         el("span", { class: "person-name" }, [p.displayName].concat(tags.map((t) => el("span", { class: "tag" }, t)))),
-        el("span", { class: "money", "data-share": p.id }, money(owed.get(p.id) || 0)),
+        el("span", { class: "money" + (share && share.pardoned ? " is-forgiven" : ""), "data-share": p.id }, money(share ? share.owedCents : 0)),
+        forgive ? forgiveSlot(s, p, share, paid) : null,
       ]);
     }));
+    if (focused) {
+      const twin = Array.from(list.querySelectorAll("[data-forgive]")).find((b) => b.dataset.forgive === focused);
+      if (twin && !twin.disabled) twin.focus();
+    }
+  }
+
+  // Like the payer picker, the options follow the roster but a pick or a name
+  // being typed is never taken away by a poll.
+  function renderGuestForm(s) {
+    const form = root.querySelector("form[data-guest-form]");
+    if (!form) return;
+    form.hidden = !(s.viewerIsPayer && s.status === "draft" && !stopped);
+    if (form.hidden) return;
+    const select = form.elements.with;
+    const members = s.participants.filter((p) => p.kind === "member");
+    const key = JSON.stringify(members.map((p) => [p.id, p.displayName]));
+    if (select._key !== undefined && select._key !== key) {
+      const picked = select.value;
+      select.replaceChildren.apply(select, [el("option", { value: "", disabled: true }, "Pick someone")]
+        .concat(members.map((p) => el("option", { value: p.id }, p.displayName))));
+      select.value = members.some((p) => p.id === picked) ? picked : "";
+    }
+    select._key = key;
+    guestReady(form);
+  }
+
+  function guestReady(form) {
+    form.querySelector("button[type=submit]").disabled = form._busy || form.elements.name.value.trim() === "" || form.elements.with.value === "";
   }
 
   function renderTotals(s) {
@@ -460,6 +563,7 @@ export const CLIENT_SCRIPT = String.raw`
     renderCheck(s);
     renderItems(s);
     renderPeople(s);
+    renderGuestForm(s);
     renderTotals(s);
   }
 
@@ -807,6 +911,38 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
+  async function addGuest(form) {
+    const msg = form.querySelector(".editor-msg");
+    const name = form.elements.name.value.trim();
+    if (name === "" || form.elements.with.value === "") return;
+    msg.textContent = "";
+    setFormBusy(form, true);
+    const failure = await write("POST", "/guest", { name, with: form.elements.with.value });
+    setFormBusy(form, false);
+    if (failure) {
+      msg.textContent = failure.message;
+      guestReady(form);
+      return;
+    }
+    form.elements.name.value = "";
+    form.elements.with.value = "";
+    guestReady(form);
+    form.elements.name.focus();
+  }
+
+  async function toggleForgive(button) {
+    const participantId = button.dataset.forgive;
+    if (forgiving.has(participantId)) return;
+    forgiving.add(participantId);
+    render();
+    const failure = await write("POST", "/pardon", { participantId, pardoned: button.getAttribute("aria-pressed") !== "true" });
+    forgiving.delete(participantId);
+    // A 409 already put its reason in the note at the top; anything else
+    // that refused it needs saying too.
+    if (failure && failure.status !== 409 && !stopped) showNote(failure.message, true);
+    render();
+  }
+
   root.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || !root.contains(target)) return;
@@ -827,6 +963,11 @@ export const CLIENT_SCRIPT = String.raw`
     const remove = target.closest("[data-delete]");
     if (remove) return deleteItem(remove);
     if (target.closest("[data-add-open]")) return openAdd();
+    const forgive = target.closest("[data-forgive]");
+    if (forgive) {
+      if (!forgive.disabled) toggleForgive(forgive);
+      return;
+    }
     const mode = target.closest("[data-tip-mode]");
     if (mode) setTipMode(mode.dataset.tipMode);
   });
@@ -839,14 +980,23 @@ export const CLIENT_SCRIPT = String.raw`
     else if (form.dataset.editor) saveItem(form);
     else if (form.dataset.adder !== undefined) addItem(form);
     else if (form.dataset.payerForm !== undefined) savePayer(form);
+    else if (form.dataset.guestForm !== undefined) addGuest(form);
   });
 
   root.addEventListener("change", (event) => {
     const form = event.target instanceof Element ? event.target.closest("form[data-payer-form]") : null;
     if (form) render();
+    const guest = event.target instanceof Element ? event.target.closest("form[data-guest-form]") : null;
+    if (guest) guestReady(guest);
   });
 
   root.addEventListener("input", (event) => {
+    const guest = event.target instanceof Element ? event.target.closest("form[data-guest-form]") : null;
+    if (guest) {
+      guest.querySelector(".editor-msg").textContent = "";
+      guestReady(guest);
+      return;
+    }
     const form = event.target instanceof Element ? event.target.closest("form[data-field]") : null;
     if (!form) return;
     const note = form.querySelector("[data-note]");

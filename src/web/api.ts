@@ -1,15 +1,19 @@
 import { Hono, type Context } from "hono";
 import {
+  addGuest,
   addItem,
   BillNotDraftError,
   deleteItem,
   editItem,
   getBill,
   getBillSnapshot,
+  GuestRefusedError,
+  PardonRefusedError,
   PaymentsRecordedError,
   reassignPayer,
   setBillAmounts,
   setClaim,
+  setPardon,
   type BillAmounts,
   type BillRow,
   type BillSnapshot,
@@ -37,6 +41,7 @@ const GONE: Partial<Record<BillRow["status"], string>> = {
 // inside the range where integer arithmetic stays exact.
 const MAX_CENTS = 99_999_999;
 const MAX_LABEL = 120;
+const MAX_GUEST_NAME = 40;
 
 class BadRequest extends Error {}
 
@@ -288,5 +293,108 @@ api.patch(
       return refuse(403, `Only ${payerName(snapshot)} can change the tax, tip and total, because they paid.`);
     }
     return commit(c, grant, snapshot.bill, () => setBillAmounts(c.env.DB, grant.billId, amounts));
+  }),
+);
+
+function nameTaken(existing: string): string {
+  return `${existing} is already on this bill. Give the guest a name that tells them apart, like one with an initial.`;
+}
+
+// A guest is somebody at the table without a Discord account, so the payer
+// puts them on and names the member who answers for what they had.
+api.post(
+  "/:billId/guest",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["name", "with"]);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (name.length === 0 || name.length > MAX_GUEST_NAME) bad(`Give the guest a name of 1 to ${MAX_GUEST_NAME} characters.`);
+    const companion = text(body.with, "with");
+
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (grant.participantId !== snapshot.bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can add a guest, because they paid. Ask them to add yours.`);
+    }
+    // Two people with one name would make every row and payment ambiguous.
+    const clash = snapshot.participants.find((p) => p.displayName.trim().toLowerCase() === name.toLowerCase());
+    if (clash) return refuse(400, nameTaken(clash.displayName));
+    if (!snapshot.participants.some((p) => p.id === companion && p.kind === "member")) {
+      return refuse(400, "Pick who the guest came with from the people on the bill. Their share goes to that person.");
+    }
+
+    try {
+      return await commit(c, grant, snapshot.bill, () =>
+        addGuest(c.env.DB, grant.billId, { id: `guest-${crypto.randomUUID()}`, displayName: name, with: companion }),
+      );
+    } catch (error) {
+      if (!(error instanceof GuestRefusedError)) throw error;
+      // Someone changed the roster between the read above and the write.
+      return refuse(
+        400,
+        error.reason === "name-taken"
+          ? nameTaken(name)
+          : "Pick who the guest came with from the people on the bill. Their share goes to that person.",
+      );
+    }
+  }),
+);
+
+// Forgiving waives a frozen amount, so it is only offered once the bill is
+// confirmed; the payer absorbs it and nobody else's share moves.
+api.post(
+  "/:billId/pardon",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["participantId", "pardoned"]);
+    const participantId = text(body.participantId, "participantId");
+    const pardoned = body.pardoned;
+    if (typeof pardoned !== "boolean") bad('"pardoned" must be true or false.');
+
+    const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
+    if (!snapshot) return refuse(404, NOT_FOUND);
+    const gone = GONE[snapshot.bill.status];
+    if (gone) return refuse(409, gone);
+    const payer = payerName(snapshot);
+    if (grant.participantId !== snapshot.bill.payerId) {
+      return refuse(403, `Only ${payer} can forgive someone's share, because it's their money.`);
+    }
+    if (snapshot.bill.status !== "confirmed") {
+      return refuse(409, "This bill isn't confirmed yet, so there's no amount to forgive. Confirm it first.");
+    }
+    const target = snapshot.participants.find((p) => p.id === participantId);
+    if (!target) return refuse(400, "That person isn't on this bill.");
+    const debtor = target.kind === "guest" && target.addedBy ? target.addedBy : target.id;
+    if (debtor === snapshot.bill.payerId) {
+      return refuse(
+        400,
+        target.id === debtor ? "That's your own share, so there's nobody to forgive." : `${target.displayName} came with you, so their share is already yours.`,
+      );
+    }
+
+    try {
+      return await commit(c, grant, snapshot.bill, () => setPardon(c.env.DB, grant.billId, participantId, pardoned));
+    } catch (error) {
+      if (!(error instanceof PardonRefusedError)) throw error;
+      const answers = snapshot.participants.find((p) => p.id === debtor)?.displayName ?? "They";
+      switch (error.reason) {
+        case "not-confirmed":
+          return refuse(409, "This bill isn't confirmed any more, so there's no amount to forgive. Confirm it again first.");
+        case "no-share":
+          return refuse(400, `${target.displayName} has no share on this bill, so there's nothing to forgive.`);
+        case "payer":
+          return refuse(400, "That share is already yours, so there's nobody to forgive.");
+        case "paid":
+          // Forgiving on top of a payment would leave the payment measured
+          // against an amount nobody owes, so the payments go first.
+          return refuse(
+            409,
+            `${answers} has already paid you something on this bill, so ${target.id === debtor ? "their" : `${target.displayName}'s`} ` +
+              "share can't be forgiven or brought back now. Undo their payments with Undo a payment in Discord first.",
+          );
+        case "changed":
+          return refuse(409, "The bill changed while you were doing that. Look again and try once more.");
+      }
+    }
   }),
 );

@@ -1,5 +1,6 @@
 import type { BillRow, BillSnapshot, Participant } from "../db/bills";
 import { reconciles } from "../extract/claude";
+import { payerCollects } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { Cents, LineItem, ParticipantId, SplitResult } from "../money/types";
 
@@ -18,6 +19,12 @@ export interface BillState {
   // Once anyone has paid, the bill can't be handed to another payer: every
   // recorded payment went to this one.
   hasPayments: boolean;
+  // Members with a payment recorded. A pardon would rewrite what their
+  // payments were measured against, so their group can't be forgiven.
+  paid: ParticipantId[];
+  // What the payer is owed by everyone else: the engine's figure less the
+  // shares of guests who came with the payer, which nobody else answers for.
+  payerCollectsCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
   printedTotalCents: Cents | null;
@@ -43,6 +50,7 @@ export function billState(
   participants: Participant[],
   viewer: ParticipantId,
   hasPayments: boolean,
+  paid: ParticipantId[] = [],
 ): BillState {
   return {
     billId: bill.id,
@@ -53,6 +61,8 @@ export function billState(
     viewerIsPayer: viewer === bill.payerId,
     editable: editableFor(bill, participants, viewer),
     hasPayments,
+    paid,
+    payerCollectsCents: payerCollects(result.payerCollectsCents, result.shares, participants, bill.payerId),
     taxCents: bill.taxCents,
     tipCents: bill.tipCents,
     printedTotalCents: bill.printedTotalCents,
@@ -64,6 +74,6 @@ export function billState(
 }
 
 export function stateOf(snapshot: BillSnapshot, viewer: ParticipantId): BillState {
-  const { bill, input, participants, hasPayments } = snapshot;
-  return billState(bill, splitBill(input), input.items, participants, viewer, hasPayments);
+  const { bill, input, participants, hasPayments, paid } = snapshot;
+  return billState(bill, splitBill(input), input.items, participants, viewer, hasPayments, paid);
 }

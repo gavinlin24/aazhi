@@ -19,6 +19,7 @@ import {
 } from "../db/bills";
 import { reconciles } from "../extract/claude";
 import { formatCents, formatDate } from "../format";
+import { groupByDebtor, groupOf, type DebtorGroup } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { LineItem, Share, SplitResult } from "../money/types";
 
@@ -111,12 +112,26 @@ function itemLine(item: LineItem, names: Map<string, string>): string {
   return `${escapeMarkdown(clip(item.label, MAX_LABEL))} · ${formatCents(item.cents)} · ${who || "**unclaimed**"}`;
 }
 
+function and(parts: string[]): string {
+  return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+// A guest's amount is asked of the member who brought them, so the two read
+// as one row with one amount; the guest is named so the amount makes sense.
+function groupName(group: DebtorGroup, names: Map<string, string>): string {
+  const own = names.get(group.debtor) ?? escapeMarkdown(group.debtor);
+  return group.guests.length === 0 ? own : `${own}, including ${and(group.guests.map((g) => names.get(g.participant)!))}`;
+}
+
 function owedField(bill: BillRow, result: SplitResult, participants: Participant[], names: Map<string, string>): APIEmbedField {
-  const owed = new Map(result.shares.map((s) => [s.participant, s.owedCents]));
-  const lines = participants.map((p) => {
-    const paid = p.id === bill.payerId ? " (paid the bill)" : "";
-    return `${names.get(p.id)} ${formatCents(owed.get(p.id) ?? 0)}${paid}`;
-  });
+  const groups = groupByDebtor(result.shares, participants);
+  const lines = participants
+    .filter((p) => p.kind === "member")
+    .map((p) => {
+      const group = groupOf(groups, p.id) ?? { debtor: p.id, own: undefined, guests: [], owedCents: 0 };
+      const paid = p.id === bill.payerId ? " (paid the bill)" : "";
+      return `${groupName(group, names)} ${formatCents(group.owedCents)}${paid}`;
+    });
   const unclaimed = result.unclaimedCents !== 0 ? `**Unclaimed ${formatCents(result.unclaimedCents)}**` : "";
   const budget = LIMITS.fieldValue - (unclaimed ? unclaimed.length + 1 : 0);
   const people = fitLines(lines, budget, (n) => `and ${n} more`);
@@ -224,6 +239,16 @@ function mention(p: Participant | undefined, names: Map<string, string>, fallbac
   return p.kind === "member" ? `<@${p.id}>` : `${names.get(p.id)} (guest)`;
 }
 
+// "~~$44.46~~ forgiven", or "$41.10 (Sam forgiven)" when only part of a
+// group was. The struck amount is what was owed before the pardon.
+function groupAmount(group: DebtorGroup, names: Map<string, string>): string {
+  const shares = [...(group.own ? [group.own] : []), ...group.guests];
+  const forgiven = shares.filter((s) => s.pardoned);
+  if (forgiven.length === 0) return formatCents(group.owedCents);
+  if (forgiven.length === shares.length) return `~~${formatCents(shares.reduce((n, s) => n + s.owedCents, 0))}~~ forgiven`;
+  return `${formatCents(group.owedCents)} (${and(forgiven.map((s) => names.get(s.participant)!))} forgiven)`;
+}
+
 // "Spring rolls (1/3), Bun bo Hue": what a person's amount covers, with the
 // share of any line they split. Cut while still raw text and escaped after,
 // so the cut can never land between a backslash and the character it guards.
@@ -253,13 +278,16 @@ function oweCard(
     names,
     payerName,
   );
-  const owed = new Map(frozen.map((s) => [s.participant, s.owedCents]));
-  const rows = participants
-    .filter((p) => owed.has(p.id))
-    .map((p) => {
-      const paid = p.id === bill.payerId ? " (paid the bill)" : "";
-      return `${mention(p, names, p.id)} · ${formatCents(owed.get(p.id)!)}${paid} · ${coveredBy(p.id, items)}`;
-    });
+  const rows = groupByDebtor(frozen, participants).map((group) => {
+    const member = participants.find((p) => p.id === group.debtor);
+    const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);
+    const paid = group.debtor === bill.payerId ? " (paid the bill)" : "";
+    const covers = [
+      ...(group.own ? [coveredBy(group.own.participant, items)] : []),
+      ...group.guests.map((g) => `${names.get(g.participant)}: ${coveredBy(g.participant, items)}`),
+    ].join("; ");
+    return `${who} · ${groupAmount(group, names)}${paid} · ${covers}`;
+  });
 
   const embed: APIEmbed = {
     title: titleOf(bill),

@@ -65,10 +65,21 @@ function toSettlement(r: SettlementDbRow): Settlement {
   };
 }
 
-// What a share still asks for, with `s` a shares row: a pardoned share asks for
-// nothing, and every payment counts, since partial payments are ordinary.
-const REMAINING = `(CASE WHEN s.pardoned = 1 THEN 0 ELSE s.owed_cents END)
-  - (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x WHERE x.bill_id = s.bill_id AND x.participant_id = s.participant_id)`;
+// What member `who` is asked for on `bill` (both SQL expressions): every share
+// they answer for, their own and their guests', where a pardoned share asks
+// for nothing.
+function owedSql(bill: string, who: string): string {
+  return `(SELECT COALESCE(SUM(CASE WHEN g.pardoned = 1 THEN 0 ELSE g.owed_cents END), 0)
+    FROM shares g JOIN participants q ON q.bill_id = g.bill_id AND q.id = g.participant_id
+    WHERE g.bill_id = ${bill} AND COALESCE(q.added_by, q.id) = ${who})`;
+}
+
+// Every payment counts, since partial payments are ordinary.
+function paidSql(bill: string, who: string): string {
+  return `(SELECT COALESCE(SUM(x.cents), 0) FROM settlements x WHERE x.bill_id = ${bill} AND x.participant_id = ${who})`;
+}
+
+const REMAINING = `(${owedSql("?1", "?3")} - ${paidSql("?1", "?3")})`;
 
 // Every rule is in the INSERT's own WHERE, so a reopen, an undo or a second
 // tap landing between the person's look at the card and this write cannot
@@ -90,6 +101,7 @@ export async function recordSettlement(
         `INSERT INTO settlements (id, bill_id, participant_id, cents, recorded_at, recorded_by)
          SELECT ?2, ?1, ?3, ?4, ?5, ?6
          FROM shares s JOIN bills b ON b.id = s.bill_id
+         JOIN participants p ON p.bill_id = s.bill_id AND p.id = s.participant_id AND p.kind = 'member'
          WHERE s.bill_id = ?1 AND s.participant_id = ?3
            AND b.status = 'confirmed'
            AND b.payer_id <> ?3
@@ -117,11 +129,13 @@ async function whyRefused(
 ): Promise<SettlementRefusedError> {
   const row = await db
     .prepare(
-      `SELECT b.status, b.payer_id, s.owed_cents IS NOT NULL AS has_share, ${REMAINING} AS remaining
-       FROM bills b LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = ?2
+      `SELECT b.status, b.payer_id, s.owed_cents IS NOT NULL AND p.kind = 'member' AS has_share, ${REMAINING} AS remaining
+       FROM bills b
+       LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = ?3
+       LEFT JOIN participants p ON p.bill_id = b.id AND p.id = ?3
        WHERE b.id = ?1`,
     )
-    .bind(billId, participantId)
+    .bind(billId, null, participantId)
     .first<{ status: string; payer_id: string; has_share: number; remaining: number | null }>();
   if (row?.status !== "confirmed") return new SettlementRefusedError("not-confirmed");
   if (recordedBy !== participantId && recordedBy !== row.payer_id) return new SettlementRefusedError("not-allowed");
@@ -177,18 +191,18 @@ export async function undoSettlement(db: D1Database, settlementId: string): Prom
   throw new BillNotConfirmedError(settlement.billId);
 }
 
-// Everyone on the bill but the payer, cleared or not, with what they owe
-// after any pardon and what they have paid so far.
+// Every member on the bill but the payer, cleared or not, with what they are
+// asked for after any pardon (their guests' shares included) and what they
+// have paid so far. A guest is never a row: their companion answers for them,
+// and a guest who came with the payer is the payer's to absorb.
 export async function outstanding(db: D1Database, billId: string): Promise<Outstanding[]> {
   const { results } = await db
     .prepare(
-      `SELECT s.participant_id,
-         CASE WHEN s.pardoned = 1 THEN 0 ELSE s.owed_cents END AS owed,
-         (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x
-          WHERE x.bill_id = s.bill_id AND x.participant_id = s.participant_id) AS settled
-       FROM shares s JOIN bills b ON b.id = s.bill_id
-       WHERE s.bill_id = ? AND s.participant_id <> b.payer_id
-       ORDER BY s.participant_id`,
+      `SELECT p.id AS participant_id, ${owedSql("?1", "p.id")} AS owed, ${paidSql("?1", "p.id")} AS settled
+       FROM participants p JOIN bills b ON b.id = p.bill_id
+       WHERE p.bill_id = ?1 AND p.kind = 'member' AND p.id <> b.payer_id
+         AND EXISTS (SELECT 1 FROM shares s WHERE s.bill_id = ?1 AND s.participant_id = p.id)
+       ORDER BY p.id`,
     )
     .bind(billId)
     .all<{ participant_id: string; owed: number; settled: number }>();
@@ -197,23 +211,23 @@ export async function outstanding(db: D1Database, billId: string): Promise<Outst
 
 // Who still owes `payerId`, one row per person across every confirmed bill
 // they paid for (or one server's, with `guildId`). A person is their Discord
-// user id on every bill, so the same friend rolls up across servers. Only
-// bills with money still owed count: a share overpaid after a correction is
-// money the payer owes back, which a "who owes me" total must not quietly
-// net against someone's other debts.
+// user id on every bill, so the same friend rolls up across servers; a guest
+// is a label on one bill, so their share rolls into their companion's row and
+// never appears on its own. Only bills with money still owed count: a share
+// overpaid after a correction is money the payer owes back, which a "who owes
+// me" total must not quietly net against someone's other debts.
 export async function ledger(db: D1Database, payerId: ParticipantId, guildId?: string): Promise<LedgerRow[]> {
   const { results } = await db
     .prepare(
       `WITH per_bill AS (
-         SELECT s.participant_id AS participant, p.display_name, b.created_at, b.rowid AS seq,
-           CASE WHEN s.pardoned = 1 THEN 0 ELSE s.owed_cents END AS owed,
-           (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x
-            WHERE x.bill_id = s.bill_id AND x.participant_id = s.participant_id) AS settled
+         SELECT p.id AS participant, p.display_name, b.created_at, b.rowid AS seq,
+           ${owedSql("b.id", "p.id")} AS owed,
+           ${paidSql("b.id", "p.id")} AS settled
          FROM bills b
-         JOIN shares s ON s.bill_id = b.id
-         JOIN participants p ON p.bill_id = s.bill_id AND p.id = s.participant_id
-         WHERE b.payer_id = ?1 AND b.status = 'confirmed' AND s.participant_id <> ?1
+         JOIN participants p ON p.bill_id = b.id AND p.kind = 'member'
+         WHERE b.payer_id = ?1 AND b.status = 'confirmed' AND p.id <> ?1
            AND (?2 IS NULL OR b.guild_id = ?2)
+           AND EXISTS (SELECT 1 FROM shares s WHERE s.bill_id = b.id AND s.participant_id = p.id)
        ),
        owing AS (SELECT * FROM per_bill WHERE owed > settled)
        SELECT participant,

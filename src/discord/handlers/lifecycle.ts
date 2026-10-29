@@ -69,7 +69,7 @@ export function nameOf(participants: Participant[], id: string): string {
   return name ? escapeMarkdown(name) : "the person who paid";
 }
 
-function list(parts: string[]): string {
+export function list(parts: string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
