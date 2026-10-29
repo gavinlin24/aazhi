@@ -23,8 +23,9 @@ Two further intents shape the design and should not be traded away:
 
 - **It has to be good enough to still be in use in a year.** This is not a
   demo. Friction anywhere in the common path is a defect.
-- **It has to be free to run, permanently.** No subscription, no server to
-  keep alive, no component whose death is discovered at dinner.
+- **It has to be free to host, permanently.** No subscription, no server to
+  keep alive, no component whose death is discovered at dinner. Reading a
+  receipt is the one paid call, at about $0.00083 each.
 
 A third, secondary intent: the author wants to be able to explain this
 project in a job interview. That argues for correctness being provable
@@ -68,8 +69,9 @@ than hand-waved.
 Things that would make this a failure even if it technically worked:
 
 - **A bill that doesn't reconcile.** If the eight shares don't add up to
-  the printed total, to the penny, the system has lied about money to
-  people who trust each other. This is the one unrecoverable failure.
+  the printed total plus the tip, to the penny, the system has lied about
+  money to people who trust each other. This is the one unrecoverable
+  failure.
 - **A silent amount change.** Any adjustment to what someone owes after
   they've been told a number must be stated out loud, never quietly
   applied.
@@ -81,8 +83,9 @@ Things that would make this a failure even if it technically worked:
 
 ## Constraints
 
-- **Free tier, permanently.** Compute, database, and receipt reading all
-  have to sit inside free allowances at friend-group volume.
+- **Free tier, permanently, for everything but receipt reading.** Compute,
+  database, and the page have to sit inside free allowances at friend-group
+  volume. Receipt reading is paid per call, at about $0.00083 a receipt.
 - **Discord's interaction model.** A bot that reads messages posted in a
   channel needs a permanently open socket plus the privileged Message
   Content intent. That means an always-on process, which conflicts with

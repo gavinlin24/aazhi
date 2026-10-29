@@ -35,9 +35,9 @@ it misread. The vision model never has to be perfect, which it won't be.
 
 **The column always adds up.** All money is integer cents, never floating
 point, and per-person shares are rounded by largest remainder so the eight
-shares sum to the printed total exactly. A bill that doesn't reconcile has lied
-about money to people who trust each other, which is the one unrecoverable
-failure.
+shares sum to the printed total plus the tip, exactly. A bill that doesn't
+reconcile has lied about money to people who trust each other, which is the one
+unrecoverable failure.
 
 ## Stack
 
@@ -46,7 +46,9 @@ failure.
   Discord intents to request.
 - Cloudflare D1 for storage.
 - Claude Haiku 5.5 on the Anthropic API for receipt extraction, at roughly $0.00083 per receipt.
-- Runs inside free tiers at friend-group volume.
+- Hosting, storage, and the web page run inside free tiers, with no expiry and
+  nothing that sleeps. Reading a receipt is the one part that costs anything,
+  at about $0.00083 each.
 
 Why each piece was chosen: [docs/stack.md](docs/stack.md).
 
@@ -60,7 +62,8 @@ in a settings page; none of them belongs in the repository.
 
 1. Create the database with `npx wrangler d1 create aazhi`. It prints a
    `database_id`. Put it in `wrangler.jsonc` in place of
-   `REPLACE_WITH_D1_DATABASE_ID`.
+   `REPLACE_WITH_D1_DATABASE_ID` and commit that change: CI deploys from the
+   committed file, and the id is not a secret.
 2. Create the tables with `npx wrangler d1 migrations apply DB --remote`.
 3. Store each secret with `npx wrangler secret put NAME`, which asks for the
    value:
