@@ -6,11 +6,14 @@ import {
   BillChangedError,
   BillNotDraftError,
   confirmBill,
+  deleteBill,
   editItem,
   getBill,
   getBillItems,
   NobodyClaimedError,
   NotOnRosterError,
+  PaymentsChangedError,
+  PaymentsRecordedError,
   reassignPayer,
   reopenBill,
   setBillAmounts,
@@ -78,10 +81,10 @@ async function settle(work: Promise<unknown>): Promise<void> {
   await finished;
 }
 
-async function run(body: unknown): Promise<any> {
+async function run(body: unknown, database: D1Database = db): Promise<any> {
   await ready;
   const ctx = createExecutionContext();
-  const response = await app.fetch(await signedRequest(keypair, body), env(), ctx);
+  const response = await app.fetch(await signedRequest(keypair, body), { ...env(), DB: database }, ctx);
   await settle(waitOnExecutionContext(ctx));
   return response.json();
 }
@@ -156,12 +159,12 @@ async function frozenShares(billId = BILL): Promise<Share[]> {
   }));
 }
 
-async function pay(who: string, cents: number, billId = BILL): Promise<void> {
-  await db
+async function pay(who: string, cents: number, database: D1Database = db): Promise<void> {
+  await database
     .prepare(
       "INSERT INTO settlements (id, bill_id, participant_id, cents, recorded_at, recorded_by) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .bind(crypto.randomUUID(), billId, who, cents, "2026-10-29T09:00:00.000Z", who)
+    .bind(crypto.randomUUID(), BILL, who, cents, "2026-10-29T09:00:00.000Z", who)
     .run();
 }
 
@@ -394,6 +397,31 @@ describe("reassignPayer", () => {
     await expect(reassignPayer(db, BILL, "priya")).rejects.toBeInstanceOf(BillNotDraftError);
     expect((await getBill(db, BILL))!.payerId).toBe("gavin");
   });
+
+  it("refuses to reassign the payer of a reopened bill someone has paid, so no payment is redirected", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await pay("marcus", 4446);
+    await reopenBill(db, BILL);
+    const before = await revision();
+
+    await expect(reassignPayer(db, BILL, "priya")).rejects.toBeInstanceOf(PaymentsRecordedError);
+
+    expect((await getBill(db, BILL))!.payerId).toBe("gavin");
+    expect(await revision()).toBe(before);
+  });
+
+  it("refuses to reassign the payer when a payment lands between its check and its write", async () => {
+    await seedSaigon(db, BILL);
+    const before = await revision();
+    const race = beforeFirstWrite(db, (real) => pay("marcus", 4446, real));
+
+    await expect(reassignPayer(race.db, BILL, "priya")).rejects.toBeInstanceOf(PaymentsRecordedError);
+
+    expect(race.raced()).toBe(true);
+    expect((await getBill(db, BILL))!.payerId).toBe("gavin");
+    expect(await revision()).toBe(before);
+  });
 });
 
 describe("Confirm", () => {
@@ -485,6 +513,47 @@ describe("Confirm", () => {
     expect(reply.data.content).toMatch(/changed/i);
     expect((await getBillItems(db, BILL)).find((i) => i.id === item("water"))!.claimedBy).toEqual([]);
     expect((await getBill(db, BILL))!.status).toBe("draft");
+  });
+
+  it("refuses to split the unclaimed lines for anyone but the payer", async () => {
+    await seedSaigon(db, BILL, { unclaimed: ["tea", "water"] });
+    const seen = await revision();
+
+    const reply = await run(tap(`orphans:${BILL}:${seen}`, MARCUS));
+
+    expect(reply.type).toBe(7);
+    expect(reply.data.content).toMatch(/only Gavin/i);
+    expect(reply.data.components).toEqual([]);
+    expect((await getBillItems(db, BILL)).find((i) => i.id === item("tea"))!.claimedBy).toEqual([]);
+    expect(await revision()).toBe(seen);
+    expect((await getBill(db, BILL))!.status).toBe("draft");
+  });
+
+  it("says the bill was deleted when it goes while the unclaimed lines are being split", async () => {
+    await seedSaigon(db, BILL, { unclaimed: ["tea", "water"] });
+    const seen = await revision();
+    const race = beforeFirstWrite(db, (real) => deleteBill(real, BILL, 0));
+
+    const reply = await run(tap(`orphans:${BILL}:${seen}`, GAVIN), race.db);
+
+    expect(race.raced()).toBe(true);
+    expect(reply.type).toBe(7);
+    expect(reply.data.content).toMatch(/deleted/i);
+    expect(reply.data.content).not.toMatch(/already confirmed/i);
+    expect((await getBillItems(db, BILL)).find((i) => i.id === item("tea"))!.claimedBy).toEqual([]);
+  });
+
+  it("brings the message up to date when Confirm is tapped on a bill that was already confirmed", async () => {
+    await seedSaigon(db, BILL);
+    const seen = await revision();
+    await confirmed();
+
+    const reply = await run(tap(`confirm:${BILL}:${seen}`, GAVIN));
+
+    expect(reply.data.flags).toBe(EPHEMERAL);
+    expect(reply.data.content).toMatch(/already confirmed/i);
+    expect(messageEdits()).toHaveLength(1);
+    expect(customIds(messageEdits()[0]!.body)).toEqual([`open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`]);
   });
 });
 
@@ -599,10 +668,10 @@ describe("Delete", () => {
     expect(ask.data.content).toMatch(/Marcus[^\n]*\$44\.46/);
     expect(ask.data.content).toMatch(/Dani[^\n]*\$20\.00/);
     expect(ask.data.content).toContain("$64.46");
-    expect(customIds(ask.data)).toEqual([`delete-confirm:${BILL}`]);
+    expect(customIds(ask.data)).toEqual([`delete-confirm:${BILL}:6446`]);
     expect((await getBill(db, BILL))!.status).toBe("confirmed");
 
-    const done = await run(tap(`delete-confirm:${BILL}`, GAVIN));
+    const done = await run(tap(`delete-confirm:${BILL}:6446`, GAVIN));
 
     expect(done.type).toBe(7);
     expect(done.data.content).toMatch(/deleted/i);
@@ -624,10 +693,10 @@ describe("Delete", () => {
     expect(ask.data.flags).toBe(EPHEMERAL);
     expect(ask.data.content).toMatch(/claims/i);
     expect(ask.data.content).not.toMatch(/paid/i);
-    expect(customIds(ask.data)).toEqual([`delete-confirm:${BILL}`]);
+    expect(customIds(ask.data)).toEqual([`delete-confirm:${BILL}:0`]);
     expect((await getBill(db, BILL))!.status).toBe("draft");
 
-    await run(tap(`delete-confirm:${BILL}`, GAVIN));
+    await run(tap(`delete-confirm:${BILL}:0`, GAVIN));
     expect((await getBill(db, BILL))!.status).toBe("deleted");
   });
 
@@ -639,9 +708,58 @@ describe("Delete", () => {
     expect(ask.data.content).toMatch(/only Gavin/i);
     expect(customIds(ask.data)).toEqual([]);
 
-    const forced = await run(tap(`delete-confirm:${BILL}`, MARCUS));
+    const forced = await run(tap(`delete-confirm:${BILL}:0`, MARCUS));
     expect(forced.data.content).toMatch(/only Gavin/i);
     expect((await getBill(db, BILL))!.status).toBe("draft");
     expect(messageEdits()).toEqual([]);
+  });
+
+  it("refuses the final Delete tap from anyone but the payer, even on a prompt that matches", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await pay("marcus", 4446);
+
+    const forced = await run(tap(`delete-confirm:${BILL}:4446`, MARCUS));
+
+    expect(forced.type).toBe(7);
+    expect(forced.data.content).toMatch(/only Gavin/i);
+    expect(forced.data.components).toEqual([]);
+    expect((await getBill(db, BILL))!.status).toBe("confirmed");
+    expect(messageEdits()).toEqual([]);
+  });
+
+  it("discards no payment recorded after the prompt was drawn, and asks again naming it", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    const ask = await run(tap(`delete:${BILL}`, GAVIN));
+    expect(customIds(ask.data)).toEqual([`delete-confirm:${BILL}:0`]);
+    // Marcus pays while the payer is still looking at a prompt that names nobody.
+    await pay("marcus", 4446);
+
+    const stale = await run(tap(`delete-confirm:${BILL}:0`, GAVIN));
+
+    expect(stale.type).toBe(7);
+    expect(stale.data.content).toMatch(/Marcus[^\n]*\$44\.46/);
+    expect(customIds(stale.data)).toEqual([`delete-confirm:${BILL}:4446`]);
+    expect((await getBill(db, BILL))!.status).toBe("confirmed");
+    expect(messageEdits()).toEqual([]);
+
+    const done = await run(tap(`delete-confirm:${BILL}:4446`, GAVIN));
+
+    expect(done.data.content).toMatch(/deleted/i);
+    expect((await getBill(db, BILL))!.status).toBe("deleted");
+  });
+
+  it("deletes nothing when a payment lands just before the delete is written", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    const before = await revision();
+    const race = beforeFirstWrite(db, (real) => pay("marcus", 4446, real));
+
+    await expect(deleteBill(race.db, BILL, 0)).rejects.toBeInstanceOf(PaymentsChangedError);
+
+    expect(race.raced()).toBe(true);
+    expect((await getBill(db, BILL))!.status).toBe("confirmed");
+    expect(await revision()).toBe(before);
   });
 });

@@ -2,7 +2,7 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env as workerEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
-import { getBill, getBillItems, getParticipants } from "../../src/db/bills";
+import { confirmBill, getBill, getBillItems, getParticipants, reopenBill } from "../../src/db/bills";
 import type { Env } from "../../src/env";
 import { mintToken, TOKEN_TTL_MS } from "../../src/web/token";
 import { confirmingBeforeFirstWrite } from "../fixtures/race";
@@ -477,6 +477,27 @@ describe("who paid", () => {
       expect(reply.body.error, payer).toEqual(expect.any(String));
     }
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("refuses once anyone has paid on a reopened bill, so no payment is redirected", async () => {
+    await seedSaigon(db, BILL);
+    expect(await confirmBill(db, BILL, await revision(), "gavin")).toMatchObject({ ok: true });
+    await db
+      .prepare(
+        "INSERT INTO settlements (id, bill_id, participant_id, cents, recorded_at, recorded_by) VALUES ('s-1', ?, 'marcus', 4446, '2026-10-29T09:00:00.000Z', 'marcus')",
+      )
+      .bind(BILL)
+      .run();
+    await reopenBill(db, BILL);
+    const before = await snapshot();
+
+    const reply = await patch("gavin", { payer: "priya" });
+
+    expect(reply.status).toBe(409);
+    expect(reply.body.error).toMatch(/already (been )?paid/i);
+    expect(reply.body.error).toMatch(/Gavin/);
+    expect(await snapshot()).toEqual(before);
+    expect(edits).toHaveLength(0);
   });
 });
 

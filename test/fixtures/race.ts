@@ -15,11 +15,14 @@ export function beforeFirstWrite(
     writes.add(statement);
     const bind = statement.bind.bind(statement);
     statement.bind = (...values: unknown[]) => track(bind(...values));
-    const run = statement.run.bind(statement);
-    statement.run = async <T>() => {
-      await fire();
-      return run<T>();
-    };
+    // A write that returns its row is run with first() or all(), not run().
+    for (const method of ["run", "first", "all", "raw"] as const) {
+      const original = (statement[method] as (...args: unknown[]) => Promise<unknown>).bind(statement);
+      (statement as any)[method] = async (...args: unknown[]) => {
+        await fire();
+        return original(...args);
+      };
+    }
     return statement;
   }
 

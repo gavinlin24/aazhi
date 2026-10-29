@@ -19,11 +19,13 @@ import {
   getParticipants,
   getSettled,
   NobodyClaimedError,
+  PaymentsChangedError,
   reopenBill,
   splitOrphansEvenly,
   type AmountChange,
   type BillRow,
   type BillSnapshot,
+  type ConfirmRefusal,
   type Participant,
 } from "../../db/bills";
 import type { Env } from "../../env";
@@ -98,14 +100,16 @@ function announcement(lead: string, changes: AmountChange[], participants: Parti
 }
 
 // Ids are generated UUIDs, so the custom_id splits cleanly on its colons.
-function parseCustomId(body: APIInteraction, prefix: string, withRevision: boolean): { billId: string; revision: number } | null {
+// `pinned` is the number the button was drawn with (a revision, or the payment
+// total a delete prompt named), so a tap on an outdated button is caught.
+function parseCustomId(body: APIInteraction, prefix: string, withPinned: boolean): { billId: string; pinned: number } | null {
   if (body.type !== InteractionType.MessageComponent) return null;
   const rest = body.data.custom_id.slice(prefix.length);
-  if (!withRevision) return rest ? { billId: rest, revision: NaN } : null;
+  if (!withPinned) return rest ? { billId: rest, pinned: NaN } : null;
   const at = rest.lastIndexOf(":");
-  const revision = Number(rest.slice(at + 1));
-  if (at <= 0 || !Number.isInteger(revision)) return null;
-  return { billId: rest.slice(0, at), revision };
+  const pinned = Number(rest.slice(at + 1));
+  if (at <= 0 || !Number.isInteger(pinned)) return null;
+  return { billId: rest.slice(0, at), pinned };
 }
 
 interface PayerTap {
@@ -158,14 +162,31 @@ function orphanOffer(snapshot: BillSnapshot, revision: number): Response {
   return json(ephemeral(content, [row]));
 }
 
-const REFUSED: Record<"stale" | "unreconciled", string> = {
+const REFUSED: Record<"stale" | "unreconciled" | "unclaimed", string> = {
   stale:
     "The bill changed after this message was drawn, so I didn't confirm it. " +
     "The message is catching up now; check the amounts and tap Confirm again.",
   unreconciled:
     "The items and tax don't add up to the printed total any more, so I can't confirm it. " +
     "Fix it on the page and Confirm comes back once it adds up.",
+  unclaimed: "Some lines still have nobody on them. Tap **Open the split** and put people on them, then tap Confirm again.",
 };
+
+// Why a confirm was refused, read against the bill as it is now: the refusal
+// came from an earlier read, and the person needs today's reason.
+function whyNotConfirmed(reason: ConfirmRefusal, snapshot: BillSnapshot): string {
+  const { bill, participants } = snapshot;
+  switch (reason) {
+    case "not-payer":
+      return `Only ${nameOf(participants, bill.payerId)} can confirm the bill, because they paid.`;
+    // Confirmed and reopened again in between: as far as this tap knows, the
+    // bill simply changed.
+    case "not-draft":
+      return bill.status === "draft" ? REFUSED.stale : STATUS_REFUSAL[bill.status];
+    default:
+      return REFUSED[reason];
+  }
+}
 
 // After the freeze: the tapper's own reply carries the news. When someone who
 // already paid now owes a different amount, that reply is said in the channel
@@ -202,28 +223,21 @@ export const confirmTap: InteractionHandler = async (body, env, ctx) => {
   const ids = parseCustomId(body, "confirm:", true);
   const who = invokerOf(body);
   if (!ids || !who) return privately(NOT_SUPPORTED);
+  const { billId, pinned: revision } = ids;
 
-  const result = await confirmBill(env.DB, ids.billId, ids.revision, who.id);
+  const result = await confirmBill(env.DB, billId, revision, who.id);
   // The message the button sits on is the bill message, so the reply can
   // lock it on the spot; the coalesced edit follows in case an older edit
   // was still in flight.
-  if (result.ok) return confirmedReply(ids.billId, result.changes, () => updatedBill(ids.billId, env), env, ctx);
+  if (result.ok) return confirmedReply(billId, result.changes, () => updatedBill(billId, env), env, ctx);
 
-  const snapshot = await getBillSnapshot(env.DB, ids.billId);
+  const snapshot = await getBillSnapshot(env.DB, billId);
   if (!snapshot) return privately(NOT_FOUND);
-  const { bill, participants } = snapshot;
-  switch (result.reason) {
-    case "not-draft":
-      return privately(STATUS_REFUSAL[bill.status]);
-    case "not-payer":
-      return privately(`Only ${nameOf(participants, bill.payerId)} can confirm the bill, because they paid.`);
-    case "unclaimed":
-      return orphanOffer(snapshot, ids.revision);
-    case "stale":
-    case "unreconciled":
-      refreshMessage(bill, env, ctx);
-      return privately(REFUSED[result.reason]);
-  }
+  if (result.reason === "unclaimed") return orphanOffer(snapshot, revision);
+  // A refusal that means the message is out of date also brings it up to
+  // date, so the stale button the person tapped goes away.
+  if (result.reason !== "not-payer") refreshMessage(snapshot.bill, env, ctx);
+  return privately(whyNotConfirmed(result.reason, snapshot));
 };
 
 export const splitOrphansTap: InteractionHandler = async (body, env, ctx) => {
@@ -235,15 +249,20 @@ export const splitOrphansTap: InteractionHandler = async (body, env, ctx) => {
 
   let revision: number;
   try {
-    revision = await splitOrphansEvenly(env.DB, tap.bill.id, { revision: ids.revision });
+    revision = await splitOrphansEvenly(env.DB, tap.bill.id, { revision: ids.pinned });
   } catch (error) {
-    if (error instanceof BillChangedError) {
-      return inPlace("The bill changed since I offered this, so I left it alone. Check it and tap Confirm again.");
-    }
+    const changed = "The bill changed since I offered this, so I left it alone. Check it and tap Confirm again.";
+    if (error instanceof BillChangedError) return inPlace(changed);
     if (error instanceof NobodyClaimedError) {
       return inPlace("Nobody has claimed anything any more, so there's nobody to split the lines between.");
     }
-    if (error instanceof BillNotDraftError) return inPlace(STATUS_REFUSAL.confirmed);
+    if (error instanceof BillNotDraftError) {
+      // Confirmed, deleted or replaced while the offer sat there; a bill
+      // that is a draft again was confirmed and reopened in between.
+      const now = await getBill(env.DB, tap.bill.id);
+      if (!now) return inPlace(NOT_FOUND);
+      return inPlace(now.status === "draft" ? changed : STATUS_REFUSAL[now.status]);
+    }
     throw error;
   }
 
@@ -260,8 +279,9 @@ export const splitOrphansTap: InteractionHandler = async (body, env, ctx) => {
   // The claims landed even though the freeze did not, so the message has to
   // show them either way.
   refreshMessage(tap.bill, env, ctx);
-  const why = result.reason === "stale" || result.reason === "unreconciled" ? REFUSED[result.reason] : STATUS_REFUSAL.confirmed;
-  return inPlace(`I split the unclaimed lines evenly, but didn't confirm. ${why}`);
+  const snapshot = await getBillSnapshot(env.DB, tap.bill.id);
+  if (!snapshot) return inPlace(NOT_FOUND);
+  return inPlace(`I split the unclaimed lines evenly, but didn't confirm. ${whyNotConfirmed(result.reason, snapshot)}`);
 };
 
 export const reopenTap: InteractionHandler = async (body, env, ctx) => {
@@ -291,41 +311,57 @@ export const reopenTap: InteractionHandler = async (body, env, ctx) => {
 };
 
 // Deleting discards everyone's claims, so it always asks once; when people
-// have already paid, the question names every payment it would discard.
+// have already paid, the question names every payment it would discard. The
+// button carries the total it named, so the delete only goes through for
+// exactly the payments the payer was shown.
+async function deletePrompt(tap: PayerTap, env: Env, lead = "") {
+  const settled = (await getSettled(env.DB, tap.bill.id)).filter((s) => s.cents !== 0);
+  const total = settled.reduce((sum, s) => sum + s.cents, 0);
+  let content = `${lead}Delete this bill? Everyone's claims on it go with it, and there's no undo.`;
+  if (settled.length > 0) {
+    const payments = settled.map((s) => `${nameOf(tap.participants, s.participant)} paid ${formatCents(s.cents)}`);
+    content =
+      `${lead}Delete this bill? Payments are recorded against it: ${list(payments)}. ` +
+      `Deleting it discards ${formatCents(total)} of recorded payments along with everyone's claims, and there's no undo.`;
+  }
+  const row: APIActionRowComponent<APIButtonComponent> = {
+    type: ComponentType.ActionRow,
+    components: [
+      { type: ComponentType.Button, style: ButtonStyle.Danger, label: "Delete the bill", custom_id: `delete-confirm:${tap.bill.id}:${total}` },
+    ],
+  };
+  return { content, components: [row] };
+}
+
 export const deleteTap: InteractionHandler = async (body, env) => {
   const ids = parseCustomId(body, "delete:", false);
   if (!ids) return privately(NOT_SUPPORTED);
   const tap = await payerTap(body, env, ids.billId, "delete the bill", privately);
   if (tap instanceof Response) return tap;
 
-  const settled = (await getSettled(env.DB, tap.bill.id)).filter((s) => s.cents !== 0);
-  let content = "Delete this bill? Everyone's claims on it go with it, and there's no undo.";
-  if (settled.length > 0) {
-    const total = settled.reduce((sum, s) => sum + s.cents, 0);
-    const payments = settled.map((s) => `${nameOf(tap.participants, s.participant)} paid ${formatCents(s.cents)}`);
-    content =
-      `Delete this bill? Payments are recorded against it: ${list(payments)}. ` +
-      `Deleting it discards ${formatCents(total)} of recorded payments along with everyone's claims, and there's no undo.`;
-  }
-  const row: APIActionRowComponent<APIButtonComponent> = {
-    type: ComponentType.ActionRow,
-    components: [
-      { type: ComponentType.Button, style: ButtonStyle.Danger, label: "Delete the bill", custom_id: `delete-confirm:${tap.bill.id}` },
-    ],
-  };
-  return json(ephemeral(content, [row]));
+  const prompt = await deletePrompt(tap, env);
+  return json(ephemeral(prompt.content, prompt.components));
 };
 
 export const deleteConfirmTap: InteractionHandler = async (body, env, ctx) => {
-  const ids = parseCustomId(body, "delete-confirm:", false);
+  const ids = parseCustomId(body, "delete-confirm:", true);
   if (!ids) return inPlace(NOT_SUPPORTED);
   const tap = await payerTap(body, env, ids.billId, "delete the bill", inPlace);
   if (tap instanceof Response) return tap;
 
   try {
-    await deleteBill(env.DB, tap.bill.id);
+    await deleteBill(env.DB, tap.bill.id, ids.pinned);
   } catch (error) {
     if (error instanceof BillGoneError) return inPlace("This split is already gone.");
+    if (error instanceof PaymentsChangedError) {
+      // Asked again in place, so the button that would discard unseen
+      // payments is replaced by one naming them.
+      const prompt = await deletePrompt(tap, env, "Payments changed since I asked, so I didn't delete anything. ");
+      return json({
+        type: InteractionResponseType.UpdateMessage,
+        data: { ...prompt, allowed_mentions: { parse: [] } },
+      });
+    }
     throw error;
   }
   refreshMessage(tap.bill, env, ctx);

@@ -578,6 +578,20 @@ export class NobodyClaimedError extends Error {
   }
 }
 
+export class PaymentsChangedError extends Error {
+  constructor(billId: string) {
+    super(`payments on bill ${billId} changed since they were shown`);
+    this.name = "PaymentsChangedError";
+  }
+}
+
+export class PaymentsRecordedError extends Error {
+  constructor(billId: string) {
+    super(`bill ${billId} already has payments recorded against its payer`);
+    this.name = "PaymentsRecordedError";
+  }
+}
+
 export class NotOnRosterError extends Error {
   constructor(billId: string, who: ParticipantId) {
     super(`${who} is not a member on the roster of bill ${billId}`);
@@ -753,13 +767,22 @@ export async function reopenBill(db: D1Database, billId: string): Promise<Amount
 }
 
 // A soft delete: claims, shares and settlements stay on record, the bill
-// just stops being live anywhere.
-export async function deleteBill(db: D1Database, billId: string): Promise<void> {
+// just stops being live anywhere. `settledCents` is the payment total the
+// payer was shown when they agreed to discard it; a payment recorded since
+// means they agreed to something else, so the check sits in the write itself.
+export async function deleteBill(db: D1Database, billId: string, settledCents: Cents): Promise<void> {
   const { meta } = await db
-    .prepare("UPDATE bills SET status = 'deleted', revision = revision + 1 WHERE id = ? AND status IN ('draft', 'confirmed')")
-    .bind(billId)
+    .prepare(
+      `UPDATE bills SET status = 'deleted', revision = revision + 1
+       WHERE id = ?1 AND status IN ('draft', 'confirmed')
+         AND (SELECT COALESCE(SUM(cents), 0) FROM settlements WHERE bill_id = ?1) = ?2`,
+    )
+    .bind(billId, settledCents)
     .run();
-  if (meta.changes !== 1) throw new BillGoneError(billId);
+  if (meta.changes === 1) return;
+  const bill = await getBill(db, billId);
+  if (bill?.status === "draft" || bill?.status === "confirmed") throw new PaymentsChangedError(billId);
+  throw new BillGoneError(billId);
 }
 
 // Every line nobody is on goes to everyone who claimed anything, split like
@@ -808,14 +831,24 @@ export async function splitOrphansEvenly(
 
 // For when somebody else's card went down. Only a member can be the payer: a
 // guest has no account to collect into. Nobody leaves a roster, so the check
-// up front still holds when the write lands.
+// up front still holds when the write lands. A payment, though, can land at
+// any time, and every recorded one was paid to the current payer; moving the
+// bill would quietly credit it to someone else, so that check is in the write.
 export async function reassignPayer(db: D1Database, billId: string, to: ParticipantId): Promise<number> {
   const target = await db
     .prepare("SELECT kind FROM participants WHERE bill_id = ? AND id = ?")
     .bind(billId, to)
     .first<{ kind: string }>();
   if (target?.kind !== "member") throw new NotOnRosterError(billId, to);
-  return mutateDraft(db, billId, [
-    db.prepare(`UPDATE bills SET payer_id = ?2 WHERE id = ?1 AND status = 'draft'`).bind(billId, to),
-  ]);
+  const row = await db
+    .prepare(
+      `UPDATE bills SET payer_id = ?2, revision = revision + 1
+       WHERE id = ?1 AND status = 'draft' AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1)
+       RETURNING revision`,
+    )
+    .bind(billId, to)
+    .first<{ revision: number }>();
+  if (row) return row.revision;
+  const bill = await getBill(db, billId);
+  throw bill?.status === "draft" ? new PaymentsRecordedError(billId) : new BillNotDraftError(billId);
 }

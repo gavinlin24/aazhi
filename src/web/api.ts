@@ -6,6 +6,7 @@ import {
   editItem,
   getBill,
   getBillSnapshot,
+  PaymentsRecordedError,
   reassignPayer,
   setBillAmounts,
   setClaim,
@@ -252,7 +253,16 @@ async function changePayer(c: Ctx, grant: Grant, body: Record<string, unknown>):
   const target = snapshot.participants.find((p) => p.id === to);
   if (!target) return refuse(400, "That person isn't on this bill. They join it by tapping Open the split in Discord.");
   if (target.kind !== "member") return refuse(400, "A guest can't be the one who paid. Pick someone with a Discord account.");
-  return commit(c, grant, snapshot.bill, () => reassignPayer(c.env.DB, grant.billId, to));
+  try {
+    return await commit(c, grant, snapshot.bill, () => reassignPayer(c.env.DB, grant.billId, to));
+  } catch (error) {
+    if (!(error instanceof PaymentsRecordedError)) throw error;
+    return refuse(
+      409,
+      `People have already paid ${payerName(snapshot)} on this bill, so it can't be handed to someone else now. ` +
+        "Their payments would end up counted toward the wrong person.",
+    );
+  }
 }
 
 api.patch(
