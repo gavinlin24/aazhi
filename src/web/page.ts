@@ -198,7 +198,8 @@ button.payer-chip .name { text-decoration: underline dotted var(--ring); text-un
 .notice-card p { color: var(--muted); margin-top: 6px; }
 
 .receipt { padding: 4px 0 6px; }
-.items { list-style: none; margin: 0; padding: 0; }
+/* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
+.items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
 .row {
   display: grid;
@@ -1065,7 +1066,8 @@ function hero(v: View): string {
 <p class="legend"><span>${icon("check")}<span class="money">${formatCents(total - left)}</span> / <span class="money">${formatCents(total)}</span></span></p>
 </section>`;
   }
-  const mine = [s.viewer, ...guestsOf(v, s.viewer).map((g) => g.id)];
+  // A guest who paid the payer directly is no longer part of what the viewer pays.
+  const mine = [s.viewer, ...guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id)];
   const forgiven = forgivenWhole(v, s.viewer);
   const paid = paidUp(v, s.viewer);
   const o = s.owing[s.viewer];
@@ -1104,7 +1106,9 @@ function mine(v: View): string {
   const guests = guestsOf(v, v.s.viewer)
     .map((g) => {
       const list = mineList(v, g.id);
-      return list ? `<p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}</p>${list}` : "";
+      // These are the viewer's own guests, so either mark is theirs to see.
+      const paid = g.paidToPayer || g.paidToHost ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
+      return list ? `<p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}${paid}</p>${list}` : "";
     })
     .join("");
   if (!own && !guests) return "";

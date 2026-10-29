@@ -435,6 +435,25 @@ describe("renderPage", () => {
       expect(lines).toContain("Garlic noodles");
       expect(await textOf(html, "[data-mine] .mine-guest")).toContain("Sam");
       expect(lines).toContain("Lobster");
+      expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
+    });
+
+    it("takes a guest who paid the payer directly off the share, and stamps them in the lines", async () => {
+      const sam = share("guest-sam");
+      const settled = [{ participant: "guest-sam", cents: sam.owedCents }];
+      const html = view("dani", { settled, paid: ["dani"], paidToPayer: ["guest-sam"], hasPayments: true });
+
+      expect(await textOf(html, "[data-you-owed]")).toBe(money(share("dani").owedCents));
+      expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani");
+      expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
+      expect((await one(html, '[data-person="dani"]')).attrs["aria-label"]).toContain(money(share("dani").owedCents));
+    });
+
+    it("stamps a guest who paid their adder for the adder, without taking anything off", async () => {
+      const html = view("dani", { paidToHost: ["guest-sam"] });
+
+      expect(await textOf(html, "[data-you-owed]")).toBe(money(share("dani").owedCents + share("guest-sam").owedCents));
+      expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
     });
 
     it("draws a forgiven share as nothing owed, with what it was struck through", async () => {

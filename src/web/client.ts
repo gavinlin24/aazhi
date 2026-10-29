@@ -177,8 +177,10 @@ export const CLIENT_SCRIPT = String.raw`
     return p.kind === "guest" && p.addedBy && p.addedBy !== payerId ? p.addedBy : p.id;
   }
 
-  function guestPaid(p) {
-    return p.paidToPayer === true || p.paidToHost === true;
+  // Paying the adder settles nothing with the payer, so only the adder sees
+  // that one as paid.
+  function guestPaid(v, p) {
+    return p.paidToPayer === true || (p.paidToHost === true && p.addedBy === v.s.viewer);
   }
 
   // Each of the two may set only their own mark: the payer's is money that
@@ -707,7 +709,7 @@ export const CLIENT_SCRIPT = String.raw`
         fraction(total - left, total),
       ];
     }
-    const mine = [s.viewer].concat(guestsOf(v, s.viewer).map((g) => g.id));
+    const mine = [s.viewer].concat(guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id));
     const forgiven = forgivenWhole(v, s.viewer);
     const paid = paidUp(v, s.viewer);
     const o = s.owing[s.viewer];
@@ -756,7 +758,8 @@ export const CLIENT_SCRIPT = String.raw`
       const nodes = [mineNodes(v, v.s.viewer)];
       for (const g of guestsOf(v, v.s.viewer)) {
         const list = mineNodes(v, g.id);
-        if (list) nodes.push(el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName]), list);
+        const paid = guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null;
+        if (list) nodes.push(el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list);
       }
       return nodes;
     });
@@ -889,7 +892,7 @@ export const CLIENT_SCRIPT = String.raw`
       : el("div", { class: "sheet-head" }, [
           av(v, g.id),
           el("h3", null, g.displayName),
-          guestPaid(g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
+          guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
         ]);
     const actions = [];
@@ -1371,8 +1374,15 @@ export const CLIENT_SCRIPT = String.raw`
       msg.textContent = failure.message;
       return;
     }
+    endRename(form.dataset.rename);
+  }
+
+  // The form replaces the pencil, so focus goes back to it or it is lost.
+  function endRename(id) {
     if (sheet) sheet.renaming = null;
     render();
+    const pencil = root.querySelector('[data-rename-guest="' + CSS.escape(id) + '"]');
+    if (pencil) pencil.focus();
   }
 
   async function removeGuest(button) {
@@ -1392,6 +1402,11 @@ export const CLIENT_SCRIPT = String.raw`
     if (failure && sheet) sheet.msg = failure.message;
     if (claimFor === id) claimFor = null;
     render();
+    // The guest's block went with them, the button included.
+    if (!failure) {
+      const next = root.querySelector("dialog [data-add-guest]") || root.querySelector("dialog .close");
+      if (next) next.focus();
+    }
   }
 
   async function toggle(key, method, path, body) {
@@ -1530,10 +1545,7 @@ export const CLIENT_SCRIPT = String.raw`
         if (button) button.focus();
         return;
       }
-      if (form.dataset.rename && sheet) {
-        sheet.renaming = null;
-        render();
-      }
+      if (form.dataset.rename && sheet) endRename(form.dataset.rename);
     }
   });
 
