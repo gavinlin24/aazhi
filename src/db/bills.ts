@@ -56,6 +56,10 @@ interface BillDbRow {
   confirmed_at: string | null;
 }
 
+interface SnapshotBillDbRow extends BillDbRow {
+  has_payments: number;
+}
+
 interface ParticipantDbRow {
   bill_id: string;
   id: string;
@@ -294,11 +298,19 @@ export interface BillSnapshot {
   bill: BillRow;
   participants: Participant[];
   input: BillInput;
+  // Whether anyone has paid against this bill, which is what stops the payer
+  // being handed to someone else.
+  hasPayments: boolean;
 }
 
 function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement[] {
   return [
-    db.prepare(`SELECT ${BILL_COLUMNS} FROM bills WHERE id = ?`).bind(billId),
+    db
+      .prepare(
+        `SELECT ${BILL_COLUMNS}, EXISTS (SELECT 1 FROM settlements WHERE bill_id = bills.id) AS has_payments
+         FROM bills WHERE id = ?`,
+      )
+      .bind(billId),
     itemsStatement(db, billId),
     claimsStatement(db, billId),
     participantsStatement(db, billId),
@@ -314,7 +326,7 @@ export async function getBillSnapshot(db: D1Database, billId: string): Promise<B
 
 function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
   const [bill, items, claims, participants, pardoned] = results as [D1Result, D1Result, D1Result, D1Result, D1Result];
-  const billRow = (bill.results as BillDbRow[])[0];
+  const billRow = (bill.results as SnapshotBillDbRow[])[0];
   if (!billRow) return null;
 
   const people = (participants.results as ParticipantDbRow[]).map(toParticipant);
@@ -329,6 +341,7 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
       participants: sortedIds(people.map((p) => p.id)),
       pardoned: sortedIds((pardoned.results as { participant_id: string }[]).map((p) => p.participant_id)),
     },
+    hasPayments: billRow.has_payments === 1,
   };
 }
 
@@ -660,6 +673,33 @@ export async function getSettled(db: D1Database, billId: string): Promise<Settle
   return toSettled(await settledStatement(db, billId).all());
 }
 
+// A share is clear when its payments reach what the person owes after any
+// pardon; that is never stored as a decision of its own. settled_at only
+// remembers when it first became true (time-to-settle is a statistic), so
+// every write that moves either side re-derives it in the same batch. The
+// derivation reads nothing but the rows as they stand, so running it after a
+// write that matched nothing changes nothing. The payer owes nobody, so their
+// own row never settles. `participant` null re-derives the whole bill.
+export function settledAtStatement(
+  db: D1Database,
+  billId: string,
+  participant: ParticipantId | null,
+  now: string,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE shares SET settled_at = CASE
+         WHEN participant_id = (SELECT payer_id FROM bills WHERE id = ?1) THEN NULL
+         WHEN (SELECT COALESCE(SUM(x.cents), 0) FROM settlements x
+               WHERE x.bill_id = ?1 AND x.participant_id = shares.participant_id)
+              >= CASE WHEN pardoned = 1 THEN 0 ELSE owed_cents END
+           THEN COALESCE(settled_at, ?3)
+         ELSE NULL END
+       WHERE bill_id = ?1 AND (?2 IS NULL OR participant_id = ?2)`,
+    )
+    .bind(billId, participant, now);
+}
+
 export interface AmountChange {
   participant: ParticipantId;
   wasCents: Cents;
@@ -719,9 +759,9 @@ export async function confirmBill(
   const changes = amountChanges(toShares(results[5]!), split, toSettled(results[6]!));
 
   const atRevision = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'draft' AND revision = ?2)";
-  // A pardon flag survives a re-confirm. A settled_at survives only if the
-  // amount did not move; whether a moved amount is still covered is for the
-  // settlement records to say, not for a stale timestamp.
+  // A pardon flag survives a re-confirm. Whether someone is still clear under
+  // their new amount is re-derived from their payments right after, in the
+  // same batch, rather than carried over from the old amount.
   const upsert = db.prepare(
     `INSERT INTO shares (bill_id, participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents)
      SELECT ?1, ?3, ?4, ?5, ?6, ?7 WHERE ${atRevision}
@@ -729,17 +769,18 @@ export async function confirmBill(
        subtotal_cents = excluded.subtotal_cents,
        tax_cents = excluded.tax_cents,
        tip_cents = excluded.tip_cents,
-       owed_cents = excluded.owed_cents,
-       settled_at = CASE WHEN shares.owed_cents = excluded.owed_cents THEN shares.settled_at ELSE NULL END`,
+       owed_cents = excluded.owed_cents`,
   );
+  const now = new Date().toISOString();
   const freeze = db
     .prepare(
       `UPDATE bills SET status = 'confirmed', confirmed_at = ?3, revision = revision + 1
        WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision`,
     )
-    .bind(billId, revision, new Date().toISOString());
+    .bind(billId, revision, now);
   const written = await db.batch([
     ...split.shares.map((s) => upsert.bind(billId, revision, s.participant, s.subtotalCents, s.taxCents, s.tipCents, s.owedCents)),
+    settledAtStatement(db, billId, null, now),
     freeze,
   ]);
   if (written[written.length - 1]!.results.length === 0) {

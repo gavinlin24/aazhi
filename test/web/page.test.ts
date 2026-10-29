@@ -336,6 +336,20 @@ describe("renderPage", () => {
     expect(await select(page("marcus"), "[data-payer-form]")).toEqual([]);
   });
 
+  it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {
+    const reopened = { ...bill, confirmedAt: "2026-10-28T22:00:00.000Z" };
+    const html = renderPage(reopened, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { hasPayments: true });
+
+    expect("hidden" in (await one(html, "form[data-payer-form]")).attrs).toBe(true);
+    expect(stateOf(html).hasPayments).toBe(true);
+    // The rest of the payer's corrections stay available.
+    expect("hidden" in (await one(html, "[data-check]")).attrs).toBe(false);
+
+    const unpaid = page("gavin");
+    expect("hidden" in (await one(unpaid, "form[data-payer-form]")).attrs).toBe(false);
+    expect(stateOf(unpaid).hasPayments).toBe(false);
+  });
+
   it("is one self-contained, phone-sized page that follows the system theme", () => {
     const html = page("marcus");
 

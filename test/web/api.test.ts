@@ -493,6 +493,7 @@ describe("who paid", () => {
 
     const reply = await patch("gavin", { payer: "priya" });
 
+    expect((await send("GET", `/b/${BILL}/state`, { as: "gavin" })).body.hasPayments).toBe(true);
     expect(reply.status).toBe(409);
     expect(reply.body.error).toMatch(/already (been )?paid/i);
     expect(reply.body.error).toMatch(/Gavin/);
@@ -549,7 +550,7 @@ describe("what every response carries", () => {
     expect(edits).toEqual([]);
 
     const payer = await send("GET", `/b/${BILL}/state`, { as: "gavin" });
-    expect(payer.body).toMatchObject({ viewerIsPayer: true, editable: "all" });
+    expect(payer.body).toMatchObject({ viewerIsPayer: true, editable: "all", hasPayments: false });
   });
 
   it("tells a poll when the bill was confirmed, replaced or never existed", async () => {

@@ -459,13 +459,15 @@ function moneyField(name: string, label: string, cents: Cents | null, extra = ""
 </form>`;
 }
 
-// Only members: a guest has no account to collect into.
+// Only members: a guest has no account to collect into. Rendered hidden once
+// anyone has paid, since the server refuses the change then; the script shows
+// or hides it as polls report payments.
 function payerField(v: View): string {
   const options = v.participants
     .filter((p) => p.kind === "member")
     .map((p) => `<option value="${escapeHtml(p.id)}"${p.id === v.bill.payerId ? " selected" : ""}>${escapeHtml(p.displayName)}</option>`)
     .join("");
-  return `<form class="field" data-payer-form novalidate>
+  return `<form class="field" data-payer-form novalidate${v.state.hasPayments ? " hidden" : ""}>
 <div class="field-head"><label for="field-payer">Who paid</label></div>
 <div class="field-row"><select id="field-payer" name="payer" class="text-input">${options}</select><button type="submit" class="btn primary" disabled>Save</button></div>
 <p class="field-note" data-note></p>
@@ -607,8 +609,9 @@ export function renderPage(
   items: LineItem[],
   participants: Participant[],
   viewer: ParticipantId,
+  options: { hasPayments?: boolean } = {},
 ): string {
-  const state = billState(bill, result, items, participants, viewer);
+  const state = billState(bill, result, items, participants, viewer, options.hasPayments ?? false);
   const v: View = {
     bill,
     result,

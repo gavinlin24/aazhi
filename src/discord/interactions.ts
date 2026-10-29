@@ -8,6 +8,7 @@ import type { Env } from "../env";
 import { confirmTap, deleteConfirmTap, deleteTap, reopenTap, splitOrphansTap } from "./handlers/lifecycle";
 import { mathTap, notMineTap, payTap, paywithCommand } from "./handlers/owe";
 import { openSplit, pickRoster } from "./handlers/roster";
+import { ledgerCommand, paidAllTap, paidAmountSubmit, paidPartTap, paidTap, undoPick, undoTap } from "./handlers/settle";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
 
 // `origin` is where this Worker was reached, so a handler can link back to the
@@ -27,6 +28,7 @@ export const commandHandlers: Record<string, InteractionHandler> = {
   split: splitCommand,
   "Split this receipt": splitMessageCommand,
   paywith: paywithCommand,
+  ledger: ledgerCommand,
 };
 export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
@@ -39,6 +41,16 @@ export const componentHandlers: Record<string, InteractionHandler> = {
   "pay:": payTap,
   "math:": mathTap,
   "notmine:": notMineTap,
+  "paid:": paidTap,
+  "paidall:": paidAllTap,
+  "paidpart:": paidPartTap,
+  "undo:": undoTap,
+  "undopick:": undoPick,
+};
+// A modal's submit is its own interaction type, keyed the same way by the
+// custom_id the modal was opened with.
+export const modalHandlers: Record<string, InteractionHandler> = {
+  "paidamount:": paidAmountSubmit,
 };
 
 function respond(body: APIInteractionResponse): Response {
@@ -66,6 +78,11 @@ export const handleInteraction: InteractionHandler = async (body, env, ctx, orig
       const customId = body.data.custom_id;
       const prefix = Object.keys(componentHandlers).find((p) => customId.startsWith(p));
       return prefix ? componentHandlers[prefix]!(body, env, ctx, origin) : notSupported();
+    }
+    case InteractionType.ModalSubmit: {
+      const customId = body.data.custom_id;
+      const prefix = Object.keys(modalHandlers).find((p) => customId.startsWith(p));
+      return prefix ? modalHandlers[prefix]!(body, env, ctx, origin) : notSupported();
     }
     default:
       return notSupported();

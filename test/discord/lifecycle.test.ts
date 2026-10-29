@@ -39,7 +39,16 @@ const TOKEN = "interaction-token";
 const EPHEMERAL = 1 << 6;
 
 const item = (id: string) => `${BILL}-${id}`;
-const OWE_CARD_BUTTONS = [`pay:${BILL}`, `math:${BILL}`, `notmine:${BILL}`, `open:${BILL}`, `reopen:${BILL}`, `delete:${BILL}`];
+const OWE_CARD_BUTTONS = [
+  `pay:${BILL}`,
+  `paid:${BILL}`,
+  `math:${BILL}`,
+  `notmine:${BILL}`,
+  `open:${BILL}`,
+  `undo:${BILL}`,
+  `reopen:${BILL}`,
+  `delete:${BILL}`,
+];
 
 let keypair: TestKeypair;
 const ready = generateKeypair().then((k) => (keypair = k));

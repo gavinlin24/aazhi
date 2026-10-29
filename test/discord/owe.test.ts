@@ -213,9 +213,11 @@ describe("the owe card", () => {
     expect(labels).toContain("That's not mine");
     expect(customIds(data)).toEqual([
       `pay:${BILL}`,
+      `paid:${BILL}`,
       `math:${BILL}`,
       `notmine:${BILL}`,
       `open:${BILL}`,
+      `undo:${BILL}`,
       `reopen:${BILL}`,
       `delete:${BILL}`,
     ]);

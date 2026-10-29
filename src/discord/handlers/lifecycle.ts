@@ -112,7 +112,7 @@ export function parseCustomId(body: APIInteraction, prefix: string, withPinned: 
   return { billId: rest.slice(0, at), pinned };
 }
 
-interface PayerTap {
+export interface PayerTap {
   bill: BillRow;
   participants: Participant[];
   who: string;
@@ -120,7 +120,7 @@ interface PayerTap {
 
 // Every lifecycle button is visible to everyone on the message, so each one
 // checks that the tapper paid before doing anything.
-async function payerTap(body: APIInteraction, env: Env, billId: string, action: string, reply: Reply): Promise<PayerTap | Response> {
+export async function payerTap(body: APIInteraction, env: Env, billId: string, action: string, reply: Reply): Promise<PayerTap | Response> {
   const who = invokerOf(body);
   if (!who) return reply(NOT_SUPPORTED);
   const bill = await getBill(env.DB, billId);

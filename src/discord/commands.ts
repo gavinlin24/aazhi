@@ -73,4 +73,21 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
       },
     ],
   },
+  // A debt belongs to a bill and a bill to a server, so the same rows answer
+  // "in this server" and "everywhere". A DM with the bot has no server, so
+  // there it always answers everywhere.
+  {
+    name: "ledger",
+    type: ApplicationCommandType.ChatInput,
+    description: "See who still owes you for bills you paid",
+    contexts: [InteractionContextType.Guild, InteractionContextType.BotDM],
+    integration_types: [ApplicationIntegrationType.GuildInstall],
+    options: [
+      {
+        type: ApplicationCommandOptionType.Boolean,
+        name: "everywhere",
+        description: "Include every server, not just this one",
+      },
+    ],
+  },
 ];

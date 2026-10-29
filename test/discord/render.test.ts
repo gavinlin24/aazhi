@@ -287,17 +287,21 @@ describe("renderBill", () => {
     expect(text).toMatch(/pay <@gavin>/i);
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual([
       "pay:bill-1",
+      "paid:bill-1",
       "math:bill-1",
       "notmine:bill-1",
       "open:bill-1",
+      "undo:bill-1",
       "reopen:bill-1",
       "delete:bill-1",
     ]);
     expect(buttonsOf(data).map((b) => b.label)).toEqual([
       "Pay my share",
+      "I paid",
       "Show my math",
       "That's not mine",
       "Open the split",
+      "Undo a payment",
       "Reopen",
       "Delete",
     ]);

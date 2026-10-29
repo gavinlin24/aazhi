@@ -186,7 +186,7 @@ describe("handleInteraction routing", () => {
     expect(json.data.flags).toBe(EPHEMERAL);
   });
 
-  it("answers an interaction type it does not handle (a modal submit) the same way", async () => {
+  it("answers a modal submit it has no handler for the same way", async () => {
     await ready;
 
     const body = interaction({ type: 5, data: { custom_id: "x", components: [] } });

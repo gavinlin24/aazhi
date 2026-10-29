@@ -272,12 +272,16 @@ function oweCard(
     },
   };
   const head =
-    `**Confirmed.** Pay ${payer} your share. **Pay my share** has your amount filled in, ` +
-    "and **Show my math** shows how it was worked out.\n\n";
+    `**Confirmed.** Pay ${payer} your share. **Pay my share** has your amount filled in, **I paid** records it ` +
+    "once you've sent it, and **Show my math** shows how it was worked out.\n\n";
   const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
   embed.description = head + fitLines(rows, budget, (n) => `and ${n} more on the page`);
 
-  const button = (style: ButtonStyle.Success | ButtonStyle.Secondary, label: string, prefix: string): APIButtonComponent => ({
+  const button = (
+    style: ButtonStyle.Success | ButtonStyle.Primary | ButtonStyle.Secondary,
+    label: string,
+    prefix: string,
+  ): APIButtonComponent => ({
     type: ComponentType.Button,
     style,
     label,
@@ -291,14 +295,20 @@ function oweCard(
         type: ComponentType.ActionRow,
         components: [
           button(ButtonStyle.Success, "Pay my share", "pay"),
+          button(ButtonStyle.Primary, "I paid", "paid"),
           button(ButtonStyle.Secondary, "Show my math", "math"),
           button(ButtonStyle.Secondary, "That's not mine", "notmine"),
         ],
       },
-      // Reopen and Delete are the payer's, refused for anyone else like Confirm.
+      // Undo, Reopen and Delete are the payer's, refused for anyone else like Confirm.
       {
         type: ComponentType.ActionRow,
-        components: [openButton(bill, ButtonStyle.Secondary), button(ButtonStyle.Secondary, "Reopen", "reopen"), deleteButton(bill)],
+        components: [
+          openButton(bill, ButtonStyle.Secondary),
+          button(ButtonStyle.Secondary, "Undo a payment", "undo"),
+          button(ButtonStyle.Secondary, "Reopen", "reopen"),
+          deleteButton(bill),
+        ],
       },
     ],
     allowed_mentions: { parse: [] },

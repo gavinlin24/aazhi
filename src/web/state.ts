@@ -15,6 +15,9 @@ export interface BillState {
   viewer: ParticipantId;
   viewerIsPayer: boolean;
   editable: Editable;
+  // Once anyone has paid, the bill can't be handed to another payer: every
+  // recorded payment went to this one.
+  hasPayments: boolean;
   taxCents: Cents;
   tipCents: Cents;
   printedTotalCents: Cents | null;
@@ -39,6 +42,7 @@ export function billState(
   items: LineItem[],
   participants: Participant[],
   viewer: ParticipantId,
+  hasPayments: boolean,
 ): BillState {
   return {
     billId: bill.id,
@@ -48,6 +52,7 @@ export function billState(
     viewer,
     viewerIsPayer: viewer === bill.payerId,
     editable: editableFor(bill, participants, viewer),
+    hasPayments,
     taxCents: bill.taxCents,
     tipCents: bill.tipCents,
     printedTotalCents: bill.printedTotalCents,
@@ -59,6 +64,6 @@ export function billState(
 }
 
 export function stateOf(snapshot: BillSnapshot, viewer: ParticipantId): BillState {
-  const { bill, input, participants } = snapshot;
-  return billState(bill, splitBill(input), input.items, participants, viewer);
+  const { bill, input, participants, hasPayments } = snapshot;
+  return billState(bill, splitBill(input), input.items, participants, viewer, hasPayments);
 }

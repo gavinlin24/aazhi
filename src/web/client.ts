@@ -248,6 +248,8 @@ export const CLIENT_SCRIPT = String.raw`
   function renderPayer(s) {
     const form = root.querySelector("form[data-payer-form]");
     if (!form) return;
+    form.hidden = s.hasPayments;
+    if (form.hidden) return;
     const select = form.elements.payer;
     const members = s.participants.filter((p) => p.kind === "member");
     const key = JSON.stringify(members.map((p) => [p.id, p.displayName]));

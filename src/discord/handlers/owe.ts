@@ -13,6 +13,7 @@ import {
   getBill,
   getBillItems,
   getParticipants,
+  getSettled,
   getShares,
   reopenBill,
   type AmountChange,
@@ -42,7 +43,7 @@ import {
 } from "./lifecycle";
 
 const NOT_ON_BILL = "You're not on this bill, so there's nothing here for you to pay or check.";
-const NO_SHARE = "You have no share on this bill, so there's nothing for you to pay.";
+export const NO_SHARE = "You have no share on this bill, so there's nothing for you to pay.";
 // Discord refuses an ephemeral reply over 2000 characters, and the diner then
 // sees only "This interaction failed".
 const MAX_CONTENT = 2000;
@@ -51,13 +52,13 @@ const MAX_BILL_NAME = 80;
 const MAX_NOTE = 60;
 
 // By code point, so a cut never splits an emoji into a lone surrogate.
-function clip(text: string, max: number): string {
+export function clip(text: string, max: number): string {
   const chars = Array.from(text);
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join("").trimEnd()}…`;
 }
 
 // Clipped before anything escapes it, so a cut never strands a backslash.
-function billName(bill: BillRow): string {
+export function billName(bill: BillRow): string {
   const date = formatDate(bill.billDate);
   return `${clip(bill.place?.trim() || "dinner", MAX_BILL_NAME)}${date ? `, ${date}` : ""}`;
 }
@@ -127,7 +128,11 @@ export function renderMath(share: Share, items: LineItem[], bill: BillRow): stri
   return [header, ...fitItemLines(rows, MAX_CONTENT - fixed), ...footer].join("\n");
 }
 
-interface DinerTap {
+export function paidUp(payer: string, settledCents: number): string {
+  return `You're all paid up on this bill: you've paid ${payer} ${formatCents(settledCents)}.`;
+}
+
+export interface DinerTap {
   bill: BillRow;
   participants: Participant[];
   who: string;
@@ -135,8 +140,12 @@ interface DinerTap {
 
 // The owe card's buttons are on one message everyone sees, so every tap is
 // about the tapper: it has to be someone on the bill, and the answer is theirs.
-async function dinerTap(body: APIInteraction, env: Env, prefix: string): Promise<DinerTap | Response> {
-  const ids = parseCustomId(body, prefix, false);
+export async function dinerTap(
+  body: APIInteraction,
+  env: Env,
+  prefix: string,
+  ids = parseCustomId(body, prefix, false),
+): Promise<DinerTap | Response> {
   const who = invokerOf(body);
   if (!ids || !who) return privately(NOT_SUPPORTED);
   const bill = await getBill(env.DB, ids.billId);
@@ -149,13 +158,13 @@ async function dinerTap(body: APIInteraction, env: Env, prefix: string): Promise
 
 // A tap on pay controls that should already be gone: the card is behind, so
 // it is brought up to date while the person is told why.
-function notConfirmed(tap: DinerTap, env: Env, ctx: ExecutionContext, draft: string): Response {
+export function notConfirmed(tap: DinerTap, env: Env, ctx: ExecutionContext, draft: string): Response {
   if (tap.bill.status !== "draft") return privately(STATUS_REFUSAL[tap.bill.status]);
   refreshMessage(tap.bill, env, ctx);
   return privately(draft);
 }
 
-function paused(tap: DinerTap): string {
+export function paused(tap: DinerTap): string {
   return `This bill was reopened, so paying is paused until ${nameOf(tap.participants, tap.bill.payerId)} confirms it again.`;
 }
 
@@ -192,8 +201,17 @@ export const payTap: InteractionHandler = async (body, env, ctx) => {
   if (share.pardoned) return privately(`${payer} covered your share of this bill, so you don't owe anything.`);
   if (share.owedCents <= 0) return privately("You don't owe anything on this bill.");
 
-  const amount = formatCents(share.owedCents);
-  const head = `You owe ${payer} **${amount}** for ${escapeMarkdown(billName(tap.bill))}.`;
+  // What is left, not the frozen amount: a link for the full share after a
+  // partial payment would ask the person to pay twice.
+  const settled = (await getSettled(env.DB, tap.bill.id)).find((s) => s.participant === tap.who)?.cents ?? 0;
+  const remaining = share.owedCents - settled;
+  if (remaining <= 0) return privately(paidUp(payer, settled));
+  const amount = formatCents(remaining);
+  const forBill = escapeMarkdown(billName(tap.bill));
+  const head =
+    (settled > 0
+      ? `You have **${amount}** left to pay ${payer} for ${forBill}: you've paid ${formatCents(settled)} of ${formatCents(share.owedCents)}.`
+      : `You owe ${payer} **${amount}** for ${forBill}.`) + " Tap **I paid** on the bill once you've sent it.";
   const handles = await getPaymentHandles(env.DB, tap.bill.payerId);
   if (handles.length === 0) {
     return privately(
@@ -208,7 +226,7 @@ export const payTap: InteractionHandler = async (body, env, ctx) => {
   const notes: string[] = [];
   const buttons: APIButtonComponent[] = [];
   for (const { method, handle } of handles) {
-    const link = payLink(method, handle, share.owedCents, note);
+    const link = payLink(method, handle, remaining, note);
     if ("instructions" in link) {
       notes.push(`**${METHOD_NAMES[method]}:** ${escapeMarkdown(link.instructions)}`);
       continue;
