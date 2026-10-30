@@ -218,6 +218,10 @@ describe("renderPage", () => {
         ["guest-sam", "false", `SSam owes${owed("guest-sam")}`],
       ]);
       expect(await textOf(html, "[data-you-owed]")).toBe(owed("dani"));
+      // A guest's slip is tabbed apart from yours, and each carries the mark
+      // that shows when it is the one pressed.
+      expect(chips.map((c) => c.attrs.class)).toEqual(["owe", "owe is-guest"]);
+      expect(await select(html, "[data-owes] button.owe .owe-av > .mark")).toHaveLength(2);
     });
 
     it("is only what you owe for anyone with nobody else to claim for", async () => {
@@ -227,6 +231,7 @@ describe("renderPage", () => {
         expect(row.attrs.role, viewer).toBeUndefined();
         expect(await select(html, "[data-owes] .owe"), viewer).toHaveLength(1);
         expect(await select(html, "[data-owes] button"), viewer).toEqual([]);
+        expect(await select(html, "[data-owes] .mark"), viewer).toEqual([]);
       }
     });
   });
@@ -242,6 +247,17 @@ describe("renderPage", () => {
     expect(await textOf(html, ".trow.grand [data-total]")).toBe("$324.12");
     expect(await textOf(html, '[data-total="total"]')).toBe("$324.12");
     expect(await textOf(html, '[data-total="unclaimed"]')).toBe("$27.06");
+    expect(await select(html, ".trow.short dt > .ic.cloud")).toHaveLength(1);
+  });
+
+  it("says the receipt has no lines yet only while it has none", async () => {
+    const bare = { ...SAIGON, items: [], tipCents: 0, taxCents: 0 };
+    for (const viewer of ["gavin", "marcus"]) {
+      const empty = await one(page(viewer, { ...bill, printedTotalCents: null }, bare), "[data-items] [data-empty-lines]");
+      expect(empty.text, viewer).toBe("No lines yet.");
+      expect(empty.attrs, viewer).not.toHaveProperty("hidden");
+    }
+    expect((await one(page("gavin"), "[data-empty-lines]")).attrs).toHaveProperty("hidden");
   });
 
   it("reads the payer's receipt as subtotal less discount plus tax, then the tip", async () => {
@@ -429,11 +445,16 @@ describe("renderPage", () => {
 
   it("names each status for what it is, and seals a confirmed bill", async () => {
     expect(await textOf(page("marcus"), "[data-status-label] .word")).toBe("Draft");
-    expect(await select(page("marcus"), "[data-status-label] .seal")).toEqual([]);
+    // A draft carries the outline 稿 seal, never the red 定.
+    expect(await textOf(page("marcus"), "[data-status-label] .seal.is-draft")).toBe("稿");
+    expect(await select(page("marcus"), "[data-status-label] .seal:not(.is-draft)")).toEqual([]);
     const confirmed = page("marcus", confirmedBill, SAIGON);
     expect(await textOf(confirmed, "[data-status-label] .word")).toBe("Confirmed");
     expect(await textOf(confirmed, "[data-status-label] .seal")).toBe("定");
-    expect(await textOf(page("marcus", { ...bill, status: "reading" }, SAIGON), "[data-status-label] .word")).toBe("Reading");
+    expect(await select(confirmed, "[data-status-label] .is-draft")).toEqual([]);
+    const reading = page("marcus", { ...bill, status: "reading" }, SAIGON);
+    expect(await textOf(reading, "[data-status-label] .word")).toBe("Reading");
+    expect(await select(reading, "[data-status-label] .seal")).toEqual([]);
   });
 
   it("asks the payer for the receipt total only when the lines don't add up to it, beside Confirm", async () => {
@@ -472,7 +493,7 @@ describe("renderPage", () => {
     // Read-only figures on the payer's own receipt stay plain.
     expect(await select(payer, '[data-total="subtotal"] .brush, [data-total="total"] .brush, .piece .brush')).toEqual([]);
     expect(payer).toContain('<symbol id="i-brush"');
-    // The brush leads the figure, so a pill's digits end on the receipt's edge with the plain ones.
+    // The brush leads the figure, so an editable figure's digits end on the receipt's edge with the plain ones.
     expect(payer.match(/class="item-price"><svg class="ic brush"/g)).toHaveLength(SAIGON.items.length);
     expect(payer.match(/class="amt" data-edit-field="[a-zA-Z]+" aria-label="[^"]*"><svg class="ic brush"/g)).toHaveLength(3);
 
@@ -495,10 +516,16 @@ describe("renderPage", () => {
   it("gives the payer Confirm and Delete, and says why Confirm is waiting", async () => {
     const html = page("gavin");
 
+    // The seal is pressed to confirm. The why sits inside it but out of its
+    // name, so the button is announced as Confirm and the why as its description.
     const confirm = await one(html, "[data-actions] [data-confirm]");
-    expect(confirm.text).toBe("定Confirm");
+    expect(await textOf(html, "[data-confirm] .seal")).toBe("定");
+    expect(await textOf(html, "[data-confirm] .confirm-word")).toBe("Confirm");
     expect(confirm.attrs).not.toHaveProperty("disabled");
-    expect(await textOf(html, "#confirm-why")).toBe("2 lines have nobody on them.");
+    expect(confirm.attrs["aria-describedby"]).toBe("confirm-why");
+    const why = await one(html, "[data-confirm] #confirm-why");
+    expect(why.text).toBe("2 lines have nobody on them.");
+    expect(why.attrs["aria-hidden"]).toBe("true");
     expect(await textOf(html, "[data-actions] [data-delete-bill]")).toBe("Delete this bill");
     expect(await select(html, "[data-reopen], [data-ask=wrong], [data-sent]")).toEqual([]);
 
@@ -867,20 +894,21 @@ describe("renderPage", () => {
     expect(html).toContain('<meta name="viewport" content="width=device-width, initial-scale=1');
     expect(html).toContain("prefers-color-scheme: dark");
     expect(html).not.toMatch(/\bsrc=|<link\b|@import/);
-    // Fonts and the paper grain are inlined; the only URL is the SVG
-    // namespace, which names a format and is never fetched.
-    for (const url of html.match(/url\(\s*["']?[^"')]{0,12}/g) ?? []) expect(url).toMatch(/url\(\s*["']?(data:|%23)/);
+    // Fonts and the paper grain are inlined, and the hills point at masks in
+    // the page's own sprite; the only URL is the SVG namespace, which names a
+    // format and is never fetched.
+    for (const url of html.match(/url\(\s*["']?[^"')]{0,12}/g) ?? []) expect(url).toMatch(/url\(\s*["']?(data:|%23|#[a-z]-)/);
     for (const link of html.match(/https?:\/\/[^\s"'<>)]*/g) ?? []) expect(link).toBe("http://www.w3.org/2000/svg");
     expect(html).toContain(CLIENT_SCRIPT);
     expect(CLIENT_SCRIPT).not.toMatch(/<\/script/i);
   });
 
-  it("spends its font budget on the numerals and the three seal characters only", () => {
+  it("spends its font budget on the numerals and the four seal characters only", () => {
     const html = page("marcus");
     const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? [];
     expect(faces).toHaveLength(2);
     expect(faces.join("")).toContain("unicode-range: U+2C-2E, U+30-39");
-    expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+8BAB");
+    expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+7A3F, U+8BAB");
     // Inline on every page load, so a subset that grows past this is a regression.
     const bytes = faces.join("").length;
     expect(bytes).toBeLessThan(8_000);

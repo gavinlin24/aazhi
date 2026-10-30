@@ -352,7 +352,11 @@ export const CLIENT_SCRIPT = String.raw`
     const label = root.querySelector("[data-status-label]");
     if (label) {
       keyedInto(label, v.s.status, () => [
-        v.s.status === "confirmed" ? el("span", { class: "seal", "aria-hidden": "true" }, "定") : el("span", { class: "seal-slot", "aria-hidden": "true" }),
+        v.s.status === "confirmed"
+          ? el("span", { class: "seal", "aria-hidden": "true" }, "定")
+          : v.s.status === "draft"
+            ? el("span", { class: "seal is-draft", "aria-hidden": "true" }, "稿")
+            : el("span", { class: "seal-slot", "aria-hidden": "true" }),
         el("span", { class: "word" }, STATUS_WORD[v.s.status] || v.s.status),
         el("span", { class: "live", "aria-hidden": "true" }),
       ]);
@@ -431,6 +435,8 @@ export const CLIENT_SCRIPT = String.raw`
     for (const section of root.querySelectorAll("[data-items]")) {
       section.classList.toggle("is-editable", mode === "all");
       let list = section.querySelector(":scope > ul.items");
+      const empty = section.querySelector(":scope > [data-empty-lines]");
+      if (empty) empty.hidden = v.s.items.length > 0;
       if (v.s.items.length === 0) {
         if (list) list.remove();
       } else {
@@ -533,7 +539,7 @@ export const CLIENT_SCRIPT = String.raw`
     row("total", [r.distributableCents], "grand", () => [el("dt", null, "Total"), el("dd", { "data-total": "total" }, money(r.distributableCents))]);
     if (r.unclaimedCents !== 0) {
       row("unclaimed", [r.unclaimedCents], "short", () => [
-        el("dt", null, [el("span", { class: "dash-ring", "aria-hidden": "true" }), "Unclaimed"]),
+        el("dt", null, [icon("cloud", "cloud"), "Unclaimed"]),
         el("dd", { "data-total": "unclaimed" }, money(r.unclaimedCents)),
       ]);
     }
@@ -651,13 +657,15 @@ export const CLIENT_SCRIPT = String.raw`
       row.removeAttribute("aria-label");
     }
     keyedInto(row, JSON.stringify([ids.map((id) => [id, nameOf(v, id), owed(id)]), pick, actor]), () => ids.map((id) => {
-      const inner = [av(v, id), el("span", { class: "owe-text" }, [
+      const mark = pick ? el("span", { class: "mark", "aria-hidden": "true" }, icon("check")) : null;
+      const cls = id === v.s.viewer ? "owe" : "owe is-guest";
+      const inner = [el("span", { class: "owe-av" }, [av(v, id), mark]), el("span", { class: "owe-text" }, [
         el("span", { class: "owe-label" }, id === v.s.viewer ? "You owe" : nameOf(v, id) + " owes"),
         el("span", { class: "amount money", "data-you-owed": id === v.s.viewer ? true : null }, money(owed(id))),
       ])];
       return pick
-        ? el("button", { type: "button", class: "owe", "data-claim-as": id, "aria-pressed": String(id === actor) }, inner)
-        : el("div", { class: "owe" }, inner);
+        ? el("button", { type: "button", class: cls, "data-claim-as": id, "aria-pressed": String(id === actor) }, inner)
+        : el("div", { class: cls }, inner);
     }));
   }
 
@@ -786,8 +794,8 @@ export const CLIENT_SCRIPT = String.raw`
   let slamming = false;
   const SLAM_MS = 1000;
 
-  function slam() {
-    const mark = el("div", { class: "slam", "aria-hidden": "true" }, el("span", { class: "stamp" }, "付讫"));
+  function slam(seal) {
+    const mark = el("div", { class: "slam", "aria-hidden": "true" }, seal);
     document.body.appendChild(mark);
     setTimeout(() => {
       mark.remove();
@@ -903,8 +911,13 @@ export const CLIENT_SCRIPT = String.raw`
         disabled: Boolean(blocked) || stopped,
         "aria-busy": busy.has("confirm") ? "true" : null,
         "aria-describedby": why ? "confirm-why" : null,
-      }, [el("span", { class: "brush", "aria-hidden": "true" }, "定"), "Confirm"]),
-      why ? el("p", { class: "why" + (blocked ? "" : " is-hint"), id: "confirm-why" }, why) : null,
+      }, [
+        el("span", { class: "seal", "aria-hidden": "true" }, "定"),
+        el("span", { class: "confirm-text" }, [
+          el("span", { class: "confirm-word" }, "Confirm"),
+          why ? el("span", { class: "why" + (blocked ? "" : " is-hint"), id: "confirm-why", "aria-hidden": "true" }, why) : null,
+        ]),
+      ]),
     ]);
   }
 
@@ -923,8 +936,8 @@ export const CLIENT_SCRIPT = String.raw`
         s.status === "confirmed"
           ? act({ "data-reopen": true, "aria-busy": busy.has("reopen") ? "true" : null }, "receipt", "Edit the bill", "Paying pauses until you confirm again.")
           : null,
-        act({ "data-delete-bill": true, "aria-busy": busy.has("delete") ? "true" : null }, "trash",
-          armed.has("delete-bill") ? "Tap again to delete this bill" : "Delete this bill", null, "danger" + (armed.has("delete-bill") ? " is-armed" : "")),
+        act({ "data-delete-bill": true, "aria-busy": busy.has("delete") ? "true" : null }, "basket",
+          armed.has("delete-bill") ? "Tap again to delete this bill" : "Delete this bill", null, armed.has("delete-bill") ? "is-armed" : ""),
       ];
     }
     return [act({ "data-ask": "wrong", "aria-haspopup": "dialog" }, "warn", "Something's wrong", "Paying pauses until " + nameOf(v, s.payerId) + " fixes it.", "is-warn")];
@@ -1077,6 +1090,7 @@ export const CLIENT_SCRIPT = String.raw`
     const manage = canManageGuest(v, g) && !stopped;
     const share = v.shares.get(g.id);
     const renaming = sheet && sheet.renaming === g.id;
+    const doomed = armed.has("remove:" + g.id);
     const head = renaming
       ? el("form", { class: "guest-form", "data-rename": g.id, novalidate: true }, [
           av(v, g.id),
@@ -1089,19 +1103,18 @@ export const CLIENT_SCRIPT = String.raw`
           el("button", { type: "submit", class: "icon-btn go", "aria-label": "Save" }, icon("check")),
           el("p", { class: "field-msg", role: "status" }),
         ])
-      : el("div", { class: "sheet-head" }, [
+      : el("div", { class: "sheet-head" + (doomed ? " is-struck" : "") }, [
           av(v, g.id),
           el("h3", null, draft && manage
-            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", null, g.displayName), icon("brush", "brush")])
-            : g.displayName),
+            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", { class: "struck" }, g.displayName), icon("brush", "brush")])
+            : el("span", { class: "struck" }, g.displayName)),
           guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
         ]);
     const actions = [];
-    const doomed = armed.has("remove:" + g.id);
     if (draft && manage) {
-      actions.push(el("button", { type: "button", class: "chip-btn danger" + (doomed ? " is-armed" : ""), "data-remove-guest": g.id },
-        [icon("trash"), doomed ? "Tap again to remove" : "Remove", el("span", { class: "target" }, g.displayName)]));
+      actions.push(el("button", { type: "button", class: "chip-btn" + (doomed ? " is-armed" : ""), "data-remove-guest": g.id },
+        [icon("basket"), doomed ? "Tap again to remove" : "Remove", el("span", { class: "target" }, g.displayName)]));
     }
     // A guest already paid, directly or with their member, has nothing left
     // to mark, so the chip stays only to take back the viewer's own mark.
@@ -1115,7 +1128,7 @@ export const CLIENT_SCRIPT = String.raw`
       }, [el("span", { "aria-hidden": "true", style: "font-family: var(--brush)" }, "付讫"), "Paid"]));
     }
     if (confirmed && v.s.viewerIsPayer) actions.push(forgiveButton(v, g));
-    return el("div", { class: "sheet-guest" + (doomed ? " is-doomed" : "") }, [head, linesOf(v, g.id, true)]
+    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id, true)]
       .concat(actions.filter(Boolean).length > 0 ? [el("div", { class: "sheet-actions" }, actions.filter(Boolean))] : []));
   }
 
@@ -1203,8 +1216,8 @@ export const CLIENT_SCRIPT = String.raw`
   // The form outlives redraws of its sheet, so arming swaps this button in
   // place rather than waiting for a render to rebuild it.
   function deleteLineButton(item, doomed) {
-    return el("button", { type: "button", class: "chip-btn danger" + (doomed ? " is-armed" : ""), "data-delete-line": item.id, "aria-label": (doomed ? "Tap again to delete " : "Delete ") + item.label },
-      [icon("trash"), doomed ? "Tap again to delete" : "Delete line"]);
+    return el("button", { type: "button", class: "chip-btn" + (doomed ? " is-armed" : ""), "data-delete-line": item.id, "aria-label": (doomed ? "Tap again to delete " : "Delete ") + item.label },
+      [icon("basket"), doomed ? "Tap again to delete" : "Delete line"]);
   }
 
   function addonRow(addon) {
@@ -1252,8 +1265,8 @@ export const CLIENT_SCRIPT = String.raw`
     if (!item) return null;
     const people = membersFirst(v).reduce((all, p) => all.concat([p], guestsOf(v, p.id)), []);
     return [
-      el("div", { class: "sheet-head" + (armed.has("line:" + item.id) ? " is-doomed" : "") }, [
-        el("h2", { id: "sheet-title", class: "dish-title" }, item.label),
+      el("div", { class: "sheet-head" + (armed.has("line:" + item.id) ? " is-struck" : "") }, [
+        el("h2", { id: "sheet-title", class: "dish-title" }, el("span", { class: "struck" }, item.label)),
         el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
       ]),
       el("div", { class: "picker", role: "group", "aria-label": "Who had " + item.label }, people.map((p) => pickNode(v, item, p))),
@@ -1416,8 +1429,11 @@ export const CLIENT_SCRIPT = String.raw`
     }
     if (!moved || moved.bill !== state.billId || moved.to !== state.status || moved.from === moved.to) return;
     if (state.status === "confirmed") {
+      // The big 定 comes down on the page first, then the small one is left
+      // in the header where it landed.
+      slam(el("span", { class: "seal" }, "定"));
       const seal = root.querySelector("[data-status-label] .seal");
-      if (seal) seal.classList.add("is-pressed");
+      if (seal) seal.classList.add("is-pressed", "is-after-slam");
       showNote("定 Confirmed", false);
     } else if (state.status === "draft") {
       showNote("Reopened", false);
@@ -1590,7 +1606,7 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   // Arms on the first tap and deletes on the second, like every delete on the
-  // page, with the dish's title washed in cinnabar in between.
+  // page, with the dish's title struck through in between.
   function armLine(form, item, doomed) {
     const current = form.querySelector("[data-delete-line]");
     const fresh = deleteLineButton(item, doomed);
@@ -1846,7 +1862,7 @@ export const CLIENT_SCRIPT = String.raw`
       render();
       return;
     }
-    slam();
+    slam(el("span", { class: "stamp" }, "付讫"));
   }
 
   function confirmBill() {
