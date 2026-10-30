@@ -1054,7 +1054,7 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
   }
 
-  function linesOf(v, id, withTaxTip) {
+  function linesOf(v, id) {
     const rows = v.s.items.filter((i) => i.claimedBy.includes(id)).map((item) => {
       const n = item.claimedBy.length;
       return el("li", null, [
@@ -1063,7 +1063,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(withTaxTip ? taxTipNodes(v, id) : []) : [el("li", { class: "empty" }, "Nothing claimed yet.")]);
+    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(taxTipNodes(v, id)) : [el("li", { class: "empty" }, "Nothing claimed yet.")]);
   }
 
   function forgiveButton(v, p) {
@@ -1128,7 +1128,7 @@ export const CLIENT_SCRIPT = String.raw`
       }, [el("span", { "aria-hidden": "true", style: "font-family: var(--brush)" }, "付讫"), "Paid"]));
     }
     if (confirmed && v.s.viewerIsPayer) actions.push(forgiveButton(v, g));
-    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id, true)]
+    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id)]
       .concat(actions.filter(Boolean).length > 0 ? [el("div", { class: "sheet-actions" }, actions.filter(Boolean))] : []));
   }
 
@@ -1136,7 +1136,6 @@ export const CLIENT_SCRIPT = String.raw`
     const p = v.people.get(id);
     if (!p) return null;
     const guests = guestsOf(v, id);
-    const forgiven = forgivenWhole(v, id);
     // With guests, each block heads its own lines, so this one says the
     // person's own share and the guests' blocks say theirs. Together they
     // make the amount on the tile.
@@ -1145,10 +1144,9 @@ export const CLIENT_SCRIPT = String.raw`
     const nodes = [
       sheetHead(v, id, p.displayName, money(head), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
     ];
-    // With guests, a food, tax and tip line would mix theirs in. Each block of
-    // lines ends in its own tax and tip instead, so it adds up to that amount.
-    if (!forgiven && guests.length === 0) nodes.push.apply(nodes, splitNodes(counted(v, id)).slice(1));
-    nodes.push(linesOf(v, id, guests.length > 0));
+    // Each block of lines ends in its own discount, tax and tip rows, figures
+    // on the right like the lines above, so it adds up to its heading.
+    nodes.push(linesOf(v, id));
     if (v.s.status === "confirmed" && v.s.viewerIsPayer) {
       const forgive = forgiveButton(v, p);
       if (forgive) nodes.push(el("div", { class: "sheet-actions" }, forgive));

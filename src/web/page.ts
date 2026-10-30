@@ -264,7 +264,11 @@ html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bott
 .is-live .needs-js:not([hidden]) { display: revert; }
 /* Each card is a sheet laid on the paper, framed thick-and-thin in cinnabar
    like the border of a printed sutra page. */
+/* The inset of every card's content. The receipt's tick circles sit this far
+   in, and every figure on the page ends this far from the right, so amounts in
+   stacked cards line up down the page. */
 .card {
+  --edge: 13px;
   background: var(--card) var(--grain);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
@@ -284,7 +288,9 @@ html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bott
    the title sits on the mist at its feet. */
 .head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: start; padding: 0 2px 14px; }
 .head > .hills { grid-column: 1 / -1; height: 120px; margin: calc(-1 * var(--page-top)) -18px -26px; }
-.head h1 { position: relative; font-size: 25px; line-height: 1.2; font-weight: 600; overflow-wrap: anywhere; }
+/* A Chinese name wraps whole, as the dish names do, rather than leaving one
+   character alone on the next line. */
+.head h1 { position: relative; font-size: 25px; line-height: 1.2; font-weight: 600; overflow-wrap: anywhere; word-break: keep-all; }
 .head .status, .head .meta { position: relative; }
 .status { display: inline-flex; align-items: center; gap: 7px; height: 30px; font-size: 15px; color: var(--muted); white-space: nowrap; }
 .seal-slot { width: 20px; height: 20px; border: 1.5px dashed var(--ring); border-radius: 3px; }
@@ -337,9 +343,6 @@ button.payer-chip .brush { width: 16px; height: 16px; color: var(--muted); }
 /* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
 .items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
-/* The inset of the tick circles from the card. The figures, pills and rules
-   end the same distance from the right, so the receipt is balanced. */
-.receipt { --edge: 13px; }
 /* A dish's name wraps rather than clipping, since at phone width a clipped
    name loses the part that tells two dishes apart. The price stays on its
    first line, so both are pinned to the top of the row. */
@@ -363,6 +366,10 @@ button.row:active { background: var(--fill); }
    receipt as well as named in the sheet. */
 .item.is-target { background: color-mix(in srgb, var(--azurite-soft) 70%, transparent); }
 .row > .tick, .tick-btn { grid-area: tick; justify-self: center; }
+/* Every claim circle sits on the first line of its dish's name, however many
+   lines the name, its add-ons or its faces take: the 26px circle centred in
+   the name's 23px line. */
+.row > .tick { align-self: start; margin-top: -1.5px; }
 /* Nobody else on the line means no avatars and no split, so the second line
    goes, and the padding takes its place so the row keeps its height. Claiming
    it yourself keeps it bare, so your own tap never moves rows. */
@@ -384,14 +391,8 @@ button.row:active { background: var(--fill); }
 .addon-line { display: flex; align-items: baseline; gap: 10px; padding: 1px 0; }
 .addon-name { flex: 1; min-width: 0; padding-left: 10px; text-indent: -10px; overflow-wrap: anywhere; word-break: keep-all; }
 .addon-price { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums lining-nums; }
-/* The tick stays beside the dish's name, not halfway down its add-ons. The
-   payer's tick is a full-height button outside the grid, so it is pinned to
-   the same spot by hand: the row's 8px padding plus the 26px tick centred in
-   the name's row. */
 .has-addons .row { grid-template-rows: minmax(23px, auto) auto 22px; grid-template-areas: "tick name price" ". addons addons" ". who piece"; }
 .is-bare.has-addons .row { grid-template-rows: minmax(23px, auto) auto; grid-template-areas: "tick name price" ". addons addons"; }
-.has-addons .tick-btn { align-items: start; padding-top: 6.5px; }
-.is-bare.has-addons .tick-btn { padding-top: 10px; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
@@ -403,12 +404,17 @@ button.row:active { background: var(--fill); }
   bottom: 0;
   width: 44px;
   display: grid;
-  place-items: center;
-  padding: 0;
+  justify-items: center;
+  align-items: start;
+  /* A full-height button outside the grid, so it is pinned to the name's
+     first line by hand: the row's padding, less the 1.5px the 26px circle
+     overhangs the 23px line. */
+  padding: 6.5px 0 0;
   border: 0;
   background: none;
   cursor: pointer;
 }
+.is-bare .tick-btn { padding-top: 10px; }
 .tick {
   display: grid;
   place-items: center;
@@ -434,7 +440,7 @@ button.row:active { background: var(--fill); }
 .is-locked .tick { border-color: transparent; }
 .is-locked.is-mine .tick { background: none; border-color: transparent; color: var(--ok); }
 .is-locked.is-mine .tick .ic { width: 20px; height: 20px; }
-.is-locked.is-unclaimed .tick { width: 18px; height: 18px; border: 1.6px dashed var(--warn); }
+.is-locked.is-unclaimed .tick { width: 18px; height: 18px; margin-top: 2.5px; border: 1.6px dashed var(--warn); }
 .is-inked .tick { animation: ink 320ms ease-out; }
 @keyframes ink {
   from { transform: scale(0.55); filter: blur(1.5px); }
@@ -508,9 +514,18 @@ button.row:active { background: var(--fill); }
 .short .cloud { width: 24px; height: 24px; }
 .short dt { align-items: center; }
 
-.edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0; }
-.edit-form .money-input { min-width: 88px; }
-.edit-form label { color: var(--muted); flex: none; }
+/* An amount being typed keeps its row's shape: the label on the left, its
+   box ending on the receipt's right edge with every figure, and the actions
+   on a row of their own below. The rows are set by hand, since auto-placement
+   would push the tip's $/% toggle, which follows the box, down a row. */
+.edit-form { display: grid; grid-template-columns: minmax(0, 1fr) auto 112px; align-items: center; gap: 8px; width: 100%; padding: 4px 0; }
+.edit-form > label, .edit-form .seg, .edit-form .money-input { grid-row: 1; }
+.edit-form > label { grid-column: 1; color: var(--muted); }
+.edit-form .seg { grid-column: 2; }
+.edit-form .money-input { grid-column: 3; }
+.edit-form [data-cancel] { grid-row: 2; grid-column: 1; justify-self: start; }
+.edit-form .go { grid-row: 2; grid-column: 2 / -1; justify-self: end; }
+.edit-form .field-msg { grid-column: 1 / -1; }
 .money-input {
   flex: 1;
   min-width: 0;
@@ -526,7 +541,8 @@ button.row:active { background: var(--fill); }
 .money-input:focus-within { border-color: var(--focus); }
 .money-input span { color: var(--muted); }
 .money-input.is-percent span { order: 2; }
-.money-input input { text-align: right; }
+/* No browser padding, so typed digits end exactly where the figures beside the field do. */
+.money-input input { padding: 0; text-align: right; }
 .money-input input, .text-input {
   flex: 1;
   min-width: 0;
@@ -580,8 +596,9 @@ button.row:active { background: var(--fill); }
 .addon-field .text-input { padding-right: 44px; }
 .addon-field .icon-btn { position: absolute; top: 0; right: 0; border-color: transparent; background: none; color: var(--muted); }
 .dish-form .add-row { grid-column: 1 / -1; gap: 6px; font-size: 16px; }
-/* The money's right edge is the price boxes' text edge: their border and padding. */
-.dish-sum { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; margin-top: 2px; padding: 8px 11.5px 2px 0; border-top: 1px solid var(--rule-strong); font-weight: 600; }
+/* A field's box edge is its amount's edge, as on the receipt, so the total
+   ends where the price boxes do. */
+.dish-sum { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; margin-top: 2px; padding: 8px 0 2px; border-top: 1px solid var(--rule-strong); font-weight: 600; }
 .dish-form [hidden] { display: none; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
@@ -785,7 +802,7 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .view + .view { margin-top: 18px; }
 .is-live[data-layout="share"] .view:not(.is-active) { display: none; }
 .is-live[data-layout="share"] .view + .view { margin-top: 0; }
-.hero { position: relative; padding: 18px 18px 16px; overflow: hidden; }
+.hero { position: relative; padding: 18px var(--edge) 16px; overflow: hidden; }
 .flow { display: flex; align-items: center; gap: 8px; }
 .flow .av { --s: 34px; }
 .flow .stack .av + .av { margin-left: -6px; }
@@ -868,7 +885,7 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .pie .track { stroke: var(--fill); }
 .pie .done { stroke: var(--ok); stroke-linecap: round; }
 
-.mine { margin-top: 12px; padding: 4px 16px; }
+.mine { margin-top: 12px; padding: 4px var(--edge); }
 .mine ul { list-style: none; margin: 0; padding: 0; }
 .mine li { display: flex; align-items: center; gap: 10px; min-height: 44px; padding-block: 8px; border-bottom: 1px solid var(--rule); }
 .mine li:last-child { border-bottom: 0; }
@@ -964,7 +981,7 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .act.is-armed, .act.is-armed .ic { color: var(--card); }
 .act[aria-busy="true"] { cursor: progress; opacity: 0.6; }
 
-.payments { margin-top: 12px; padding: 0 16px 4px; }
+.payments { margin-top: 12px; padding: 0 var(--edge) 4px; }
 .payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .payments ul { list-style: none; margin: 0; padding: 0; }
 .payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
@@ -1059,11 +1076,12 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; margin: 4px 0 8px; }
 /* No amount under a name here, so no room kept for one. */
 .pick { position: relative; min-height: 0; }
-/* Up by the shoulder, clear of the name under the face. */
-.pick .tick { position: absolute; right: -6px; top: -4px; width: 22px; height: 22px; background: var(--card); }
-.pick .tick .ic { width: 14px; height: 14px; }
-.pick[aria-pressed="true"] .tick { background: var(--moss); border-color: transparent; color: var(--card); }
-.pick[aria-pressed="true"] .tick .ic { opacity: 1; }
+/* Only the people who had it carry the moss check, on the face's shoulder
+   and inside its box, the same mark as the footer's. An empty ring on every
+   other face read as stray blobs. */
+.pick .tick { position: absolute; right: 0; top: 0; width: 20px; height: 20px; border: 0; background: var(--moss); box-shadow: 0 0 0 1.5px var(--card); }
+.pick .tick .ic { width: 14px; height: 14px; opacity: 1; }
+.pick[aria-pressed="false"] .tick { display: none; }
 .pick .tile-name { font-size: 14px; }
 .sheet .line-form { padding: 6px 0 4px; }
 
