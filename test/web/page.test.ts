@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import app from "../../src/index";
 import type { BillRow, Participant } from "../../src/db/bills";
 import type { Env } from "../../src/env";
+import { formatCents } from "../../src/format";
 import { splitBill } from "../../src/money/split";
 import type { BillInput } from "../../src/money/types";
 import { CLIENT_SCRIPT } from "../../src/web/client";
@@ -217,9 +218,11 @@ describe("renderPage", () => {
       expect(row.attrs.hidden).toBeUndefined();
       expect(row.attrs["aria-label"]).toBe("Claim for");
       const chips = await select(html, "[data-claimers] button.claimer");
+      // Each chip carries that person's share of the total beside them.
+      const owed = (id: string) => formatCents(splitBill(withSam).shares.find((x) => x.participant === id)!.owedCents);
       expect(chips.map((c) => [c.attrs["data-claim-as"], c.attrs["aria-pressed"], c.text])).toEqual([
-        ["dani", "true", "DDani"],
-        ["guest-sam", "false", "SSam"],
+        ["dani", "true", `DDani${owed("dani")}`],
+        ["guest-sam", "false", `SSam${owed("guest-sam")}`],
       ]);
       expect(html).toMatch(/\.claimers\[hidden\]\s*\{\s*display:\s*none/);
     });
@@ -518,11 +521,23 @@ describe("renderPage", () => {
       expect(detail).toContain(money(dani.subtotalCents + guest.subtotalCents));
       expect(detail).toContain(`Tax ${money(dani.taxCents + guest.taxCents)}`);
       expect(detail).toContain(`Tip ${money(dani.tipCents + guest.tipCents)}`);
-      const lines = await textOf(html, "[data-mine]");
-      expect(lines).toContain("Garlic noodles");
-      expect(await textOf(html, "[data-mine] .mine-guest")).toContain("Sam");
-      expect(lines).toContain("Lobster");
+      // Right under the one amount, whose it is.
+      expect((await select(html, "[data-you] [data-who] li")).map((r) => r.text)).toEqual([
+        `DYou${money(dani.owedCents)}`,
+        `SSam${money(guest.owedCents)}`,
+      ]);
+      // The lines are grouped the same way.
+      const groups = await select(html, "[data-mine] .mine-group");
+      expect(groups).toHaveLength(2);
+      expect(groups[0]!.text).toMatch(/^DYou.*Garlic noodles/);
+      expect(groups[0]!.text).not.toContain("Lobster");
+      expect(groups[1]!.text).toMatch(/^SSam.*Lobster/);
       expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
+    });
+
+    it("breaks nothing down for someone who brought nobody", async () => {
+      const html = view("theo");
+      expect(await select(html, "[data-who], [data-mine] .mine-guest")).toEqual([]);
     });
 
     it("takes a guest who paid the payer directly off the share, and stamps them in the lines", async () => {
@@ -534,6 +549,10 @@ describe("renderPage", () => {
       expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani");
       expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
       expect((await one(html, '[data-person="dani"]')).attrs["aria-label"]).toContain(money(share("dani").owedCents));
+      // Still listed, greyed, and saying why it is off the amount.
+      const rows = await select(html, "[data-who] li");
+      expect(rows[1]!.attrs.class).toBe("is-off");
+      expect(rows[1]!.text).toBe(`SSam付讫paid Gavin${money(sam.owedCents)}`);
     });
 
     it("stamps a guest who paid their adder for the adder, without taking anything off", async () => {
@@ -541,6 +560,9 @@ describe("renderPage", () => {
 
       expect(await textOf(html, "[data-you-owed]")).toBe(money(share("dani").owedCents + share("guest-sam").owedCents));
       expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
+      const rows = await select(html, "[data-who] li");
+      expect(rows[1]!.attrs.class).toBeUndefined();
+      expect(rows[1]!.text).toBe(`SSam付讫paid you${money(share("guest-sam").owedCents)}`);
     });
 
     it("draws a forgiven share as nothing owed, with what it was struck through", async () => {
@@ -610,6 +632,21 @@ describe("renderPage", () => {
       expect(link.text).toBe("Venmo");
       expect(await select(view("gavin", { handles }), "[data-pay]")).toEqual([]);
       expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
+    });
+
+    it("gives Zelle a button that copies the address, like the links beside it, and no paragraph", async () => {
+      const handles = [
+        { method: "venmo" as const, handle: "gavin-l" },
+        { method: "zelle" as const, handle: "gavin@example.com" },
+      ];
+      const html = view("theo", { handles });
+
+      const zelle = await one(html, "[data-pay] button.pay");
+      expect(zelle.attrs["data-copy"]).toBe("gavin@example.com");
+      expect(zelle.text).toBe("Zelle, copy Gavin's address");
+      expect((await select(html, "[data-pay] .pay")).map((x) => x.text.slice(0, 5))).toEqual(["Venmo", "Zelle"]);
+      expect(await select(html, "[data-pay] .pay-note")).toEqual([]);
+      expect(html).not.toContain("from your bank");
     });
 
     it("lets someone with something left record that they sent it, or say something is wrong", async () => {

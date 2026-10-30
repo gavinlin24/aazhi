@@ -1,4 +1,3 @@
-import { formatCents } from "../format";
 import type { Cents } from "../money/types";
 
 export const PAY_METHODS = ["venmo", "cashapp", "zelle"] as const;
@@ -93,13 +92,14 @@ function fittedNote(note: string, budget: number): string {
 // Venmo: the Payment Links format, venmo.com/<username>?txn=pay&amount=&note=,
 // which opens the app with both filled in. Cash App: cash.app/$<cashtag>/<amount>
 // prefills the amount, but no form of the link carries a note. Zelle has no
-// link at all; the network is closed to third parties, so it gets words.
+// link at all; the network is closed to third parties, so the page offers the
+// address to copy into the bank's app instead.
 export function payLink(
   method: PayMethod,
   handle: string,
   cents: Cents,
   note: string,
-): { url: string } | { instructions: string } {
+): { url: string } | { address: string } {
   if (normalizeHandle(method, handle) !== handle) throw new Error(`Not a stored ${METHOD_NAMES[method]} handle`);
   const amount = amountString(cents);
   switch (method) {
@@ -111,10 +111,6 @@ export function payLink(
     case "cashapp":
       return { url: `https://cash.app/$${encodeURIComponent(handle)}/${amount}` };
     case "zelle":
-      return {
-        instructions:
-          `Send ${formatCents(cents)} with Zelle to ${describeHandle(method, handle)} from your bank's app, ` +
-          `with the note "${note}".`,
-      };
+      return { address: describeHandle(method, handle) };
   }
 }

@@ -516,7 +516,7 @@ button.tile:active { background: var(--fill); }
   align-items: center;
   gap: 7px;
   flex: none;
-  max-width: 11em;
+  max-width: 14em;
   height: 44px;
   padding: 0 14px 0 6px;
   border: 1.5px solid var(--line);
@@ -527,6 +527,7 @@ button.tile:active { background: var(--fill); }
 }
 .claimer .av { --s: 30px; box-shadow: none; }
 .claimer .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claimer .chip-amt { flex: none; font-weight: 400; }
 .claimer[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); font-weight: 600; }
 .claimer[aria-pressed="true"] .av { box-shadow: 0 0 0 1.5px var(--card); }
 .bar .av.payer { --s: 32px; margin-bottom: -2px; }
@@ -596,7 +597,18 @@ button.tile:active { background: var(--fill); }
   text-decoration: none;
 }
 .pay .ic { width: 18px; height: 18px; }
+button.pay { border: 0; cursor: pointer; }
+/* Where the copy failed: the address itself, ready to select by hand. */
+.pay.is-address { border: 1.5px solid var(--seal); background: none; color: var(--ink); font-weight: 400; user-select: all; }
 .pay-note { flex-basis: 100%; color: var(--muted); font-size: 15px; }
+/* Whose shares one amount covers, when it covers guests too. */
+.whose { list-style: none; margin: 12px 0 0; padding: 0; }
+.whose li { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid var(--rule); }
+.whose .av { --s: 28px; }
+.whose .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whose .note { flex: 1; color: var(--muted); font-size: 15px; white-space: nowrap; }
+.whose .is-off { color: var(--muted); }
+.hero .whose .stamp { position: static; font-size: 12px; padding: 2px 1px; border-width: 1.5px; letter-spacing: 1px; }
 /* Recording a payment is the person's own word, not a link out, so it is
    inked rather than sealed and sits under the ways to pay. */
 .sent-row { margin-top: 10px; }
@@ -812,6 +824,7 @@ const ICONS: Record<string, string> = {
   warn: '<path d="M12 4.5l8.5 15h-17zM12 10.5v4M12 17.3v.2"/>',
   // A calligraphy brush: handle, ferrule, and an inked tip that tapers to a point.
   brush: '<path d="M19.6 4.4l-6.2 6.2M10.9 10.3l2.8 2.8"/><path fill="currentColor" stroke="none" d="M10 10.8c-2.2.3-4.5 4.6-5.6 8.8 4.2-1.1 8.5-3.4 8.8-5.6z"/>',
+  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
 };
 
 function sprite(): string {
@@ -1162,13 +1175,15 @@ function people(v: View): string {
 
 // You first, then the guests you brought. Nobody else's: the payer settles
 // other people's lines from the line itself. Each chip carries a name, your
-// own too, so the pressed one says whose lines a tap claims.
+// own too, so the pressed one says whose lines a tap claims, and that
+// person's share, so the total beside them reads as theirs added up.
 function claimers(v: View): string {
   const ids = [v.s.viewer, ...guestsOf(v, v.s.viewer).map((g) => g.id)];
   const chips = ids.map(
     (id) =>
       `<button type="button" class="claimer" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">` +
-      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span></button>`,
+      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span>` +
+      `<span class="chip-amt money">${formatCents(v.shares.get(id)?.owedCents ?? 0)}</span></button>`,
   );
   const hidden = v.s.editable !== "none" && ids.length > 1 ? "" : " hidden";
   return `<div class="claimers" data-claimers role="group" aria-label="Claim for"${hidden}>${hidden ? "" : chips.join("")}</div>`;
@@ -1232,7 +1247,8 @@ function payRow(v: View): string {
   const links = s.pay.map((o) =>
     "url" in o
       ? `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`
-      : `<p class="pay-note">${escapeHtml(o.instructions)}</p>`,
+      : `<button type="button" class="pay" data-copy="${escapeHtml(o.address)}">${escapeHtml(o.name)}${icon("copy")}` +
+        `<span class="sr">, copy ${escapeHtml(nameOf(v, s.payerId))}'s address</span></button>`,
   );
   return `<div class="pay-row" data-pay>${links.join("")}</div>`;
 }
@@ -1242,6 +1258,33 @@ function payRow(v: View): string {
 function sentRow(v: View): string {
   if (leftOf(v, v.s.viewer) <= 0) return "";
   return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I sent it</button></div>`;
+}
+
+// One amount for you and the guests you brought, then whose it is: you
+// first, then each guest. A guest who paid the payer directly is off the
+// amount, so their row is greyed and says so.
+function whoRows(v: View): string {
+  const s = v.s;
+  const guests = guestsOf(v, s.viewer);
+  if (guests.length === 0) return "";
+  const stamp = `<span class="stamp" role="img" aria-label="Paid">付讫</span>`;
+  const row = (id: ParticipantId, name: string, note: string, paid: boolean, off: boolean) => {
+    const share = v.shares.get(id);
+    const forgiven = share?.pardoned === true;
+    const cls = forgiven ? " is-forgiven is-off" : off ? " is-off" : "";
+    return `<li${off ? ' class="is-off"' : ""}>${av(v, id)}<span class="name">${escapeHtml(name)}</span>${paid ? stamp : ""}` +
+      `<span class="note">${escapeHtml(forgiven ? "forgiven" : note)}</span><span class="money${cls}">${formatCents(share?.owedCents ?? 0)}</span></li>`;
+  };
+  const payer = nameOf(v, s.payerId);
+  const rows = [
+    row(s.viewer, "You", "", false, false),
+    ...guests.map((g) =>
+      g.paidToPayer
+        ? row(g.id, g.displayName, `paid ${payer}`, true, true)
+        : row(g.id, g.displayName, g.paidToHost ? "paid you" : "", g.paidToHost === true, false),
+    ),
+  ];
+  return `<ul class="whose" data-who aria-label="Whose share">${rows.join("")}</ul>`;
 }
 
 function paidOf(done: number, total: number): string {
@@ -1280,6 +1323,7 @@ ${paidOf(total - left, total)}
   return `<section class="card hero${paid ? " is-paid" : ""}${forgiven ? " is-forgiven" : ""}" data-you aria-label="Your share">
 <div class="flow">${stack(v, mine, 3)}${arrow}${av(v, s.payerId)}</div>
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
+${whoRows(v)}
 ${forgiven ? "" : splitBar(parts)}
 ${partial ? paidOf(o.paidCents, o.owedCents) : ""}
 ${paid ? "" : payRow(v)}
@@ -1298,6 +1342,9 @@ function mineList(v: View, id: ParticipantId): string {
   return rows.length > 0 ? `<ul>${rows.join("")}</ul>` : "";
 }
 
+// Grouped the way the amount is broken down: yours, then each guest's. No
+// amount on the headings: a share carries tax and tip, so it would never
+// match the dishes under it. Alone, your lines need no heading.
 function mine(v: View): string {
   const own = mineList(v, v.s.viewer);
   const guests = guestsOf(v, v.s.viewer)
@@ -1309,7 +1356,8 @@ function mine(v: View): string {
     })
     .join("");
   if (!own && !guests) return "";
-  return `<section class="card mine" data-mine aria-label="Your lines">${own}${guests}</section>`;
+  const yours = own && guests ? `<div class="mine-group"><p class="mine-guest">${av(v, v.s.viewer)}You</p>${own}</div>` : own;
+  return `<section class="card mine" data-mine aria-label="Your lines">${yours}${guests}</section>`;
 }
 
 function drill(v: View): string {

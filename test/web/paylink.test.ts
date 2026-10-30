@@ -65,22 +65,12 @@ describe("payLink", () => {
     expect(url.search).toBe("");
   });
 
-  it("gives instructions rather than a link for Zelle", () => {
-    const result = payLink("zelle", "gavin@example.com", 4446, NOTE);
-
-    expect(result).not.toHaveProperty("url");
-    expect("instructions" in result).toBe(true);
-    const { instructions } = result as { instructions: string };
-    expect(instructions).toContain("$44.46");
-    expect(instructions).toContain("gavin@example.com");
-    expect(instructions).toContain(NOTE);
-    expect(instructions).not.toMatch(/https?:/);
+  it("gives the address to copy rather than a link for Zelle", () => {
+    expect(payLink("zelle", "gavin@example.com", 4446, NOTE)).toEqual({ address: "gavin@example.com" });
   });
 
   it("writes a Zelle phone number the way people read one", () => {
-    const { instructions } = payLink("zelle", "5551234567", 4446, NOTE) as { instructions: string };
-
-    expect(instructions).toContain("(555) 123-4567");
+    expect(payLink("zelle", "5551234567", 4446, NOTE)).toEqual({ address: "(555) 123-4567" });
   });
 
   it("formats every amount from integer cents, never through a float", () => {

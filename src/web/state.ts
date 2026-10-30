@@ -66,7 +66,7 @@ export interface GuestsPaid {
   paidToHost?: ParticipantId[];
 }
 
-export type PayOption = { method: PayMethod; name: string } & ({ url: string } | { instructions: string });
+export type PayOption = { method: PayMethod; name: string } & ({ url: string } | { address: string });
 
 // What the page needs beyond the server's state. For a confirmed bill: the
 // payments, for what is left, and the payer's handles, for links. For the

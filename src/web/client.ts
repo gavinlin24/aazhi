@@ -55,6 +55,10 @@ export const CLIENT_SCRIPT = String.raw`
   const busy = new Set();
   const armed = new Set();
   let noteTimer = null;
+  // The Zelle button after a tap: "copied" for a moment, or "shown" for good
+  // when the clipboard refused and the address is spelled out instead.
+  let zelle = null;
+  let zelleTimer = null;
 
   // Same rules as formatCents on the server, in integers only.
   function money(cents) {
@@ -635,10 +639,12 @@ export const CLIENT_SCRIPT = String.raw`
     const ids = editable(v.s) === "none" ? [] : claimerIds(v);
     const actor = claimFor || v.s.viewer;
     row.hidden = ids.length < 2;
-    keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
+    const owed = (id) => (v.shares.get(id) ? v.shares.get(id).owedCents : 0);
+    keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id), owed(id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
       el("button", { type: "button", class: "claimer", "data-claim-as": id, "aria-pressed": String(id === actor) }, [
         av(v, id),
         el("span", { class: "label" }, nameOf(v, id)),
+        el("span", { class: "chip-amt money" }, money(owed(id))),
       ])));
   }
 
@@ -716,7 +722,28 @@ export const CLIENT_SCRIPT = String.raw`
     }
     return el("div", { class: "pay-row", "data-pay": true }, s.pay.map((o) => o.url
       ? el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])
-      : el("p", { class: "pay-note" }, o.instructions)));
+      : zelleNode(v, o)));
+  }
+
+  function zelleNode(v, o) {
+    if (zelle === "shown") return el("span", { class: "pay is-address" }, o.address);
+    if (zelle === "copied") {
+      return el("button", { type: "button", class: "pay", "data-copy": o.address }, [icon("check"), "Copied", sr(", " + o.address)]);
+    }
+    return el("button", { type: "button", class: "pay", "data-copy": o.address }, [o.name, icon("copy"), sr(", copy " + nameOf(v, v.s.payerId) + "'s address")]);
+  }
+
+  async function copyAddress(button) {
+    clearTimeout(zelleTimer);
+    try {
+      await navigator.clipboard.writeText(button.dataset.copy);
+      zelle = "copied";
+      zelleTimer = setTimeout(() => { zelle = null; render(); }, NOTE_MS);
+      render();
+    } catch {
+      zelle = "shown";
+      render();
+    }
   }
 
   function fraction(done, total) {
@@ -747,10 +774,33 @@ export const CLIENT_SCRIPT = String.raw`
       el("p", { class: "hero-amt money", "data-you-owed": true }, money(paid || forgiven ? 0 : leftOf(v, s.viewer))),
       paid ? el("span", { class: "stamp" + (justPaid ? " is-pressed" : ""), role: "img", "aria-label": "Paid" }, "付讫") : null,
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
+      whoNodes(v),
     ].concat(forgiven ? [] : splitNodes(counted(v, s.viewer)))
       .concat(partial ? [fraction(o.paidCents, o.owedCents)] : [])
       .concat(paid ? [] : [payNodes(v)])
       .concat([sentNodes(v)]);
+  }
+
+  function whoNodes(v) {
+    const s = v.s;
+    const guests = guestsOf(v, s.viewer);
+    if (guests.length === 0) return null;
+    const row = (id, name, note, paid, off) => {
+      const share = v.shares.get(id);
+      const forgiven = Boolean(share && share.pardoned);
+      return el("li", off ? { class: "is-off" } : null, [
+        av(v, id),
+        el("span", { class: "name" }, name),
+        paid ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
+        el("span", { class: "note" }, forgiven ? "forgiven" : note),
+        el("span", { class: "money" + (forgiven ? " is-forgiven is-off" : off ? " is-off" : "") }, money(share ? share.owedCents : 0)),
+      ]);
+    };
+    const payer = nameOf(v, s.payerId);
+    return el("ul", { class: "whose", "data-who": true, "aria-label": "Whose share" }, [row(s.viewer, "You", "", false, false)].concat(guests.map((g) =>
+      g.paidToPayer
+        ? row(g.id, g.displayName, "paid " + payer, true, true)
+        : row(g.id, g.displayName, g.paidToHost ? "paid you" : "", g.paidToHost === true, false))));
   }
 
   function sentNodes(v) {
@@ -770,7 +820,7 @@ export const CLIENT_SCRIPT = String.raw`
     wasPaid = paid;
     hero.classList.toggle("is-paid", paid);
     hero.classList.toggle("is-forgiven", !v.s.viewerIsPayer && forgivenWhole(v, v.s.viewer));
-    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId]), () => heroNodes(v));
+    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId, zelle]), () => heroNodes(v));
   }
 
   function mineNodes(v, id) {
@@ -789,13 +839,17 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-mine]");
     if (!card) return;
     keyedInto(card, JSON.stringify([v.s.items, v.s.participants]), () => {
-      const nodes = [mineNodes(v, v.s.viewer)];
+      const groups = [];
       for (const g of guestsOf(v, v.s.viewer)) {
         const list = mineNodes(v, g.id);
         const paid = guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null;
-        if (list) nodes.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list]));
+        if (list) groups.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list]));
       }
-      return nodes;
+      const own = mineNodes(v, v.s.viewer);
+      const yours = own && groups.length > 0
+        ? el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, v.s.viewer), "You"]), own])
+        : own;
+      return [yours].concat(groups);
     });
   }
 
@@ -1788,6 +1842,8 @@ export const CLIENT_SCRIPT = String.raw`
       render();
       return focusLines();
     }
+    const copy = target.closest("[data-copy]");
+    if (copy) return copyAddress(copy);
     const as = target.closest("[data-claim-as]");
     if (as) {
       claimFor = as.dataset.claimAs === state.viewer ? null : as.dataset.claimAs;

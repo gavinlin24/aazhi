@@ -548,11 +548,11 @@ describe("a guest another member added", () => {
     await confirmed();
 
     const html = await page("dani");
+    // Dani's group first, then Sam's.
     const groups = await select(html, "[data-mine] .mine-group");
-    expect(groups).toHaveLength(1);
-    expect(await textOf(html, "[data-mine] .mine-guest")).toContain("Sam");
-    expect(groups[0]!.text).toContain("Lobster");
-    expect((await one(html, "[data-mine]")).text.split("Sam")[0]).not.toContain("Lobster");
+    expect(groups.map((g) => g.text.slice(0, 4))).toEqual(["DYou", "SSam"]);
+    expect(groups[0]!.text).not.toContain("Lobster");
+    expect(groups[1]!.text).toContain("Lobster");
     expect(await textOf(html, "[data-you-owed]")).toBe(formatCents((await owedOf("dani")) + (await owedOf(sam))));
   });
 
