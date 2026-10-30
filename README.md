@@ -16,6 +16,10 @@ what they had. No accounts or installs: Discord already knows who everyone is.
 5. The page links to Venmo or Cash App with your amount filled in. **I paid**
    records the payment, and the bot tells the channel.
 
+Run `/profile` to see your months, your favorite place and who you go out with.
+`/profile @someone` shows theirs. The boards rank the server by Hosted, Spent
+and Unique visits. Every stat stays inside one server.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
   <img src="docs/img/architecture-light.svg" width="528" alt="Discord and the split page both talk to one Cloudflare Worker, which stores bills in D1 and sends receipt photos to Claude.">

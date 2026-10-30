@@ -432,9 +432,8 @@ not captured is gone permanently; storing it costs nothing.
 
 Worth building:
 
-- Times any two people have eaten together, across every server.
+- Times any two people have eaten together, in this server.
 - Who fronts the bill most often.
-- Median time to settle, per person.
 - Most-ordered item per person.
 - Most-visited restaurant; most expensive night.
 - Pardons given and received.
@@ -442,10 +441,10 @@ Worth building:
 These are what make the bot something to open rather than something to
 endure.
 
-**Everything is visible to everyone in the group**, median time to settle
-included. The social pressure is deliberate: it does the nagging the payer
-would otherwise have to do themselves. Guests appear in no statistic,
-because no guest record survives its bill.
+**Everything is visible to everyone in one server**, money included. No
+statistic looks across servers: people use different names in different
+groups, and what they spend with one group is not the other's business.
+Guests appear in no statistic, because no guest record survives its bill.
 
 ## Stack
 
@@ -500,9 +499,8 @@ Indicative, not prescriptive; the builder owns the final schema.
 - `item_claims` — item, person. The many-to-many that drives everything.
 - `shares` — bill, person, subtotal, owed, pardoned, `settled_at`.
   Materialised at confirm so a confirmed bill's numbers are frozen rather
-  than recomputed. `settled_at` is a timestamp rather than a flag, because
-  median time to settle is one of the statistics and a boolean throws that
-  away permanently.
+  than recomputed. `settled_at` is a timestamp rather than a flag, because a
+  boolean throws the moment away permanently.
 - `settlements` — bill, person, cents, recorded at, recorded by.
 
 Access tokens are signed and stateless, so they are not stored.

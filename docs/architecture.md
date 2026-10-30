@@ -13,6 +13,7 @@ credentials are in [setup.md](setup.md). Technology choices are in [stack.md](st
   *interaction endpoint* (`POST /interactions`) and needs a reply within 3 s.
 - **Claude Haiku** (Anthropic API): reads the receipt into structured data.
 - **Split page**: HTML and a JSON API served by the same Worker at `/b/<bill id>`.
+- **Profile pages**: read-only HTML from the same Worker at `/g/<server id>`.
 
 ```mermaid
 flowchart TB
@@ -161,8 +162,64 @@ sequenceDiagram
   W->>D: payment announced
 ```
 
+## Profiles and boards
+
+`/profile` answers privately with one line and an **Open profile** link.
+`/profile @someone` does the same for them. The pages show a person's months
+as a mountain range, a few tiles, and three boards: Hosted, Spent and Unique
+visits. Nothing here writes to the database. `src/db/stats.ts` holds every rule.
+
+**One server only.** Every query is scoped to the server. A person's name is
+the latest one from this server's bills, because the same person can go by a
+nickname in another group. Someone with bills only elsewhere gets the same
+"no bills" reply as someone with none, so the bot never reveals other servers.
+
+**The link belongs to the viewer.** A viewer token holds the server and the
+viewer, not the person viewed, so one link can walk the whole server. It lasts
+30 minutes, like a bill link. Its fields differ from a bill token's, so neither
+can be read as the other. It also carries the server's name, because Discord
+leaves that out of interactions. The name is clipped to 40 characters to stay
+under Discord's 512-character limit on button links. If the lookup fails, the
+page leaves the name out.
+
+**What counts.**
+
+| Stat | Counts | Leaves out |
+|---|---|---|
+| Outings | Confirmed bills you were on | Drafts, reopened, deleted and replaced bills |
+| Hosted | Bills you paid with at least one other person on them | A bill with only you on it |
+| Spent | Your own share at confirm, paid or not | Forgiven shares and guests |
+| Unique visits | Distinct places, after folding | Bills with no place name |
+
+Spent counts at confirm so that not paying can't lower a total, and a past
+month never changes later. "Hosted" means the payer. The word has nothing to do
+with the member who added a guest.
+
+**Folding.** "SAIGON KITCHEN." and "Saigon Kitchen" are the same place. Folding
+happens in TypeScript, not SQL, because SQLite's `lower()` only knows ASCII. It
+removes accents but keeps marks that are part of a letter, such as Thai vowels.
+
+**A bill's month.** The printed date counts only within 7 days of the day the
+bill was made. Otherwise a misread year would move the bill to another month.
+
+**Boards.** Ties share a rank and the next rank skips: 1, 1, 3. The Month board
+shows the current month, or last month until this month has a bill, so the 1st
+is never empty. All six lists come down in one page and the tabs only choose
+which one shows.
+
+**The Range page.** The axis uses the server's months, up to the last 12, so two
+people's mountains line up. A quiet month is a low swell and not a gap, so the
+ridge never breaks.
+
+**Fonts.** The rank numerals 一 二 三 are a separate face in the profile styles.
+The bill page inlines its fonts on every load and has a size budget, so it does
+not carry glyphs it never shows.
+
 ## Deployment
 
 On each push to `main`, `.github/workflows/deploy.yml` type-checks, tests,
 applies D1 migrations, then runs `wrangler deploy`. Tests run inside workerd
 (the Workers runtime) against a real D1 database.
+
+Slash commands are not part of the deploy. After a change to
+`src/discord/commands.ts`, run `npm run register-commands` by hand.
