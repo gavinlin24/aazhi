@@ -1230,7 +1230,9 @@ function totals(v: View): string {
     rows.push(`<div class="trow" data-field-row="discount"><dt>${withPercent("Discount", s.discountCents, r.billSubtotalCents)}</dt><dd>${amount(v, "discount", "discount", -s.discountCents, "Discount")}</dd></div>`);
   }
   rows.push(
-    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
+    // Tax is charged on what's left after the discount, so that is the base
+    // a diner would check their local rate against.
+    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   );
   // Between tax and tip, because the printed total is what the restaurant
   // charged before anyone added a tip: it reads as the sum of the rows above.

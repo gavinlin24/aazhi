@@ -261,7 +261,10 @@ describe("renderPage", () => {
     const html = page("marcus", { ...bill, discountCents: 2515, printedTotalCents: 27382 - 2515 }, discounted);
 
     const rows = await select(html, "[data-totals] .trow dt");
-    expect(rows.slice(0, 3).map((r) => r.text)).toEqual(["Subtotal", "Discount (10.0%)", "Tax (8.9%)"]);
+    expect(rows.slice(0, 3).map((r) => r.text)).toEqual(["Subtotal", "Discount (10.0%)", "Tax (9.9%)"]);
+    // Tax is a rate on the discounted food, so its percent is too. Tip stays a
+    // share of the full subtotal.
+    expect(await textOf(html, '[data-field-row="tip"] dt')).toBe("Tip (20.0%)");
     expect(await textOf(html, '[data-total="discount"]')).toBe("-$25.15");
     expect(await textOf(html, '[data-total="total"]')).toBe("$298.97");
     // Only the payer can change it.

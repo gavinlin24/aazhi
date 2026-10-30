@@ -536,7 +536,9 @@ export const CLIENT_SCRIPT = String.raw`
     row("subtotal", [r.billSubtotalCents], "", () => [el("dt", null, "Subtotal"), el("dd", { "data-total": "subtotal" }, money(r.billSubtotalCents))]);
     // The payer sees it at $0.00 too, since that row is where they add one.
     if (s.discountCents !== 0 || mode === "all") field("discount", "discount", -s.discountCents, "Discount", { shown: withPercent("Discount", s.discountCents, r.billSubtotalCents) });
-    field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents) });
+    // Tax is charged on what's left after the discount, so that is the base
+    // a diner would check their local rate against.
+    field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents) });
     if (s.viewerIsPayer && s.status === "draft") {
       const cls = "receipt-row " + (s.reconciles.ok ? "is-ok" : "is-off");
       field("printedTotal", "printed", s.printedTotalCents, "Receipt",
