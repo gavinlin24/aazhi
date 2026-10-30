@@ -196,15 +196,13 @@ const items = SAIGON.items;
 
 describe("the owe card", () => {
   it("renders frozen amounts and pay controls once confirmed", () => {
-    const data = renderBill(bill, splitBill(SAIGON), items, participantsOf(SAIGON), [], shares);
+    const data = renderBill(bill, splitBill(SAIGON), items, participantsOf(SAIGON), shares);
     const text = shown(data);
 
     expect(text).toContain("$44.46");
     const marcusRow = (data.embeds![0]!.description ?? "").split("\n").find((l) => l.includes("<@marcus>"))!;
-    expect(marcusRow).toContain("$44.46");
-    // A one-line summary of what the amount covers.
-    expect(marcusRow).toContain("Spring rolls");
-    expect(marcusRow).toContain("Bun bo Hue");
+    // Just the amount: what it covers is in Show my math and on the page.
+    expect(marcusRow).toBe("<@marcus> · $44.46");
     expect(text).toMatch(/pay <@gavin>/i);
 
     const labels = components(data).map((c) => c.label);

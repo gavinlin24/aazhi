@@ -242,22 +242,6 @@ export async function openDraftInChannel(db: D1Database, channelId: string): Pro
   return row ? toBill(row) : null;
 }
 
-// Only lines read less confidently than the bill's best line are worth pointing
-// at: when every line came back equally sure, naming three of them would send
-// the payer to check lines at random.
-export async function getLeastConfidentItemIds(db: D1Database, billId: string, limit = 3): Promise<string[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT id FROM bill_items
-       WHERE bill_id = ?1 AND source = 'ocr'
-         AND confidence < (SELECT MAX(confidence) FROM bill_items WHERE bill_id = ?1 AND source = 'ocr')
-       ORDER BY confidence, position LIMIT ?2`,
-    )
-    .bind(billId, limit)
-    .all<{ id: string }>();
-  return results.map((r) => r.id);
-}
-
 // Supersedes only drafts older than the new bill, so two /split runs racing in
 // one channel leave the later one open instead of killing each other. A bill
 // that was confirmed once and reopened is not a stale draft: it may carry

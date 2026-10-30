@@ -248,7 +248,7 @@ async function settledAt(who: string): Promise<string | null> {
 
 async function renderedCard() {
   const snapshot = (await getBillSnapshot(db, BILL))!;
-  return renderBill(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, [], await getShares(db, BILL));
+  return renderBill(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, await getShares(db, BILL));
 }
 
 function cardRows(card: ReturnType<typeof renderBill>): string[] {
@@ -608,8 +608,10 @@ describe("a guest the payer added", () => {
     expect(lines.filter((l) => l.includes("Kim"))).toEqual([`- Kim: ${formatCents(kimOwes)} (your guest at Saigon Kitchen)`]);
 
     const rows = cardRows(await renderedCard());
-    expect(rows.filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ${formatCents(kimOwes)} · Lobster`]);
-    expect(rows.find((r) => r.startsWith("<@gavin>"))).toContain(`${formatCents(await owedOf("gavin"))} 🪙`);
+    expect(rows.filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ${formatCents(kimOwes)}`]);
+    // The payer collects; their own share is owed to nobody, so it has no row.
+    expect(rows.some((r) => r.startsWith("<@gavin>"))).toBe(false);
+    expect(rows).toContain("🪙 Pay <@gavin> your share.");
 
     const state = await send("GET", `/b/${BILL}/state`, "gavin");
     const others = (await getShares(db, BILL)).filter((s) => s.participant !== "gavin").reduce((sum, s) => sum + s.owedCents, 0);
@@ -636,7 +638,7 @@ describe("a guest the payer added", () => {
     expect((await pardon("gavin", kim)).status).toBe(200);
 
     expect((await standing(kim))!.owedCents).toBe(0);
-    expect(cardRows(await renderedCard()).filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ~~${kimOwes}~~ forgiven · Lobster`]);
+    expect(cardRows(await renderedCard()).filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ~~${kimOwes}~~ forgiven`]);
     expect(channelPosts().map((p) => p.body.content)).toEqual([`Gavin forgave Kim's ${kimOwes} for ${SAIGON_KITCHEN}, so Kim owes nothing.`]);
   });
 

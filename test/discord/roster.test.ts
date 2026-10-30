@@ -130,9 +130,9 @@ describe("Open the split", () => {
     ]);
     expect((await getBill(db, "bill-1"))!.revision).toBeGreaterThan(before);
 
-    // The channel message picks up the new name, through the coalesced edit.
+    // The channel message counts the new diner, through the coalesced edit.
     expect(messageEdits()).toHaveLength(1);
-    expect(JSON.stringify(messageEdits()[0]!.body.embeds)).toContain("Marcus");
+    expect(JSON.stringify(messageEdits()[0]!.body.embeds)).toContain("2 people");
   });
 
   it("names a new diner by global name, then username, when they have no nickname", async () => {
