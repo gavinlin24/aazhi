@@ -324,8 +324,10 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-.totals { margin: 8px 0 0; padding: 0 var(--end) 10px 58px; }
-.trow { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+/* Labels start on the ticks, like the add-a-line box, so the tick column
+   is not left empty beside them. */
+.totals { margin: 8px 0 0; padding: 0 var(--end) 10px 13px; }
+.trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
 .trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
 .trow dd { margin: 0; white-space: nowrap; }
 .trow .pct { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -345,10 +347,12 @@ button.row:active { background: var(--fill); }
 .receipt-row.is-ok .mark { color: var(--ok); }
 .receipt-row.is-off .mark { color: var(--warn); font-weight: 600; }
 .receipt-row .mark .ic { width: 18px; height: 18px; }
-/* A ledger's total: one rule above, a double rule below. */
+/* A ledger's total: one rule above, a double rule below. The rules reach
+   into the brush gutter to span the same width as the add-a-line box, and
+   the padding keeps the figure in the figure column. */
 .grand {
-  margin: 6px 0 2px;
-  padding: 4px 0;
+  margin: 6px calc(14px - var(--end)) 2px 0;
+  padding: 4px calc(var(--end) - 14px) 4px 0;
   border-top: 1px solid var(--rule-strong);
   border-bottom: 3px double var(--rule-strong);
   font-size: 19px;
@@ -357,9 +361,7 @@ button.row:active { background: var(--fill); }
 .grand dt { color: var(--ink); }
 .short dt, .short dd { color: var(--warn); font-weight: 600; }
 .dash-ring { width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed currentColor; flex: none; }
-/* The ring hangs in the tick column, where the unclaimed lines show the same
-   ring, so the word lines up with Subtotal, Tax and Tip. */
-.short .dash-ring { position: absolute; left: -41px; top: 50%; margin-top: -9px; }
+.short dt { align-items: center; }
 
 .edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0; }
 .edit-form .money-input { min-width: 88px; }
@@ -414,8 +416,8 @@ button.row:active { background: var(--fill); }
 .field-msg:empty { display: none; }
 .field-msg.is-hint { color: var(--muted); }
 /* The tip editor needs the card's full width at 390px, so it reaches into
-   the gutters the figures leave for the ticks and the brushes. */
-.trow.is-editing { flex-wrap: wrap; margin-left: -44px; margin-right: calc(14px - var(--end)); }
+   the gutter the figures leave for the brushes. */
+.trow.is-editing { flex-wrap: wrap; margin-right: calc(14px - var(--end)); }
 
 /* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
