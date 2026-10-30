@@ -285,7 +285,7 @@ ordinary line items, positive or negative, prorated like anything else.
 
 ### Confirming
 
-The payer taps **Confirm**. Three gates:
+The payer taps **Confirm**. Four gates:
 
 - **The arithmetic must reconcile** (above). Hard gate.
 - **Every line must be claimed.** Soft gate: Confirm stays available with
@@ -299,6 +299,9 @@ The payer taps **Confirm**. Three gates:
   this at Confirm, not at `/split`, because nobody has joined the bill yet
   when `/split` runs. Bills confirmed before this gate stay as they are. If
   one is reopened, it has to pass the gate to be confirmed again.
+- **The receipt must be free.** Hard gate: no other confirmed bill may hold
+  the same receipt, in any server. The page says "This receipt was already
+  split."
 
 On confirm, shares are computed and frozen, the message becomes the owe
 card, and pay controls appear.
@@ -463,11 +466,11 @@ is too. So someone who only tapped Open the split counts for nothing. A new
 bill can't be confirmed alone, but older one-person bills exist, and they
 count on no statistic.
 
-A receipt can only sit on a bill in one server, since a second server would
-count one outing twice. `/split` refuses it there and saves nothing, and
-deleting the first bill frees it. A receipt with no printed date, time or total
-can't be matched and goes through. The same receipt twice in one server is
-still allowed, and counts twice.
+A receipt is credited by at most one confirmed bill, anywhere, same server
+included. `/split` refuses a receipt on a confirmed bill and saves nothing. A
+draft blocks nothing, so two drafts of one receipt can exist, and Confirm
+refuses the second. Reopening or deleting frees the receipt. A receipt with no
+printed date, time or total can't be matched and goes through.
 
 ## Stack
 
