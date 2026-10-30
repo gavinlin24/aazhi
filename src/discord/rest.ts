@@ -28,12 +28,6 @@ async function discord(
   return response;
 }
 
-// Webhook calls authenticate with the interaction token in the path, so they
-// work for its 15 minutes without the bot token.
-export async function followUp(interactionToken: string, body: unknown, env: Env): Promise<void> {
-  await discord(env, "follow-up", "POST", `/webhooks/${env.DISCORD_APPLICATION_ID}/${interactionToken}`, body, "none");
-}
-
 // A new message, unlike an edit, shows up as unread in the channel. It uses
 // the bot token because it is sent long after any interaction token expired.
 export async function postChannelMessage(channelId: string, body: unknown, env: Env): Promise<void> {
@@ -54,6 +48,8 @@ export async function guildName(guildId: string, env: Env): Promise<string | nul
   }
 }
 
+// Webhook calls authenticate with the interaction token in the path, so they
+// work for its 15 minutes without the bot token.
 export async function editOriginal(
   interactionToken: string,
   body: unknown,

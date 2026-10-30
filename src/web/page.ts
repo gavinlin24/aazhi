@@ -1242,7 +1242,6 @@ interface View {
 // The script in client.ts draws the same markup from the same state on
 // every poll; a change to any of it here needs the matching change there.
 const STATUS_WORD: Record<BillRow["status"], string> = {
-  reading: "Reading",
   draft: "Draft",
   confirmed: "Confirmed",
   superseded: "Replaced",

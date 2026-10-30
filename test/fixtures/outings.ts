@@ -1,4 +1,4 @@
-import { addClaim, addGuest, addParticipant, confirmBill, createBill, getBill, insertItems, setPardon } from "../../src/db/bills";
+import { addGuest, addParticipant, confirmBill, createBill, getBill, insertItems, setClaim, setPardon } from "../../src/db/bills";
 
 export interface Outing {
   id: string;
@@ -54,14 +54,14 @@ export async function seedOuting(db: D1Database, outing: Outing): Promise<void> 
     await addParticipant(db, { billId: o.id, id, kind: "member", displayName, addedBy: null });
   }
   for (const [i, [, , claimedBy]] of o.items.entries()) {
-    for (const who of claimedBy) await addClaim(db, o.id, `${o.id}-${i}`, who);
+    for (const who of claimedBy) await setClaim(db, o.id, `${o.id}-${i}`, who, true);
   }
   if (o.guest) {
     const [label, cents] = o.guest.item;
     const id = `${o.id}-guest-person`;
     await addGuest(db, o.id, { id, displayName: o.guest.name, addedBy: o.guest.addedBy });
     await insertItems(db, o.id, [{ id: `${o.id}-guest`, label, cents, source: "ocr" }]);
-    await addClaim(db, o.id, `${o.id}-guest`, id);
+    await setClaim(db, o.id, `${o.id}-guest`, id, true);
   }
   if (!o.draft) {
     // Confirm no longer makes these, so someone else stands in as payer for
