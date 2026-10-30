@@ -517,10 +517,8 @@ describe("renderPage", () => {
 
       expect(await textOf(html, "[data-you-owed]")).toBe(money(dani.owedCents + guest.owedCents));
       expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani, Sam");
-      const detail = await textOf(html, "[data-you-detail]");
-      expect(detail).toContain(money(dani.subtotalCents + guest.subtotalCents));
-      expect(detail).toContain(`Tax ${money(dani.taxCents + guest.taxCents)}`);
-      expect(detail).toContain(`Tip ${money(dani.tipCents + guest.tipCents)}`);
+      // A food, tax and tip bar would mix Sam's in with Dani's.
+      expect(await select(html, "[data-you] .split-bar, [data-you-detail]")).toEqual([]);
       // Right under the one amount, whose it is.
       expect((await select(html, "[data-you] [data-who] li")).map((r) => r.text)).toEqual([
         `DYou${money(dani.owedCents)}`,
@@ -533,6 +531,28 @@ describe("renderPage", () => {
       expect(groups[0]!.text).not.toContain("Lobster");
       expect(groups[1]!.text).toMatch(/^SSam.*Lobster/);
       expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
+    });
+
+    // So "$5.00 and $32.00" under You never has to be squared with $47.68 up
+    // top in someone's head.
+    it("ends each person's lines with their tax and tip, adding up to their amount to the cent", async () => {
+      const sum = (text: string) => [...text.matchAll(/\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + Number(m[1]) * 100 + Number(m[2]), 0);
+      for (const [html, ids] of [[view("dani"), ["dani", "guest-sam"]], [view("gavin"), ["gavin", "guest-kim"]]] as const) {
+        const groups = await select(html, "[data-mine] .mine-group");
+        expect(groups).toHaveLength(ids.length);
+        groups.forEach((group, i) => {
+          const x = share(ids[i]!);
+          expect(group.text).toContain(`Tax + tip${money(x.taxCents + x.tipCents)}`);
+          expect(sum(group.text), ids[i]).toBe(x.owedCents);
+        });
+      }
+      expect((await select(view("dani"), "[data-mine] .tax-tip")).map((r) => r.text)).toEqual([
+        `Tax + tip${money(share("dani").taxCents + share("dani").tipCents)}`,
+        `Tax + tip${money(share("guest-sam").taxCents + share("guest-sam").tipCents)}`,
+      ]);
+      // Alone, the bar up top already breaks the one amount down.
+      expect(await select(view("theo"), "[data-mine] .tax-tip")).toEqual([]);
+      expect(await select(view("theo"), "[data-you] .split-bar")).toHaveLength(1);
     });
 
     it("breaks nothing down for someone who brought nobody", async () => {

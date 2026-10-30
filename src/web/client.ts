@@ -740,6 +740,7 @@ export const CLIENT_SCRIPT = String.raw`
     }
     const mine = [s.viewer].concat(guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id));
     const forgiven = forgivenWhole(v, s.viewer);
+    const mixed = guestsOf(v, s.viewer).length > 0;
     const paid = paidUp(v, s.viewer);
     return [
       el("div", { class: "flow" }, [stack(v, mine, 3), icon("arrow", "arrow"), av(v, s.payerId)]),
@@ -748,7 +749,7 @@ export const CLIENT_SCRIPT = String.raw`
       paid ? el("span", { class: "stamp" + (justPaid ? (slamming ? " is-pressed is-after-slam" : " is-pressed") : ""), role: "img", "aria-label": "Paid" }, "付讫") : null,
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
       whoNodes(v),
-    ].concat(forgiven ? [] : splitNodes(counted(v, s.viewer)))
+    ].concat(forgiven || mixed ? [] : splitNodes(counted(v, s.viewer)))
       .concat(paid ? [] : [payNodes(v)])
       .concat([sentNodes(v)]);
   }
@@ -805,7 +806,16 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId, busy.has("sent")]), () => heroNodes(v));
   }
 
-  function mineNodes(v, id) {
+  // Mirrors taxTipRow on the server.
+  function taxTipNode(v, id) {
+    const share = v.shares.get(id);
+    return share ? el("li", { class: "tax-tip" }, [
+      el("span", { class: "item-label" }, "Tax + tip"),
+      el("span", { class: "money" }, money(share.taxCents + share.tipCents)),
+    ]) : null;
+  }
+
+  function mineNodes(v, id, withTaxTip) {
     const rows = v.s.items.filter((i) => i.claimedBy.includes(id)).map((item) => {
       const n = item.claimedBy.length;
       return el("li", null, [
@@ -814,19 +824,20 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return rows.length > 0 ? el("ul", null, rows) : null;
+    return rows.length > 0 ? el("ul", null, rows.concat(withTaxTip ? [taxTipNode(v, id)] : [])) : null;
   }
 
   function renderMine(v) {
     const card = root.querySelector("[data-mine]");
     if (!card) return;
-    keyedInto(card, JSON.stringify([v.s.items, v.s.participants, v.s.payerId]), () => {
+    keyedInto(card, JSON.stringify([v.s.items, v.s.participants, v.s.payerId, v.s.result.shares]), () => {
       const groups = [];
+      const withTaxTip = guestsOf(v, v.s.viewer).length > 0;
       for (const g of guestsOf(v, v.s.viewer)) {
-        const list = mineNodes(v, g.id);
+        const list = mineNodes(v, g.id, withTaxTip);
         if (list) groups.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName]), list]));
       }
-      const own = mineNodes(v, v.s.viewer);
+      const own = mineNodes(v, v.s.viewer, withTaxTip);
       const yours = own && (groups.length > 0 || v.s.viewerIsPayer)
         ? el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, v.s.viewer), "You"]), own])
         : own;
@@ -1010,7 +1021,7 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
   }
 
-  function linesOf(v, id) {
+  function linesOf(v, id, withTaxTip) {
     const rows = v.s.items.filter((i) => i.claimedBy.includes(id)).map((item) => {
       const n = item.claimedBy.length;
       return el("li", null, [
@@ -1019,7 +1030,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows : [el("li", { class: "empty" }, el("span", { class: "dash-ring", "aria-hidden": "true" }))]);
+    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(withTaxTip ? [taxTipNode(v, id)] : []) : [el("li", { class: "empty" }, el("span", { class: "dash-ring", "aria-hidden": "true" }))]);
   }
 
   function forgiveButton(v, p) {
@@ -1090,7 +1101,7 @@ export const CLIENT_SCRIPT = String.raw`
       }, [el("span", { "aria-hidden": "true", style: "font-family: var(--brush)" }, "付讫"), "Paid"]));
     }
     if (confirmed && v.s.viewerIsPayer) actions.push(forgiveButton(v, g));
-    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id)]
+    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id, true)]
       .concat(actions.filter(Boolean).length > 0 ? [el("div", { class: "sheet-actions" }, actions.filter(Boolean))] : []));
   }
 
@@ -1102,8 +1113,10 @@ export const CLIENT_SCRIPT = String.raw`
     const nodes = [
       sheetHead(v, id, p.displayName, money(owedOf(v, id)), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
     ];
-    if (!forgiven) nodes.push.apply(nodes, splitNodes(counted(v, id)).slice(1));
-    nodes.push(linesOf(v, id));
+    // With guests, a food, tax and tip line would mix theirs in. Each block of
+    // lines ends in its own tax and tip instead, so it adds up to that amount.
+    if (!forgiven && guests.length === 0) nodes.push.apply(nodes, splitNodes(counted(v, id)).slice(1));
+    nodes.push(linesOf(v, id, guests.length > 0));
     if (v.s.status === "confirmed" && v.s.viewerIsPayer) {
       const forgive = forgiveButton(v, p);
       if (forgive) nodes.push(el("div", { class: "sheet-actions" }, forgive));

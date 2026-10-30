@@ -714,6 +714,7 @@ button.tile:active { background: var(--fill); }
 .mine li:last-child { border-bottom: 0; }
 .mine li .item-label { flex: 1; }
 .mine .piece { color: var(--muted); }
+.mine .tax-tip, .sheet-lines .tax-tip { color: var(--muted); }
 /* A guest's lines hang off their name under a dashed rule, the same dash as a
    guest's avatar, so it is plain which lines are theirs. */
 .mine-group { border-top: 1px solid var(--rule); }
@@ -1391,18 +1392,27 @@ ${collectedOf(total - left, total)}
     : forgiven
       ? `<span class="gift-mark" role="img" aria-label="Forgiven">${icon("gift")}</span>`
       : "";
-  const parts = splitParts(counted(v, s.viewer));
+  // With guests the bar would mix their food, tax and tip in with the
+  // viewer's. Each person's lines below add up to their own amount instead.
+  const split = forgiven || guestsOf(v, s.viewer).length > 0 ? "" : splitBar(splitParts(counted(v, s.viewer)));
   return `<section class="card hero${paid ? " is-paid" : ""}${forgiven ? " is-forgiven" : ""}" data-you aria-label="Your share">
 <div class="flow">${stack(v, mine, 3)}${arrow}${av(v, s.payerId)}</div>
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${whoRows(v)}
-${forgiven ? "" : splitBar(parts)}
+${split}
 ${paid ? "" : payRow(v)}
 ${sentRow(v)}
 </section>`;
 }
 
-function mineList(v: View, id: ParticipantId): string {
+// Tax and tip are the share's own, from the split, so the lines add up to
+// that person's amount to the cent.
+function taxTipRow(v: View, id: ParticipantId): string {
+  const share = v.shares.get(id);
+  return share ? `<li class="tax-tip"><span class="item-label">Tax + tip</span><span class="money">${formatCents(share.taxCents + share.tipCents)}</span></li>` : "";
+}
+
+function mineList(v: View, id: ParticipantId, withTaxTip: boolean): string {
   const rows = v.s.items
     .filter((i) => i.claimedBy.includes(id))
     .map((item) => {
@@ -1410,20 +1420,21 @@ function mineList(v: View, id: ParticipantId): string {
       const cents = itemPieces(item).get(id) ?? 0;
       return `<li><span class="item-label">${escapeHtml(item.label)}</span>${n > 1 ? `<span class="piece">÷${n}</span>` : ""}<span class="money">${formatCents(cents)}</span></li>`;
     });
-  return rows.length > 0 ? `<ul>${rows.join("")}</ul>` : "";
+  return rows.length > 0 ? `<ul>${rows.join("")}${withTaxTip ? taxTipRow(v, id) : ""}</ul>` : "";
 }
 
-// Grouped the way the amount is broken down: yours, then each guest's. No
-// amount on the headings: a share carries tax and tip, so it would never
-// match the dishes under it. A paid guest's stamp is on their row up top,
-// not here again. A diner alone needs no heading, since the card above is
-// their share. The payer's card above is what others owe, so their own
-// lines say whose they are.
+// Grouped the way the amount is broken down: yours, then each guest's, each
+// ending in its tax and tip so it adds up to that person's amount up top. No
+// amount on the headings, since the rows above already say it. A paid
+// guest's stamp is on their row up top, not here again. A diner alone needs
+// no heading, since the card above is their share. The payer's card above is
+// what others owe, so their own lines say whose they are.
 function mine(v: View): string {
-  const own = mineList(v, v.s.viewer);
+  const withTaxTip = guestsOf(v, v.s.viewer).length > 0;
+  const own = mineList(v, v.s.viewer, withTaxTip);
   const guests = guestsOf(v, v.s.viewer)
     .map((g) => {
-      const list = mineList(v, g.id);
+      const list = mineList(v, g.id, withTaxTip);
       return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}</p>${list}</div>` : "";
     })
     .join("");
