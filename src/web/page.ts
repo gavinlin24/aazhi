@@ -27,13 +27,22 @@ function scriptJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
-// Rice-paper grain: one small noise tile the browser rasterizes once. Two
-// tints, so the specks read as fibre on light paper and on dark.
-function grain(rgb: string, alpha: string): string {
+// Xuan paper: a fine grain, long fibres laid mostly one way, and the faint
+// clouding where the sheet drank the ink unevenly. Each layer is one tile the
+// browser rasterizes once, so it costs nothing to scroll. Each filter covers
+// exactly the tile: the default region overhangs it by 10% a side, and the
+// stitched noise then repeats out of step and leaves a seam every tile.
+function paper(rgb: string, grain: number, fibre: number, cloud: number): string {
+  const tint = (alpha: string) => `0 0 0 0 ${rgb} 0 0 0 0 ${rgb} 0 0 0 0 ${rgb} ${alpha}`;
   const svg =
-    "<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'>" +
-    "<filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/>" +
-    `<feColorMatrix values='0 0 0 0 ${rgb} 0 0 0 0 ${rgb} 0 0 0 0 ${rgb} 0 0 0 ${alpha} 0'/></filter>` +
+    "<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'>" +
+    "<filter id='g' x='0' y='0' width='1' height='1'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/>" +
+    `<feColorMatrix values='${tint(`0 0 0 ${grain} 0`)}'/></filter>` +
+    "<filter id='f' x='0' y='0' width='1' height='1'><feTurbulence type='fractalNoise' baseFrequency='.012 .25' numOctaves='3' seed='7' stitchTiles='stitch'/>" +
+    `<feColorMatrix values='${tint(`0 0 0 ${(fibre * 4).toFixed(3)} ${(-fibre * 1.6).toFixed(3)}`)}'/></filter>` +
+    "<filter id='c' x='0' y='0' width='1' height='1'><feTurbulence type='fractalNoise' baseFrequency='.006' numOctaves='2' seed='3' stitchTiles='stitch'/>" +
+    `<feColorMatrix values='${tint(`0 0 0 ${cloud} 0`)}'/></filter>` +
+    "<rect width='100%' height='100%' filter='url(%23c)'/><rect width='100%' height='100%' filter='url(%23f)'/>" +
     "<rect width='100%' height='100%' filter='url(%23g)'/></svg>";
   return `url("data:image/svg+xml,${svg.replace(/"/g, "'").replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
 }
@@ -49,38 +58,103 @@ function speckle(): string {
   return `url("data:image/svg+xml,${svg.replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
 }
 
-// Ink & Paper. Every pair that carries meaning was checked against WCAG: 4.5:1
-// for text, 3:1 for the tick rings and seals. The avatar hues are mineral
-// pigments, each a wash with its own ink, so an initial always reads.
+// The sheet's top edge: a far ridge instead of a ruler-straight lip. The same
+// line masks the sheet and is drawn along it, so the two always agree.
+const RIDGE = "M0 24C14 20 30 10 46 7C56 5 62 12 72 16C82 20 94 6 106 3C116 1 122 10 134 15C150 21 166 12 184 10C200 8 210 18 224 16C236 14 242 4 252 2C262 0 270 10 282 14C298 19 314 9 330 7C344 5 354 16 368 17C378 18 385 15 390 14";
+
+function svgUrl(svg: string): string {
+  return `url("data:image/svg+xml,${svg.replace(/"/g, "'").replace(/#/g, "%23").replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
+}
+
+function ridgeMask(): string {
+  return svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 390 34' preserveAspectRatio='none'><path d='${RIDGE}V34H0Z'/></svg>`);
+}
+
+// Two washes of distant hills that fade into the sheet, painted once as a
+// tile like the paper, so a sheet's redraws never rebuild them.
+function sheetWash(far: string, mid: string, line: string): string {
+  const fade = (id: string, color: string, alpha: number) =>
+    `<linearGradient id='${id}' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='${color}' stop-opacity='${alpha}'/>` +
+    `<stop offset='.55' stop-color='${color}' stop-opacity='${(alpha * 0.75).toFixed(3)}'/><stop offset='1' stop-color='${color}' stop-opacity='0'/></linearGradient>`;
+  return svgUrl(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 390 90' preserveAspectRatio='none'>" +
+      fade("a", far, 0.32) + fade("b", mid, 0.26) +
+      "<filter id='r' x='-2%' y='-10%' width='104%' height='120%'><feTurbulence type='fractalNoise' baseFrequency='.035 .08' numOctaves='2' seed='4'/>" +
+      "<feDisplacementMap in='SourceGraphic' scale='5'/></filter>" +
+      // The washes run a little past both sides, since the rough edge would
+      // otherwise pull in from the sheet's corners and leave a notch.
+      "<g transform='translate(-8 0) scale(1.041 1)'>" +
+      `<path fill='url(#a)' filter='url(#r)' d='${RIDGE}V90H0Z'/>` +
+      "<path fill='url(#b)' filter='url(#r)' d='M0 44C30 34 50 26 80 30C110 34 120 44 150 40C180 36 196 24 226 26C256 28 270 42 300 40C330 38 350 28 390 32V90H0Z'/></g>" +
+      `<path fill='none' stroke='${line}' stroke-width='1' vector-effect='non-scaling-stroke' d='${RIDGE}'/></svg>`,
+  );
+}
+
+// A brush stroke that crosses a word out, heavy in the middle and lifting at
+// the ends.
+function strike(color: string): string {
+  return svgUrl(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 14' preserveAspectRatio='none'><path fill='${color}' fill-opacity='.85' ` +
+      "d='M2 8.5C40 5.5 90 6 150 5.2S260 4.6 298 6.2c1.4.1 1.4 1.6 0 1.7-40 2-110 2.3-170 2.8S30 11.8 4 11.2C.8 11.1.6 8.7 2 8.5z'/></svg>",
+  );
+}
+
+// Water ripples, where a ledger would rule a line.
+function ripple(color: string): string {
+  return svgUrl(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 354 14' preserveAspectRatio='none'><g fill='none' stroke='${color}' stroke-width='1.1' stroke-linecap='round' vector-effect='non-scaling-stroke'>` +
+      "<path stroke-opacity='.6' d='M0 6C29 2 59 10 88 6S147 2 177 6 236 10 265 6 324 2 354 6'/>" +
+      "<path stroke-opacity='.33' d='M60 11.5c30-2.5 60 1 90-.5M200 11.5c30-2.5 60 1 90-.5'/></g></svg>",
+  );
+}
+
+// Shan shui on xuan paper: a blue-green landscape by day, the same one under
+// the moon by night. Azurite and malachite carry meaning, ochre marks what
+// still needs someone, and cinnabar is kept for the seals. Every pair that
+// carries meaning was checked against WCAG: 4.5:1 for text, 3:1 for the tick
+// rings and seals. The avatar hues are mineral pigments, each a wash with its
+// own ink, so an initial always reads.
 const STYLES = `${FONT_FACES}
 :root {
   color-scheme: light dark;
-  --paper: #f3eee3;
-  --card: #faf7f0;
-  --ink: #1d1b18;
-  --muted: #5d564c;
-  --ring: #8a8274;
-  --line: #ddd3c1;
-  --fill: #e9e1d1;
-  --warn: #8a520f;
-  --warn-soft: #f1e1c4;
-  --ok: #2f6446;
-  --ok-soft: #dce7d8;
+  --paper: #efe7d6;
+  --card: #f7f1e3;
+  --ink: #1f1d1a;
+  --muted: #5f584d;
+  --ring: #8d8576;
+  --line: #ddd3bf;
+  --fill: #e8e0cf;
+  --warn: #8f5222;
+  --warn-soft: #f1e0c6;
+  --ok: #3c7660;
+  --ok-soft: #d8e6da;
+  --azurite: #2f5d7c;
+  --azurite-soft: #d9e3e4;
   --seal: #b3302a;
   --seal-ink: #fbf3ea;
-  --focus: #2d4b66;
-  --rule: rgba(179, 48, 42, 0.22);
-  --rule-strong: rgba(179, 48, 42, 0.62);
-  --food: #5d564c;
+  --focus: #2f5d7c;
+  --rule: rgba(47, 93, 124, 0.2);
+  --rule-strong: rgba(47, 93, 124, 0.5);
+  --hill-far: #5f8fb0;
+  --hill-mid: #5f9d7f;
+  --moon: #fbf6ea;
+  --food: #5f584d;
   --tax: #a89c86;
   --tip: #d9cdb6;
-  --scrim: rgba(29, 27, 24, 0.36);
-  --grain: ${grain(".3", ".07")};
+  --scrim: rgba(31, 29, 26, 0.38);
+  --grain: ${paper(".28", 0.07, 0.035, 0.05)};
   --speckle: ${speckle()};
-  --serif: "Iowan Old Style", "New York", ui-serif, "Noto Serif", "Source Serif Pro", Georgia, serif;
+  --ridge: ${ridgeMask()};
+  --sheet-wash: ${sheetWash("#5f8fb0", "#5f9d7f", "rgba(47, 93, 124, 0.5)")};
+  --strike: ${strike("#1f1d1a")};
+  --ripple: ${ripple("#2f5d7c")};
+  /* A moss dot, the way a painter dabs malachite on a rock: what is yours. */
+  --moss: radial-gradient(circle at 40% 35%, color-mix(in srgb, var(--ok) 80%, white) 0, var(--ok) 55%, color-mix(in srgb, var(--ok) 70%, black) 100%);
+  --cjk-serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "Noto Serif SC";
+  --serif: "Iowan Old Style", "New York", ui-serif, "Noto Serif", "Source Serif Pro", Georgia, var(--cjk-serif), serif;
   --display: "Noto Serif Display", "Iowan Old Style", "New York", ui-serif, Georgia, serif;
   --brush: "Ma Shan Zheng", "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", serif;
-  --radius: 14px;
+  --radius: 4px;
 }
 .hue-0 { --av-bg: #dce3ea; --av-ink: #2d4b66; }
 .hue-1 { --av-bg: #f1e1c4; --av-ink: #74450c; }
@@ -92,27 +166,35 @@ const STYLES = `${FONT_FACES}
 .hue-7 { --av-bg: #e2ded6; --av-ink: #45413a; }
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #15130f;
-    --card: #1d1a16;
-    --ink: #ece4d4;
-    --muted: #a69d8d;
-    --ring: #827968;
-    --line: #3a342c;
-    --fill: #2c2721;
-    --warn: #dda458;
-    --warn-soft: #3a2b16;
-    --ok: #8fc7a2;
-    --ok-soft: #1d3024;
-    --seal: #c5463b;
-    --seal-ink: #fffaf3;
-    --focus: #93b4d3;
-    --rule: rgba(197, 70, 59, 0.3);
-    --rule-strong: rgba(197, 70, 59, 0.7);
+    --paper: #111417;
+    --card: #181c20;
+    --ink: #e9e3d6;
+    --muted: #a49d90;
+    --ring: #79736a;
+    --line: #2d353b;
+    --fill: #232a2f;
+    --warn: #dba468;
+    --warn-soft: #34271a;
+    --ok: #8fc5ac;
+    --ok-soft: #1b2a24;
+    --azurite: #93b8d1;
+    --azurite-soft: #1e2b35;
+    --seal: #c84a3e;
+    --seal-ink: #fff8f0;
+    --focus: #93b8d1;
+    --rule: rgba(147, 184, 209, 0.16);
+    --rule-strong: rgba(147, 184, 209, 0.4);
+    --hill-far: #3c5566;
+    --hill-mid: #345247;
+    --moon: #e9e1cc;
     --food: #cfc5b3;
     --tax: #8a806f;
     --tip: #4f473c;
     --scrim: rgba(0, 0, 0, 0.55);
-    --grain: ${grain(".9", ".05")};
+    --grain: ${paper(".9", 0.05, 0.009, 0.04)};
+    --sheet-wash: ${sheetWash("#3c5566", "#345247", "rgba(147, 184, 209, 0.4)")};
+    --strike: ${strike("#e9e3d6")};
+    --ripple: ${ripple("#93b8d1")};
   }
   .hue-0 { --av-bg: #23303c; --av-ink: #a9c2da; }
   .hue-1 { --av-bg: #3a2c17; --av-ink: #e2b57a; }
@@ -140,12 +222,13 @@ a { color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-/* One look for "tap to change": the value sits in a tinted pill with a small
-   brush inside, so the pill's edge, not a brush hanging past it, lines up
-   with the plain values. Read-only values stay plain. The negative margin
-   keeps a pill from making its line taller. */
+/* "Tap to change" is a small brush just before the value. A figure stays a
+   bare figure, so every amount on the card ends on one right edge whether
+   the viewer can change it or not; a name keeps a tinted pill around it. */
 .ic.brush { width: 16px; height: 16px; color: var(--muted); stroke-width: 1.6; }
-.amt, .is-editable .item-price, button.payer-chip, .name-btn {
+.amt, .is-editable .item-price { display: inline-flex; align-items: center; gap: 5px; }
+.amt { padding: 0; border: 0; background: none; color: inherit; }
+button.payer-chip, .name-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -157,38 +240,64 @@ a { color: inherit; }
   background: var(--fill);
   color: var(--ink);
 }
-.amt:active, .is-editable button.row:active .item-price, button.payer-chip:active, .name-btn:active { background: var(--line); }
-@media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
-/* A 30px pill is easier to see than to hit, so the buttons reach 44px. */
+.amt:active .brush, .is-editable button.row:active .item-price .brush { color: var(--ink); }
+button.payer-chip:active, .name-btn:active { background: var(--line); }
+@media (hover: hover) {
+  .amt:hover .brush, .is-editable button.row:hover .item-price .brush { color: var(--ink); }
+  button.payer-chip:hover, .name-btn:hover { background: var(--line); }
+}
+/* A bare figure or a 30px pill is easier to see than to hit, so the buttons reach 44px. */
 .amt, button.payer-chip, .name-btn { position: relative; cursor: pointer; }
-.amt::after, button.payer-chip::after, .name-btn::after { content: ""; position: absolute; inset: -7px -4px; }
+.amt::after { content: ""; position: absolute; inset: -11px -6px; }
+button.payer-chip::after, .name-btn::after { content: ""; position: absolute; inset: -7px -4px; }
 .money, .item-price, .totals dd { font-variant-numeric: tabular-nums lining-nums; }
 .page {
+  --page-top: 18px;
   max-width: 480px;
   margin: 0 auto;
-  padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
+  padding: var(--page-top) 16px calc(28px + env(safe-area-inset-bottom));
 }
-.page[data-layout="receipt"].has-bar { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
-.page[data-layout="receipt"].has-bar:has(.claimers:not([hidden])) { padding-bottom: calc(156px + env(safe-area-inset-bottom)); }
+.page[data-layout="receipt"].has-bar { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
 /* Keyboard focus and claim mode scroll rows into view; keep them clear of the bar. */
 html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
-html:has(.has-bar .claimers:not([hidden])) { scroll-padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
 .needs-js { display: none; }
 .is-live .needs-js:not([hidden]) { display: revert; }
+/* Each card is a sheet laid on the paper, framed thick-and-thin in cinnabar
+   like the border of a printed sutra page. */
+/* The inset of every card's content. The receipt's tick circles sit this far
+   in, and every figure on the page ends this far from the right, so amounts in
+   stacked cards line up down the page. */
 .card {
-  background: var(--card);
-  border: 1px solid var(--line);
+  --edge: 13px;
+  background: var(--card) var(--grain);
+  border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
-  box-shadow: 0 1px 2px rgba(60, 40, 10, 0.04);
+  box-shadow: inset 0 0 0 3px var(--card), inset 0 0 0 3.75px var(--rule), 0 1px 2px rgba(60, 40, 10, 0.05);
 }
 
+/* A blue-green range, peaks clear and feet lost in mist. The SVG stretches to
+   any width, so the moon sits outside it to stay round. */
+.hills { position: relative; display: block; pointer-events: none; }
+.hills > svg { display: block; width: 100%; height: 100%; }
+.hills .far { fill: var(--hill-far); opacity: 0.5; }
+.hills .mid { fill: var(--hill-mid); opacity: 0.55; }
+.hills .moon { position: absolute; left: 82.4%; top: 21.7%; width: 26px; height: 26px; border-radius: 50%; background: var(--moon); opacity: 0.9; transform: translate(-50%, -50%); }
+@media (prefers-color-scheme: dark) { .hills .far { opacity: 0.9; } }
+
+/* The range runs across the top of the scroll, edge to edge of the page, and
+   the title sits on the mist at its feet. */
 .head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: start; padding: 0 2px 14px; }
-.head h1 { font-size: 25px; line-height: 1.2; font-weight: 600; overflow-wrap: anywhere; }
+.head > .hills { grid-column: 1 / -1; height: 120px; margin: calc(-1 * var(--page-top)) -18px -26px; }
+/* A Chinese name wraps whole, as the dish names do, rather than leaving one
+   character alone on the next line. */
+.head h1 { position: relative; font-size: 25px; line-height: 1.2; font-weight: 600; overflow-wrap: anywhere; word-break: keep-all; }
+.head .status, .head .meta { position: relative; }
 .status { display: inline-flex; align-items: center; gap: 7px; height: 30px; font-size: 15px; color: var(--muted); white-space: nowrap; }
 .seal-slot { width: 20px; height: 20px; border: 1.5px dashed var(--ring); border-radius: 3px; }
 .seal {
   display: inline-grid;
   place-items: center;
+  flex: none;
   width: 26px;
   height: 26px;
   border-radius: 3px;
@@ -198,6 +307,8 @@ html:has(.has-bar .claimers:not([hidden])) { scroll-padding-bottom: calc(140px +
   box-shadow: inset 0 0 0 1.5px var(--seal), inset 0 0 0 2.5px rgba(251, 243, 234, 0.7);
   transform: rotate(-6deg);
 }
+/* A draft carries the 稿 seal cut in outline, waiting for the red one. */
+.seal.is-draft { background: none; color: var(--azurite); box-shadow: inset 0 0 0 1.6px var(--azurite); }
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--ring); display: none; }
 .is-live .live { display: inline-block; background: var(--ok); }
 .is-live.is-stopped .live { background: var(--ring); }
@@ -228,17 +339,17 @@ button.payer-chip .brush { width: 16px; height: 16px; color: var(--muted); }
 .notice-card h2 { font-size: 18px; }
 .notice-card p { color: var(--muted); margin-top: 6px; }
 
-.receipt { padding: 4px 0 6px; }
+.receipt { position: relative; padding: 4px 0 6px; }
 /* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
 .items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
-/* The inset of the tick circles from the card. The figures, pills and rules
-   end the same distance from the right, so the receipt is balanced. */
-.receipt { --edge: 13px; }
+/* A dish's name wraps rather than clipping, since at phone width a clipped
+   name loses the part that tells two dishes apart. The price stays on its
+   first line, so both are pinned to the top of the row. */
 .row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
-  grid-template-rows: 23px 22px;
+  grid-template-rows: minmax(23px, auto) 22px;
   grid-template-areas: "tick name price" "tick who piece";
   column-gap: 10px;
   align-items: center;
@@ -251,32 +362,37 @@ button.payer-chip .brush { width: 16px; height: 16px; color: var(--muted); }
 }
 button.row { cursor: pointer; }
 button.row:active { background: var(--fill); }
+/* The line whose sheet is open, so the dish being edited is marked on the
+   receipt as well as named in the sheet. */
+.item.is-target { background: color-mix(in srgb, var(--azurite-soft) 70%, transparent); }
 .row > .tick, .tick-btn { grid-area: tick; justify-self: center; }
+/* Every claim circle sits on the first line of its dish's name, however many
+   lines the name, its add-ons or its faces take: the 26px circle centred in
+   the name's 23px line. */
+.row > .tick { align-self: start; margin-top: -1.5px; }
 /* Nobody else on the line means no avatars and no split, so the second line
-   goes. Claiming it yourself keeps it bare, so your own tap never moves rows. */
-.is-bare .row { grid-template-rows: 30px; grid-template-areas: "tick name price"; }
+   goes, and the padding takes its place so the row keeps its height. Claiming
+   it yourself keeps it bare, so your own tap never moves rows. */
+.is-bare .row { grid-template-rows: minmax(23px, auto); grid-template-areas: "tick name price"; padding-block: 11.5px; }
 .is-bare .who, .is-bare .piece { display: none; }
-.item-label { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
-.item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
-/* A dish's add-ons hang off a dashed rule under its name, the same dash that
-   ties a guest's lines to them, so they read as part of the dish and not as
-   lines of their own. Each price sits under the dish's. A long name wraps
-   rather than clipping, since the add-ons explain the price, and its wrapped
-   lines step in so they can't be read as the next add-on. */
-.item-addons { grid-area: addons; display: block; min-width: 0; margin: 4px 0 2px 3px; padding-left: 11px; border-left: 1.5px dashed var(--ring); font-size: 14px; line-height: 18px; color: var(--muted); }
+/* keep-all so a Chinese dish name breaks between words, not inside 小笼包;
+   anywhere still breaks a name too long for the line at all. */
+.item-label { grid-area: name; align-self: start; min-width: 0; overflow-wrap: anywhere; word-break: keep-all; font-size: 17px; line-height: 23px; }
+.item-price { grid-area: price; align-self: start; justify-self: end; white-space: nowrap; font-size: 17px; line-height: 23px; }
+/* A dish's add-ons hang off a dashed azurite rule under its name, like a
+   stream off a peak, the same dash that ties a guest's lines to them, so they
+   read as part of the dish and not as lines of their own. Each price sits
+   under the dish's. A long name wraps rather than clipping, since the add-ons
+   explain the price, and its wrapped lines step in so they can't be read as
+   the next add-on. */
+.item-addons { grid-area: addons; display: block; min-width: 0; margin: 4px 0 2px 3px; padding-left: 11px; border-left: 1.5px dashed var(--azurite); font-size: 14px; line-height: 18px; color: var(--muted); }
 /* Clear of the avatars below, so the rule doesn't seem to run into a face. */
 .has-addons:not(.is-bare) .item-addons { margin-bottom: 7px; }
 .addon-line { display: flex; align-items: baseline; gap: 10px; padding: 1px 0; }
-.addon-name { flex: 1; min-width: 0; padding-left: 10px; text-indent: -10px; overflow-wrap: anywhere; }
+.addon-name { flex: 1; min-width: 0; padding-left: 10px; text-indent: -10px; overflow-wrap: anywhere; word-break: keep-all; }
 .addon-price { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums lining-nums; }
-/* The tick stays beside the dish's name, not halfway down its add-ons. The
-   payer's tick is a full-height button outside the grid, so it is pinned to
-   the same spot by hand: the row's 8px padding plus the 26px tick centred in
-   the name's row. */
-.has-addons .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" ". addons addons" ". who piece"; }
-.is-bare.has-addons .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" ". addons addons"; }
-.has-addons .tick-btn { align-items: start; padding-top: 6.5px; }
-.is-bare.has-addons .tick-btn { padding-top: 10px; }
+.has-addons .row { grid-template-rows: minmax(23px, auto) auto 22px; grid-template-areas: "tick name price" ". addons addons" ". who piece"; }
+.is-bare.has-addons .row { grid-template-rows: minmax(23px, auto) auto; grid-template-areas: "tick name price" ". addons addons"; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
@@ -288,12 +404,17 @@ button.row:active { background: var(--fill); }
   bottom: 0;
   width: 44px;
   display: grid;
-  place-items: center;
-  padding: 0;
+  justify-items: center;
+  align-items: start;
+  /* A full-height button outside the grid, so it is pinned to the name's
+     first line by hand: the row's padding, less the 1.5px the 26px circle
+     overhangs the 23px line. */
+  padding: 6.5px 0 0;
   border: 0;
   background: none;
   cursor: pointer;
 }
+.is-bare .tick-btn { padding-top: 10px; }
 .tick {
   display: grid;
   place-items: center;
@@ -303,8 +424,8 @@ button.row:active { background: var(--fill); }
   border: 1.6px solid var(--ring);
   color: var(--card);
 }
-.tick .ic { width: 16px; height: 16px; stroke-width: 2.2; opacity: 0; }
-.is-mine .tick { background: var(--ink); border-color: var(--ink); }
+.tick .ic { width: 17px; height: 17px; opacity: 0; }
+.is-mine .tick { background: var(--moss); border-color: transparent; }
 .is-mine .tick .ic { opacity: 1; }
 /* Claiming for a guest, the ticks become their face, so a glance down the
    column says whose lines these are. An empty ring holds their initial in
@@ -315,11 +436,11 @@ button.row:active { background: var(--fill); }
 .is-unclaimed .tick { border: 1.6px dashed var(--warn); }
 .is-unclaimed .item-label { color: var(--warn); }
 /* Nothing on a locked line answers a tap, so it draws no ring to tap: a bare
-   check on your lines, the small unclaimed ring from the totals on nobody's. */
+   malachite check on your lines, a small dashed ring on nobody's. */
 .is-locked .tick { border-color: transparent; }
-.is-locked.is-mine .tick { background: none; border-color: transparent; color: var(--ink); }
+.is-locked.is-mine .tick { background: none; border-color: transparent; color: var(--ok); }
 .is-locked.is-mine .tick .ic { width: 20px; height: 20px; }
-.is-locked.is-unclaimed .tick { width: 18px; height: 18px; border: 1.6px dashed var(--warn); }
+.is-locked.is-unclaimed .tick { width: 18px; height: 18px; margin-top: 2.5px; border: 1.6px dashed var(--warn); }
 .is-inked .tick { animation: ink 320ms ease-out; }
 @keyframes ink {
   from { transform: scale(0.55); filter: blur(1.5px); }
@@ -355,42 +476,56 @@ button.row:active { background: var(--fill); }
   justify-content: center;
   width: 100%;
   min-height: 44px;
-  border: 1.5px dashed var(--ring);
+  border: 1.5px dashed var(--rule-strong);
   border-radius: 10px;
   background: none;
-  color: var(--muted);
+  color: var(--azurite);
   cursor: pointer;
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-.totals { margin: 8px 0 0; padding: 0 var(--edge) 10px; }
+/* No lines yet: a lone boat on still water. */
+.empty-lines { display: grid; justify-items: center; gap: 4px; padding: 14px 16px 2px; color: var(--muted); text-align: center; }
+.empty-lines[hidden] { display: none; }
+.boat { width: 220px; height: 90px; }
+.boat .hull, .boat .figure { fill: var(--ink); opacity: 0.82; }
+.boat .rod { fill: none; stroke: var(--ink); stroke-width: 1; opacity: 0.55; }
+.boat .w { fill: none; stroke: var(--azurite); stroke-width: 1.2; stroke-linecap: round; opacity: 0.6; }
+
+/* The scroll ends in a low range of hills behind the total. It sits inside
+   the card's ruled frame, under the figures. */
+.ground { position: absolute; left: 4px; right: 4px; bottom: 4px; height: 64px; overflow: hidden; border-radius: 0 0 2px 2px; opacity: 0.55; }
+.ground .hills { height: 100%; }
+.totals { position: relative; margin: 8px 0 0; padding: 0 var(--edge) 10px; }
 .trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
 .trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
 .trow dd { margin: 0; white-space: nowrap; }
-/* Subtotal plus tax, so it sits under them as their sum. */
-.receipt-row { margin-top: 4px; border-top: 1px solid var(--rule); }
-.receipt-row dt { align-items: center; }
-.receipt-row .mark { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
-.receipt-row.is-ok .mark { color: var(--ok); }
-.receipt-row.is-off .mark { color: var(--warn); font-weight: 600; }
-.receipt-row .mark .ic { width: 18px; height: 18px; }
-/* A ledger's total: one rule above, a double rule below. */
+/* A ledger's total: one rule above, and the hills below for the foot. */
 .grand {
   margin: 6px 0 2px;
   padding: 4px 0;
   border-top: 1px solid var(--rule-strong);
-  border-bottom: 3px double var(--rule-strong);
   font-size: 19px;
   font-weight: 600;
 }
 .grand dt { color: var(--ink); }
 .short dt, .short dd { color: var(--warn); font-weight: 600; }
-.dash-ring { width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed currentColor; flex: none; }
+/* A drifting cloud: nobody's yet. */
+.short .cloud { width: 24px; height: 24px; }
 .short dt { align-items: center; }
 
-.edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0; }
-.edit-form .money-input { min-width: 88px; }
-.edit-form label { color: var(--muted); flex: none; }
+/* An amount being typed keeps its row's shape: the label on the left, its
+   box ending on the receipt's right edge with every figure, and the actions
+   on a row of their own below. The rows are set by hand, since auto-placement
+   would push the tip's $/% toggle, which follows the box, down a row. */
+.edit-form { display: grid; grid-template-columns: minmax(0, 1fr) auto 112px; align-items: center; gap: 8px; width: 100%; padding: 4px 0; }
+.edit-form > label, .edit-form .seg, .edit-form .money-input { grid-row: 1; }
+.edit-form > label { grid-column: 1; color: var(--muted); }
+.edit-form .seg { grid-column: 2; }
+.edit-form .money-input { grid-column: 3; }
+.edit-form [data-cancel] { grid-row: 2; grid-column: 1; justify-self: start; }
+.edit-form .go { grid-row: 2; grid-column: 2 / -1; justify-self: end; }
+.edit-form .field-msg { grid-column: 1 / -1; }
 .money-input {
   flex: 1;
   min-width: 0;
@@ -406,6 +541,8 @@ button.row:active { background: var(--fill); }
 .money-input:focus-within { border-color: var(--focus); }
 .money-input span { color: var(--muted); }
 .money-input.is-percent span { order: 2; }
+/* No browser padding, so typed digits end exactly where the figures beside the field do. */
+.money-input input { padding: 0; text-align: right; }
 .money-input input, .text-input {
   flex: 1;
   min-width: 0;
@@ -431,8 +568,6 @@ button.row:active { background: var(--fill); }
   cursor: pointer;
 }
 .icon-btn.go { background: var(--ink); border-color: var(--ink); color: var(--card); }
-.icon-btn.danger { color: var(--seal); }
-.icon-btn.danger.is-armed { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; }
 .seg { display: inline-flex; flex: none; height: 44px; padding: 3px; border: 1.5px solid var(--line); border-radius: 10px; }
 .seg button { min-width: 34px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-weight: 600; cursor: pointer; }
@@ -444,20 +579,26 @@ button.row:active { background: var(--fill); }
 
 /* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
-.line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
+.line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px; }
 .line-form .actions .go { margin-left: auto; }
+.line-form .actions .chip-btn { min-width: 0; }
 .line-form .field-msg { grid-column: 1 / -1; }
 /* Editing a dish lays it out like the receipt: its own price, then one row
-   per add-on, every price in one column so the sum reads down. */
-.dish-form { grid-template-columns: minmax(0, 1fr) 112px 44px; }
+   per add-on, every price in one column flush with the name field's edge so
+   the sum reads down to the total. An add-on's remove sits inside its name
+   field, so it never pushes the prices off that edge. */
 .dish-form > [name="label"] { grid-column: 1 / -1; }
 .dish-form .money-input { grid-column: 2; }
 .dish-form .field-label { grid-column: 1; align-self: center; color: var(--muted); }
 .dish-form .addons-head { grid-column: 1 / -1; margin-top: 6px; color: var(--muted); font-size: 15px; }
 .addon { display: contents; }
-.addon .text-input { grid-column: 1; }
-.addon .icon-btn { border-color: transparent; background: none; color: var(--muted); }
-.dish-form .add-row { grid-column: 1 / 3; gap: 6px; font-size: 16px; }
+.addon-field { grid-column: 1; position: relative; display: flex; min-width: 0; }
+.addon-field .text-input { padding-right: 44px; }
+.addon-field .icon-btn { position: absolute; top: 0; right: 0; border-color: transparent; background: none; color: var(--muted); }
+.dish-form .add-row { grid-column: 1 / -1; gap: 6px; font-size: 16px; }
+/* A field's box edge is its amount's edge, as on the receipt, so the total
+   ends where the price boxes do. */
+.dish-sum { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; margin-top: 2px; padding: 8px 0 2px; border-top: 1px solid var(--rule-strong); font-weight: 600; }
 .dish-form [hidden] { display: none; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
@@ -476,7 +617,8 @@ button.row:active { background: var(--fill); }
 }
 button.tile { cursor: pointer; }
 button.tile:active { background: var(--fill); }
-.avw { position: relative; display: inline-block; margin-bottom: 3px; }
+/* Room under the face for the badges that hang off its foot, clear of the name. */
+.avw { position: relative; display: inline-block; margin-bottom: 8px; }
 .tile .av { --s: 46px; }
 .tile-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .tile.is-viewer .tile-name { font-weight: 700; }
@@ -490,9 +632,9 @@ button.tile:active { background: var(--fill); }
   height: 20px;
   border-radius: 50%;
   background: var(--card);
-  box-shadow: 0 0 0 1px var(--line);
+  box-shadow: 0 0 0 1px var(--rule-strong);
 }
-.badge .ic { width: 15px; height: 15px; }
+.badge .ic { width: 16px; height: 16px; }
 .badge.coin { top: -3px; right: -5px; color: var(--warn); }
 .badge.gift { top: -3px; left: -5px; color: var(--seal); }
 .minis { position: absolute; right: -8px; bottom: -4px; display: flex; }
@@ -545,6 +687,18 @@ button.tile:active { background: var(--fill); }
   mask: var(--speckle);
   animation: slam 1000ms both;
 }
+/* Confirming presses the 定 seal down the same way. */
+.slam .seal {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  border-radius: 10px;
+  font-size: 100px;
+  box-shadow: inset 0 0 0 6px var(--seal), inset 0 0 0 10px rgba(251, 243, 234, 0.7);
+  -webkit-mask: var(--speckle);
+  mask: var(--speckle);
+  animation: slam 1000ms both;
+}
 .slam .stamp::after {
   content: "";
   position: absolute;
@@ -576,9 +730,9 @@ button.tile:active { background: var(--fill); }
   0%, 100% { opacity: 0; transform: rotate(-8deg); }
   20%, 80% { opacity: 1; transform: rotate(-8deg); }
 }
-.add-tile .av { background: none; border: 1.5px dashed var(--ring); color: var(--muted); box-shadow: none; }
+.add-tile .av { background: none; border: 1.5px dashed var(--rule-strong); color: var(--azurite); box-shadow: none; }
 .add-tile .av .ic { width: 22px; height: 22px; }
-.add-tile .tile-name { color: var(--muted); }
+.add-tile .tile-name { color: var(--azurite); }
 .guest-form-slot { grid-column: 1 / -1; }
 .guest-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0 4px; }
 .guest-form .text-input { flex: 1; min-width: 0; }
@@ -591,78 +745,64 @@ button.tile:active { background: var(--fill); }
   right: 0;
   bottom: 0;
   padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-  background: var(--card);
-  border-top: 1px solid var(--line);
+  background: var(--card) var(--grain);
+  border-top: 1px solid var(--rule-strong);
   box-shadow: 0 -6px 20px rgba(60, 40, 10, 0.06);
 }
-/* Bottom-aligned so the arrow and face sit on the amount's line, under its
-   caption, not centred on the two together. Its width and gutters match the
-   page's, so the caption, amount and claim chips start on the card's edge. */
-.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
-/* Who a tap on a line claims for, one tap to switch. It shows only when there
-   is more than one answer: you and the guests you brought. */
-/* The padding gives a focused chip's ring room inside the scroller, which
-   would clip it; the negative margin takes the room back. */
-.claimers {
+/* One footer for everyone, the payer too: what you owe and, when you brought
+   guests, what each of them owes. With guests each amount is also the switch
+   for whose dishes a tap claims. Its width matches the page's, so the first
+   amount starts on the card's edge; the padding gives a focused amount's ring
+   room inside the scroller, which would clip it, and the margin takes it back. */
+.owes {
   display: flex;
-  gap: 6px;
-  max-width: 458px;
-  margin: -5px max(-5px, calc((100% - 448px) / 2 - 5px)) 3px;
-  padding: 5px;
+  gap: 8px;
+  max-width: 456px;
+  margin: -4px max(-4px, calc((100% - 448px) / 2 - 4px));
+  padding: 4px;
   overflow-x: auto;
   scrollbar-width: none;
 }
-.claimers[hidden] { display: none; }
-.claimer {
-  display: inline-flex;
+.owes::-webkit-scrollbar { display: none; }
+/* Two share the width at phone size; a third scrolls rather than squeezing a
+   name to nothing. Each amount is a paper slip with a mineral tab: azurite
+   for you, ochre for a guest. */
+.owe {
+  --tab: var(--azurite);
+  display: flex;
   align-items: center;
-  gap: 7px;
-  flex: none;
-  max-width: 14em;
-  height: 44px;
-  padding: 0 14px 0 6px;
-  border: 1.5px solid var(--line);
-  border-radius: 22px;
+  gap: 10px;
+  flex: 1 0 0;
+  min-width: 152px;
+  min-height: 58px;
+  padding: 6px 12px 6px 8px;
+  border: 1.5px solid var(--rule);
+  border-top: 4px solid var(--tab);
+  border-radius: 3px 3px 6px 6px;
   background: none;
-  color: var(--muted);
-  cursor: pointer;
+  text-align: left;
 }
-.claimer .av { --s: 30px; box-shadow: none; }
-.claimer .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.claimer .chip-amt { flex: none; font-weight: 400; }
-.claimer[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); font-weight: 600; }
-.claimer[aria-pressed="true"] .av { box-shadow: 0 0 0 1.5px var(--card); }
-.bar .av.payer { --s: 32px; margin-bottom: -2px; }
-.bar .arrow { width: 22px; height: 22px; color: var(--muted); margin-bottom: 3px; }
-/* Reads as a sentence, the same way for whoever is looking: what moves, which
-   way, to whom. The caption says which side of it you are on. */
-.bar .owe { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.bar .owe-label { font-size: 14px; line-height: 1; color: var(--muted); }
-.bar .amount { font: 500 28px/1 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
-.bar .grow { flex: 1; }
-/* The same dashed ring as an unclaimed line, with the count spelled out. */
-.ring-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  height: 44px;
-  padding: 0 14px 0 11px;
-  border: 0;
-  border-radius: 22px;
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-weight: 700;
-  font-size: 16px;
-  white-space: nowrap;
-  align-self: center;
-  cursor: pointer;
-}
+.owe.is-guest { --tab: var(--warn); }
+button.owe { cursor: pointer; }
+button.owe[aria-pressed="true"] { border-color: var(--ink); border-top-color: var(--tab); background: var(--fill); }
+/* The margin keeps the mark on the avatar's shoulder clear of the label beside it. */
+.owe-av { position: relative; display: inline-grid; flex: none; margin-right: 6px; }
+.owe .av { --s: 36px; }
+/* The slip whose dishes a tap claims carries the claim's moss dot, on the
+   face's shoulder so it stays inside the slip. */
+.owe .mark { position: absolute; top: -5px; right: -7px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--moss); color: var(--card); box-shadow: 0 0 0 1.5px var(--card); }
+.owe .mark .ic { width: 13px; height: 13px; }
+button.owe[aria-pressed="false"] .mark { display: none; }
+/* The amount ends on the card's right edge like every other figure: beside
+   the label when the card is wide enough, under it when not. */
+.owe-text { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; min-width: 0; }
+.owe-label { font-size: 15px; line-height: 1.2; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owe .amount { margin-left: auto; font: 500 26px/1 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
 
 .view + .view { margin-top: 18px; }
 .is-live[data-layout="share"] .view:not(.is-active) { display: none; }
 .is-live[data-layout="share"] .view + .view { margin-top: 0; }
-.hero { position: relative; padding: 18px 18px 16px; overflow: hidden; }
+.hero { position: relative; padding: 18px var(--edge) 16px; overflow: hidden; }
 .flow { display: flex; align-items: center; gap: 8px; }
 .flow .av { --s: 34px; }
 .flow .stack .av + .av { margin-left: -6px; }
@@ -745,11 +885,13 @@ button.tile:active { background: var(--fill); }
 .pie .track { stroke: var(--fill); }
 .pie .done { stroke: var(--ok); stroke-linecap: round; }
 
-.mine { margin-top: 12px; padding: 4px 16px; }
+.mine { margin-top: 12px; padding: 4px var(--edge); }
 .mine ul { list-style: none; margin: 0; padding: 0; }
-.mine li { display: flex; align-items: center; gap: 10px; min-height: 44px; border-bottom: 1px solid var(--rule); }
+.mine li { display: flex; align-items: center; gap: 10px; min-height: 44px; padding-block: 8px; border-bottom: 1px solid var(--rule); }
 .mine li:last-child { border-bottom: 0; }
-.mine li .item-label { flex: 1; }
+/* A wrapped dish keeps its amount level with the middle of the name, as a
+   one-line dish does, instead of the name hugging the rule above. */
+.mine li .item-label, .sheet-lines .item-label { flex: 1; align-self: auto; line-height: 1.35; }
 .mine .piece { color: var(--muted); }
 .mine .tax-tip, .sheet-lines .tax-tip { color: var(--muted); }
 /* A guest's lines hang off their name under a dashed rule, the same dash as a
@@ -758,7 +900,7 @@ button.tile:active { background: var(--fill); }
 .mine > .mine-group:first-child { border-top: 0; }
 .mine-guest { display: flex; align-items: center; gap: 8px; padding: 12px 0 2px; color: var(--muted); font-size: 15px; }
 .mine-guest .av { --s: 24px; }
-.mine-group ul { margin: 0 0 8px 11px; padding-left: 21px; border-left: 1.5px dashed var(--ring); }
+.mine-group ul { margin: 0 0 8px 11px; padding-left: 21px; border-left: 1.5px dashed var(--azurite); }
 
 .drill { margin-top: 12px; padding: 0 6px; }
 .drill-row {
@@ -779,28 +921,37 @@ button.tile:active { background: var(--fill); }
    so they read as quieter than paying, with Confirm the one loud thing. */
 .acts { margin-top: 14px; padding: 0 6px; }
 .view .acts { margin-top: 12px; }
-.confirm-area { padding: 14px 10px; border-bottom: 1px solid var(--rule); }
+.confirm-area { padding: 12px 8px; border-bottom: 1px solid var(--rule); }
 .confirm-area:last-child { border-bottom: 0; }
+/* Confirm is a seal you press: the 定 seal and the word, with what still
+   stands in the way under it. */
 .confirm-btn {
-  display: flex;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 10px;
+  gap: 16px;
   width: 100%;
-  min-height: 52px;
-  padding: 0 20px;
+  min-height: 72px;
+  padding: 2px 4px;
   border: 0;
-  border-radius: 26px;
-  background: var(--seal);
-  color: var(--seal-ink);
-  font-size: 18px;
-  font-weight: 600;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
   cursor: pointer;
 }
-.confirm-btn .brush { font: 23px/1 var(--brush); }
-.confirm-btn:disabled { background: var(--fill); color: var(--muted); cursor: default; }
+.confirm-btn .seal { width: 64px; height: 64px; font-size: 46px; border-radius: 6px; box-shadow: inset 0 0 0 3px var(--seal), inset 0 0 0 5px rgba(251, 243, 234, 0.7); }
+.confirm-text { min-width: 0; }
+.confirm-word { display: block; font-size: 18px; font-weight: 600; }
+.confirm-btn:active .seal { transform: rotate(-6deg) scale(0.96); }
+.confirm-btn:disabled { cursor: default; }
+.confirm-btn:disabled .seal { background: var(--fill); color: var(--ring); box-shadow: inset 0 0 0 1.5px var(--ring); }
+.confirm-btn:disabled .confirm-word { color: var(--muted); }
 .confirm-btn[aria-busy="true"] { cursor: progress; opacity: 0.75; }
-.why { margin-top: 10px; text-align: center; color: var(--warn); font-size: 15px; font-weight: 600; }
+/* The receipt's own total, here only while it is what stops the bill being
+   confirmed: missing, or not what the lines add up to. */
+.confirm-area .trow { margin: -4px 0 10px; padding: 0 2px; }
+.confirm-area .trow dt { color: var(--ink); }
+.why { display: block; margin-top: 2px; color: var(--warn); font-size: 15px; font-weight: 600; }
 .why.is-hint { color: var(--muted); font-weight: 400; }
 .act {
   display: flex;
@@ -821,10 +972,16 @@ button.tile:active { background: var(--fill); }
 .act .grow { display: flex; flex: 1; flex-direction: column; min-width: 0; }
 .act-sub { color: var(--muted); font-size: 15px; }
 .act.is-warn .ic { color: var(--warn); }
-.act.danger, .act.danger .ic { color: var(--seal); }
+
+/* A delete waits for its second tap in solid ink, calm rather than alarmed.
+   The fill sits inset on its own layer, so it stays off the page's ruled
+   frame without the row changing size when it arms. */
+.act.is-armed { position: relative; isolation: isolate; }
+.act.is-armed::before { content: ""; position: absolute; inset: 5px 0; z-index: -1; border-radius: 8px; background: var(--ink); }
+.act.is-armed, .act.is-armed .ic { color: var(--card); }
 .act[aria-busy="true"] { cursor: progress; opacity: 0.6; }
 
-.payments { margin-top: 12px; padding: 0 16px 4px; }
+.payments { margin-top: 12px; padding: 0 var(--edge) 4px; }
 .payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .payments ul { list-style: none; margin: 0; padding: 0; }
 .payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
@@ -845,27 +1002,35 @@ dialog.sheet {
   margin: 0 auto;
   padding: 0 0 env(safe-area-inset-bottom);
   border: 0;
-  border-radius: 18px 18px 0 0;
   background: var(--card) var(--grain);
   color: var(--ink);
-  box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.2);
+  /* The sheet rises with a ridge for its top edge. A mask cuts the shape, so a
+     shadow would only outline the box it was cut from. */
+  -webkit-mask: var(--ridge) top / 100% 34px no-repeat, linear-gradient(#000, #000) 0 33px / 100% calc(100% - 33px) no-repeat;
+  mask: var(--ridge) top / 100% 34px no-repeat, linear-gradient(#000, #000) 0 33px / 100% calc(100% - 33px) no-repeat;
 }
+/* A pseudo-element, so the client's redraws of the sheet's contents leave the wash alone. */
+dialog.sheet::before { content: ""; position: absolute; inset: 0 0 auto; height: 90px; background: var(--sheet-wash) top / 100% 100% no-repeat; pointer-events: none; }
 dialog.sheet::backdrop { background: var(--scrim); }
-.sheet-in { padding: 6px 18px 20px; }
-.sheet-head { display: flex; align-items: center; gap: 12px; min-height: 60px; }
+/* Close sits under the ridge, above the head, so a head's amount can end on
+   the right edge like every other figure in the sheet. */
+.sheet-in { position: relative; padding: 70px 18px 20px; }
+.sheet .close { position: absolute; top: 26px; right: 6px; border: 0; background: none; }
+.sheet-head { display: flex; align-items: center; gap: 12px; min-height: 52px; }
 .sheet-head .av { --s: 44px; }
 .sheet-head h2 { flex: 1; min-width: 0; font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
+/* A dish is item text, not a name, so its title stays in the book face. */
+.sheet-head h2.dish-title { line-height: 1.25; word-break: keep-all; }
 .sheet-head .money { font: 500 24px/1 var(--display); }
-.sheet .close { border: 0; background: none; margin-right: -4px; }
 .sheet .legend { margin: 0 0 6px; }
 /* No bar in the sheet for a key to point at. */
 .sheet .legend .key { display: none; }
 .sheet ul { list-style: none; margin: 0; padding: 0; }
-.sheet-lines li { display: flex; align-items: center; gap: 10px; min-height: 42px; border-bottom: 1px solid var(--rule); }
+.sheet-lines li { display: flex; align-items: center; gap: 10px; min-height: 42px; padding-block: 8px; border-bottom: 1px solid var(--rule); }
 .sheet-lines li:last-child { border-bottom: 0; }
-.sheet-lines .item-label { flex: 1; font-size: 16px; }
+.sheet-lines .item-label { font-size: 16px; }
 .sheet-lines .empty { color: var(--muted); }
-.sheet-guest { margin-top: 14px; padding-top: 10px; border-top: 3px double var(--rule); }
+.sheet-guest { margin-top: 14px; padding-top: 18px; background: var(--ripple) top / 100% 14px no-repeat; }
 .sheet-guest .sheet-head .av { --s: 34px; }
 .sheet-guest h3 { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 /* A long name wraps inside its pill instead of overflowing the sheet. */
@@ -886,9 +1051,21 @@ dialog.sheet::backdrop { background: var(--scrim); }
 }
 .chip-btn .ic { width: 18px; height: 18px; }
 .chip-btn[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); }
-.chip-btn.danger { color: var(--seal); }
-.chip-btn.danger.is-armed { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
+.chip-btn.is-armed { background: var(--ink); border-color: var(--ink); color: var(--card); }
+.chip-btn.go { background: var(--ink); border-color: var(--ink); color: var(--card); }
 .chip-btn:disabled { opacity: 0.45; cursor: default; }
+/* The target's name rides in the button, clipped rather than wrapped so the
+   button keeps one line. */
+.chip-btn .target { min-width: 0; max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* While a delete waits for its second tap, the name of what it would remove
+   is struck through with a brush, so there is no doubt which thing goes. The
+   stroke is a background so it follows a wrapped name onto every line. */
+.is-struck .struck {
+  color: var(--muted);
+  background: var(--strike) 0 58% / 100% 0.5em no-repeat;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
 .chip-btn[aria-busy="true"] { cursor: progress; }
 .sheet-body { margin: 0 0 10px; color: var(--muted); }
 .sheet-go { flex: 1; justify-content: center; min-height: 50px; border-radius: 25px; }
@@ -896,12 +1073,15 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .sheet-go.is-ink { background: var(--ink); border-color: var(--ink); color: var(--card); }
 .sheet-msg { margin-top: 8px; color: var(--warn); font-size: 15px; }
 .sheet-msg:empty { display: none; }
-.picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 4px 0 8px; }
-.pick { position: relative; }
-.pick .tick { position: absolute; right: -6px; bottom: -4px; width: 22px; height: 22px; background: var(--card); }
-.pick .tick .ic { width: 14px; height: 14px; }
-.pick[aria-pressed="true"] .tick { background: var(--ink); border-color: var(--ink); }
-.pick[aria-pressed="true"] .tick .ic { opacity: 1; }
+.picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; margin: 4px 0 8px; }
+/* No amount under a name here, so no room kept for one. */
+.pick { position: relative; min-height: 0; }
+/* Only the people who had it carry the moss check, on the face's shoulder
+   and inside its box, the same mark as the footer's. An empty ring on every
+   other face read as stray blobs. */
+.pick .tick { position: absolute; right: 0; top: 0; width: 20px; height: 20px; border: 0; background: var(--moss); box-shadow: 0 0 0 1.5px var(--card); }
+.pick .tick .ic { width: 14px; height: 14px; opacity: 1; }
+.pick[aria-pressed="false"] .tick { display: none; }
 .pick .tile-name { font-size: 14px; }
 .sheet .line-form { padding: 6px 0 4px; }
 
@@ -911,40 +1091,69 @@ dialog.sheet::backdrop { background: var(--scrim); }
 
 @media (prefers-reduced-motion: reduce) {
   .is-inked .tick, .is-pressed { animation: none; }
-  .slam .stamp { animation-name: slam-fade; }
+  .slam .stamp, .slam .seal { animation-name: slam-fade; }
   .slam .stamp::after { animation: none; }
 }
 @media (min-width: 700px) {
-  .page { padding-top: 40px; }
+  .page { --page-top: 40px; }
+}
+/* Past phone width the page is a column on a wider sheet, so the range fades
+   out at its sides rather than ending on a cut. */
+@media (min-width: 500px) {
+  .head > .hills { -webkit-mask: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent); mask: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent); }
 }
 `;
 
 // One brush-weight stroke set, referenced by <use> from the page and the
-// script alike, so neither repeats path data.
+// script alike, so neither repeats path data. The marks a hand makes most
+// (check, plus, close) are filled brush strokes that swell and taper, not
+// ruled lines.
 const ICONS: Record<string, string> = {
-  check: '<path d="M5 12.5l4.3 4.3L19 7"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
+  check: '<path fill="currentColor" stroke="none" d="M3.6 12.9c.7-.9 1.9-1 2.8-.3l3.3 2.7c2.4-3.9 5.5-7.4 9.6-10.3.4-.3.9.2.6.6-3.5 3.7-6.3 8-8.4 12.6-.4.9-1.6 1.1-2.3.4l-5.4-4.4c-.5-.4-.6-1-.2-1.3z"/>',
+  plus: '<path fill="currentColor" stroke="none" d="M4 12.3c-.2-.9.4-1.5 1.3-1.4l13.4.3c1.1 0 1.6.5 1.5 1.2-.1.6-.7.9-1.4.9L5.4 13.5c-.8 0-1.3-.4-1.4-1.2zM11.4 4.4c.3-.7 1.6-.8 1.8.1l-.2 14.4c0 .9-.3 1.4-.7 1.4s-.7-.5-.8-1.2L11.2 5.2c0-.3.1-.6.2-.8z"/>',
   arrow: '<path d="M4 12h15M14 6.5l5.5 5.5-5.5 5.5"/>',
   out: '<path d="M7 17L17 7M9 7h8v8"/>',
   chev: '<path d="M9.5 6l6 6-6 6"/>',
   back: '<path d="M14.5 6l-6 6 6 6"/>',
-  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
-  coin: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6h4.8v4.8H9.6z"/>',
+  close: '<path fill="currentColor" stroke="none" d="M5.6 6.5c.2-.8 1.1-1.1 1.8-.5l11 10.6c.7.7.8 1.4.3 1.8-.5.4-1.1.2-1.6-.3L6 7.9c-.4-.4-.5-.9-.4-1.4zM17.6 5.4c.5-.3 1.2.1 1 .7-.2.5-.5.9-.9 1.3L7.4 18.1c-.5.5-1.2.6-1.5.2-.3-.4-.2-1 .3-1.5L17 5.9c.2-.2.4-.4.6-.5z"/>',
+  // A cash coin: the square hole and the four characters' places round it.
+  coin: '<circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="6.6" stroke-width="1"/><path d="M9.7 9.7h4.6v4.6H9.7z"/><path stroke-width="1.4" d="M12 6.4v1.3M12 16.3v1.3M6.4 12h1.3M16.3 12h1.3"/>',
   gift: '<path d="M4.5 11h15v9h-15zM3.5 7.5h17V11h-17zM12 7.5V20M12 7.5C10.5 4 7 4 7.5 6.3 8 7.5 12 7.5 12 7.5zM12 7.5c1.5-3.5 5-3.5 4.5-1.2C16 7.5 12 7.5 12 7.5z"/>',
   receipt: '<path d="M6 3.5h12v17l-2.5-1.6-2.5 1.6-2.5-1.6-2.5 1.6-2.5-1.6zM9 8.5h6M9 12h6M9 15.5h3"/>',
   people: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.3 2.8-5 5.5-5s4.9 1.7 5.5 5"/><circle cx="16.5" cy="9.5" r="2.6"/><path d="M15.5 14.2c2.6-.3 4.4 1.3 5 4.3"/>',
   bowl: '<path d="M3.5 11.5h17a8.5 8.5 0 0 1-17 0zM9 8c-.8-1.4.8-2.2 0-3.8M13 8c-.8-1.4.8-2.2 0-3.8"/>',
-  trash: '<path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5"/>',
+  // A woven basket with a crumpled sheet in it: what you throw away.
+  basket: '<path d="M5 11h14l-1.8 9.4H6.8z"/><path d="M6 15.4h12M10.2 11.4l.4 8.6M13.8 11.4l-.4 8.6"/><path d="M8.9 10.6l-.6-3.1 2.2-2.6 3.1-.3 2.4 2-.3 3.1M10.5 4.9l1.4 3.2 4.2-1.1M11.9 8.1l-.5 2.5"/>',
+  cloud: '<path d="M5.6 17.6C3.8 17.6 2.6 16.3 2.6 14.8c0-1.7 1.5-3 3.2-2.8.3-2.7 2.5-4.6 5.2-4.6 2.3 0 4.2 1.4 4.9 3.4 2.4-.4 4.6 1.3 4.6 3.6 0 1.8-1.3 3.2-3.1 3.2z"/><path d="M8.6 14.6c-.2-1.4 1.3-2.4 2.5-1.6 1 .6.9 2.1-.2 2.4"/><path d="M15.4 14.2c.4-1 1.8-1.1 2.3-.2"/>',
   warn: '<path d="M12 4.5l8.5 15h-17zM12 10.5v4M12 17.3v.2"/>',
-  // A calligraphy brush: handle, ferrule, and an inked tip that tapers to a point.
-  brush: '<path d="M19.6 4.4l-6.2 6.2M10.9 10.3l2.8 2.8"/><path fill="currentColor" stroke="none" d="M10 10.8c-2.2.3-4.5 4.6-5.6 8.8 4.2-1.1 8.5-3.4 8.8-5.6z"/>',
+  // A calligraphy brush, hung by its loop, with the stroke it just laid down.
+  brush: '<circle cx="20.3" cy="3.7" r="1.2"/><path d="M19.4 4.6l-6 6"/><path stroke-width="3" stroke-linecap="butt" d="M13.9 10.1l-1.8 1.8"/>' +
+    '<path fill="currentColor" stroke="none" d="M11.6 11.6c-2.6.1-5.1 4.2-6.7 8.3 4.1-1.6 8.2-4.1 8.3-6.7z"/><path fill="currentColor" stroke="none" d="M3 21.4c3-1 6.4-1.3 10-.9.4.1.4.5 0 .5-3.4 0-6.6.4-9.7 1-.5.1-.7-.4-.3-.6z"/>',
 };
 
 function sprite(): string {
   const symbols = Object.entries(ICONS)
     .map(([name, paths]) => `<symbol id="i-${name}" viewBox="0 0 24 24">${paths}</symbol>`)
     .join("");
-  return `<svg class="sprite" aria-hidden="true" focusable="false">${symbols}</svg>`;
+  return `<svg class="sprite" aria-hidden="true" focusable="false">${HILL_DEFS}${symbols}</svg>`;
+}
+
+// The hills fade to nothing at their feet and their edges wobble like a wash
+// that bled into the paper. Defined once in the sprite and shared by every range.
+const HILL_DEFS =
+  '<defs><linearGradient id="g-fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#000"/></linearGradient>' +
+  '<mask id="m-fade" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#g-fade)"/></mask>' +
+  '<filter id="f-rough" x="-2%" y="-10%" width="104%" height="120%"><feTurbulence type="fractalNoise" baseFrequency=".035 .08" numOctaves="2" seed="4" result="n"/>' +
+  '<feDisplacementMap in="SourceGraphic" in2="n" scale="5"/></filter></defs>';
+
+const FAR_HILLS = "M0 70C30 52 52 30 78 38C98 44 108 22 132 18C156 14 170 40 196 46C222 52 240 28 262 30C290 32 300 54 330 50C352 47 370 36 390 40V120H0Z";
+const MID_HILLS = "M0 88C24 80 40 62 66 66C90 70 104 84 130 78C152 73 168 56 192 60C214 64 226 82 252 84C280 86 296 64 322 66C350 68 368 82 390 80V120H0Z";
+
+// The viewBox trims the ends of the paths, where the displacement would
+// otherwise pull the wash in from the sides.
+function hills(moon: boolean): string {
+  return `<div class="hills" aria-hidden="true">${moon ? '<span class="moon"></span>' : ""}<svg viewBox="5 0 380 120" preserveAspectRatio="none">` +
+    `<path class="far" d="${FAR_HILLS}" mask="url(#m-fade)" filter="url(#f-rough)"/><path class="mid" d="${MID_HILLS}" mask="url(#m-fade)" filter="url(#f-rough)"/></svg></div>`;
 }
 
 function icon(name: string, extra = ""): string {
@@ -960,8 +1169,8 @@ function shell(title: string, body: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f3eee3" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#15130f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#efe7d6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111417" media="(prefers-color-scheme: dark)">
 <title>${escapeHtml(title)}</title>
 <style>${STYLES}</style>
 </head>
@@ -1110,7 +1319,12 @@ function shortDate(iso: string | null, year: number): string | null {
 }
 
 function statusLabel(status: BillRow["status"]): string {
-  const mark = status === "confirmed" ? '<span class="seal" aria-hidden="true">定</span>' : '<span class="seal-slot" aria-hidden="true"></span>';
+  const mark =
+    status === "confirmed"
+      ? '<span class="seal" aria-hidden="true">定</span>'
+      : status === "draft"
+        ? '<span class="seal is-draft" aria-hidden="true">稿</span>'
+        : '<span class="seal-slot" aria-hidden="true"></span>';
   return `${mark}<span class="word">${STATUS_WORD[status]}</span><span class="live" aria-hidden="true"></span>`;
 }
 
@@ -1126,6 +1340,7 @@ function payerChip(v: View): string {
 function header(v: View): string {
   const date = shortDate(v.bill.billDate, v.year);
   return `<header class="head">
+${hills(true)}
 <h1>${escapeHtml(v.bill.place?.trim() || "Receipt")}</h1>
 <p class="status" data-status-label>${statusLabel(v.bill.status)}</p>
 <p class="meta">${date ? `<span>${date}</span><span aria-hidden="true">·</span>` : ""}<span data-payer-slot>${payerChip(v)}</span></p>
@@ -1176,7 +1391,7 @@ function itemRow(v: View, item: LineItem): string {
   const others = item.claimedBy.filter((id) => id !== v.s.viewer);
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
-    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
+    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${brush}${formatCents(item.cents)}</span>` +
     (item.addons ? `<span class="item-addons">${addonLines(item.addons)}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
@@ -1204,19 +1419,12 @@ function withPercent(label: string, part: Cents, subtotal: Cents): string {
   return subtotal > 0 ? `${label} (${((part * 100) / subtotal).toFixed(1)}%)` : label;
 }
 
-function receiptMark(s: BillState): string {
-  const gap = s.reconciles.discrepancyCents;
-  if (s.reconciles.ok && s.printedTotalCents !== null) return `<span class="mark">${icon("check")}<span class="sr">Adds up</span></span>`;
-  if (s.printedTotalCents === null || gap === null) return `<span class="mark">${icon("warn")}<span class="sr">Not entered</span></span>`;
-  return `<span class="mark">${icon("warn")}<span>${gap > 0 ? "+" : "−"}${formatCents(Math.abs(gap))}</span></span>`;
-}
-
 // The payer's editable amounts are their own buttons, so the row reads as
 // plain figures to everyone else and as figures to fix to the one who paid.
 function amount(v: View, field: string, key: string, cents: Cents | null, label: string): string {
   const shown = `<span data-total="${key}">${cents === null ? "—" : formatCents(cents)}</span>`;
   if (v.s.editable !== "all") return shown;
-  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${shown}${BRUSH}</button>`;
+  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${BRUSH}${shown}</button>`;
 }
 
 function totals(v: View): string {
@@ -1234,25 +1442,23 @@ function totals(v: View): string {
     // a diner would check their local rate against.
     `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   );
-  // Between tax and tip, because the printed total is what the restaurant
-  // charged before anyone added a tip: it reads as the sum of the rows above.
-  if (v.s.viewerIsPayer && v.bill.status === "draft") {
-    rows.push(
-      `<div class="trow receipt-row ${s.reconciles.ok ? "is-ok" : "is-off"}" data-reconcile data-field-row="printedTotal">` +
-        `<dt>Receipt ${receiptMark(s)}</dt><dd>${amount(v, "printedTotal", "printed", s.printedTotalCents, "Printed total")}</dd></div>`,
-    );
-  }
   rows.push(
     `<div class="trow" data-field-row="tip"><dt>${withPercent("Tip", s.tipCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {
     rows.push(
-      `<div class="trow short"><dt><span class="dash-ring" aria-hidden="true"></span>Unclaimed</dt><dd data-total="unclaimed">${formatCents(r.unclaimedCents)}</dd></div>`,
+      `<div class="trow short"><dt>${icon("cloud", "cloud")}Unclaimed</dt><dd data-total="unclaimed">${formatCents(r.unclaimedCents)}</dd></div>`,
     );
   }
   return `<dl class="totals" data-totals>${rows.join("")}</dl>`;
 }
+
+const BOAT =
+  '<svg class="boat" viewBox="0 0 220 90" aria-hidden="true" focusable="false">' +
+  '<path class="hull" d="M70 56c20 5 60 5 84-1 2-.5 3 1 1.6 2.4-6 6-20 9.5-42 9.5-21 0-35-3.6-45-8.6-1.4-.7-.6-2.7 1.4-2.3z"/>' +
+  '<path class="figure" d="M98 41.5l9-4.2 9 4.2zM102 42.5c.4 4-.2 8.6-1.8 12.5h12.2c-1.4-3.9-2-8.5-1.6-12.5z"/>' +
+  '<path class="rod" d="M112 46l44-20M156 26l2 44"/><path class="w" d="M40 72h44M130 74h50M70 80h30M150 82h26M20 64h26"/></svg>';
 
 function receipt(v: View): string {
   const list = v.s.items.length > 0 ? `<ul class="items">${v.s.items.map((i) => itemRow(v, i)).join("\n")}</ul>` : "";
@@ -1260,9 +1466,12 @@ function receipt(v: View): string {
     v.s.editable === "all"
       ? `<div class="add-line needs-js" data-add-line><button type="button" class="add-row" data-add-open aria-label="Add a line">${icon("plus")}</button></div>`
       : "";
+  const empty = `<div class="empty-lines" data-empty-lines${v.s.items.length > 0 ? " hidden" : ""}>${BOAT}<p>No lines yet.</p></div>`;
   return `<section class="card receipt${v.s.editable === "all" ? " is-editable" : ""}" data-items aria-label="Receipt">
 ${list}
+${empty}
 ${add}
+<div class="ground">${hills(false)}</div>
 ${totals(v)}
 </section>`;
 }
@@ -1317,35 +1526,29 @@ function people(v: View): string {
 </section>`;
 }
 
-// You first, then the guests you brought. Nobody else's: the payer settles
-// other people's lines from the line itself. Each chip carries a name, your
-// own too, so the pressed one says whose lines a tap claims, and that
-// person's share, so the total beside them reads as theirs added up.
-function claimers(v: View): string {
+// You first, then the guests you brought, each with what they owe: the same
+// footer for everyone, the payer included. With guests, each amount is also
+// the switch for whose dishes a tap claims, so the pressed one says whose
+// lines these are.
+function owes(v: View): string {
   const ids = [v.s.viewer, ...guestsOf(v, v.s.viewer).map((g) => g.id)];
-  const chips = ids.map(
-    (id) =>
-      `<button type="button" class="claimer" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">` +
-      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span>` +
-      `<span class="chip-amt money">${formatCents(v.shares.get(id)?.owedCents ?? 0)}</span></button>`,
-  );
-  const hidden = v.s.editable !== "none" && ids.length > 1 ? "" : " hidden";
-  return `<div class="claimers" data-claimers role="group" aria-label="Claim for"${hidden}>${hidden ? "" : chips.join("")}</div>`;
+  const pick = v.s.editable !== "none" && ids.length > 1;
+  const entries = ids.map((id) => {
+    const label = id === v.s.viewer ? "You owe" : `${nameOf(v, id)} owes`;
+    const mark = pick ? `<span class="mark" aria-hidden="true">${icon("check")}</span>` : "";
+    const inner = `<span class="owe-av">${av(v, id)}${mark}</span><span class="owe-text"><span class="owe-label">${escapeHtml(label)}</span>` +
+      `<span class="amount money"${id === v.s.viewer ? " data-you-owed" : ""}>${formatCents(v.shares.get(id)?.owedCents ?? 0)}</span></span>`;
+    const cls = id === v.s.viewer ? "owe" : "owe is-guest";
+    return pick
+      ? `<button type="button" class="${cls}" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">${inner}</button>`
+      : `<div class="${cls}">${inner}</div>`;
+  });
+  return `<div class="owes" data-owes${pick ? ' role="group" aria-label="Claim for"' : ""}>${entries.join("")}</div>`;
 }
 
 function bar(v: View): string {
   if (!v.onBill) return "";
-  const s = v.s;
-  const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-  const ring =
-    open > 0
-      ? `<button type="button" class="ring-btn" data-jump-unclaimed aria-label="${open} left to claim"><span class="dash-ring" aria-hidden="true"></span>${open} left</button>`
-      : "";
-  const [label, cents] = s.viewerIsPayer ? ["to collect", s.payerCollectsCents] : ["you owe", owedOf(v, s.viewer)];
-  const content =
-    `<span class="owe"><span class="owe-label">${label}</span> <span class="amount money" data-you-owed>${formatCents(cents)}</span></span>` +
-    `${icon("arrow", "arrow")}${av(v, s.payerId, "payer")}`;
-  return `<div class="bar" data-bar>${claimers(v)}<div class="bar-in">${content}<span class="grow"></span>${ring}</div></div>`;
+  return `<div class="bar" data-bar>${owes(v)}</div>`;
 }
 
 // Food, tax and tip of what is asked for after pardons and after any guest
@@ -1542,13 +1745,22 @@ function openLines(s: BillState): LineItem[] {
   return s.items.filter((i) => i.claimedBy.length === 0);
 }
 
+// Only when the receipt's total is what stops the confirm: the one place the
+// payer needs it, right above the button it unblocks.
+function printedRow(v: View): string {
+  if (v.s.reconciles.ok) return "";
+  return `<div class="trow" data-field-row="printedTotal"><dt>Receipt total</dt><dd>${amount(v, "printedTotal", "printed", v.s.printedTotalCents, "Receipt total")}</dd></div>`;
+}
+
 function confirmArea(v: View): string {
   const blocked = confirmBlock(v.s);
   const open = openLines(v.s).length;
   const why = blocked ?? (open === 0 ? "" : open === 1 ? "1 line has nobody on it." : `${open} lines have nobody on them.`);
-  return `<div class="confirm-area"><button type="button" class="confirm-btn" data-confirm${blocked ? " disabled" : ""}${why ? ' aria-describedby="confirm-why"' : ""}>` +
-    `<span class="brush" aria-hidden="true">定</span>Confirm</button>` +
-    `${why ? `<p class="why${blocked ? "" : " is-hint"}" id="confirm-why">${escapeHtml(why)}</p>` : ""}</div>`;
+  // The why rides inside the button, hidden from its name and read out as its
+  // description, so the button is still just "Confirm".
+  return `<div class="confirm-area">${printedRow(v)}<button type="button" class="confirm-btn" data-confirm${blocked ? " disabled" : ""}${why ? ' aria-describedby="confirm-why"' : ""}>` +
+    `<span class="seal" aria-hidden="true">定</span><span class="confirm-text"><span class="confirm-word">Confirm</span>` +
+    `${why ? `<span class="why${blocked ? "" : " is-hint"}" id="confirm-why" aria-hidden="true">${escapeHtml(why)}</span>` : ""}</span></button></div>`;
 }
 
 function act(attrs: string, iconName: string, title: string, sub: string | null, cls = ""): string {
@@ -1565,7 +1777,7 @@ function actions(v: View): string {
   if (s.viewerIsPayer) {
     if (v.bill.status === "draft") parts.push(confirmArea(v));
     if (v.bill.status === "confirmed") parts.push(act("data-reopen", "receipt", "Edit the bill", "Paying pauses until you confirm again."));
-    parts.push(act("data-delete-bill", "trash", "Delete this bill", null, "danger"));
+    parts.push(act("data-delete-bill", "basket", "Delete this bill", null));
   } else if (v.bill.status === "confirmed" && v.onBill) {
     parts.push(
       act('data-ask="wrong" aria-haspopup="dialog"', "warn", "Something's wrong", `Paying pauses until ${nameOf(v, s.payerId)} fixes it.`, "is-warn"),

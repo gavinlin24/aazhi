@@ -44,10 +44,10 @@ export const CLIENT_SCRIPT = String.raw`
   let polling = false;
   let stopped = false;
   // Who a tap on a line claims for: the viewer (null), or a guest they
-  // brought (or, for the payer, anyone's guest). The bar shows it and
-  // switches it.
+  // brought. The footer shows it and switches it.
   let claimFor = null;
-  // The one open inline editor: a totals field, or the add-a-line form.
+  // The one open inline editor: a totals field, the receipt total, or the
+  // add-a-line form.
   let editing = null;
   let tipMode = "dollars";
   let sheet = null;
@@ -352,7 +352,11 @@ export const CLIENT_SCRIPT = String.raw`
     const label = root.querySelector("[data-status-label]");
     if (label) {
       keyedInto(label, v.s.status, () => [
-        v.s.status === "confirmed" ? el("span", { class: "seal", "aria-hidden": "true" }, "定") : el("span", { class: "seal-slot", "aria-hidden": "true" }),
+        v.s.status === "confirmed"
+          ? el("span", { class: "seal", "aria-hidden": "true" }, "定")
+          : v.s.status === "draft"
+            ? el("span", { class: "seal is-draft", "aria-hidden": "true" }, "稿")
+            : el("span", { class: "seal-slot", "aria-hidden": "true" }),
         el("span", { class: "word" }, STATUS_WORD[v.s.status] || v.s.status),
         el("span", { class: "live", "aria-hidden": "true" }),
       ]);
@@ -398,17 +402,17 @@ export const CLIENT_SCRIPT = String.raw`
     ]));
   }
 
-  function rowNode(v, item, actor, mode) {
+  function rowNode(v, item, actor, mode, target) {
     const mine = item.claimedBy.includes(actor);
     const others = item.claimedBy.filter((id) => id !== actor);
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
-      el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
+      el("span", { class: "item-price" }, [mode === "all" ? icon("brush", "brush") : null, money(item.cents)]),
       item.addons ? el("span", { class: "item-addons" }, addonLines(item.addons)) : null,
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
-    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : ""];
+    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : "", target ? "is-target" : ""];
     const claim = { "data-claim": true, "data-item": item.id, "data-participant": actor, "aria-pressed": String(mine) };
     if (mode === "all") {
       classes.push("has-picker");
@@ -431,6 +435,8 @@ export const CLIENT_SCRIPT = String.raw`
     for (const section of root.querySelectorAll("[data-items]")) {
       section.classList.toggle("is-editable", mode === "all");
       let list = section.querySelector(":scope > ul.items");
+      const empty = section.querySelector(":scope > [data-empty-lines]");
+      if (empty) empty.hidden = v.s.items.length > 0;
       if (v.s.items.length === 0) {
         if (list) list.remove();
       } else {
@@ -439,10 +445,11 @@ export const CLIENT_SCRIPT = String.raw`
           section.prepend(list);
         }
         const roster = v.s.participants.map((p) => [p.id, p.displayName]);
+        const open = sheet && sheet.kind === "line" ? sheet.id : null;
         patch(list, v.s.items.map((item) => ({
           id: item.id,
-          key: JSON.stringify([item.label, item.addons, item.cents, item.claimedBy.slice().sort(), roster, actor, mode]),
-          build: () => rowNode(v, item, actor, mode),
+          key: JSON.stringify([item.label, item.addons, item.cents, item.claimedBy.slice().sort(), roster, actor, mode, item.id === open]),
+          build: () => rowNode(v, item, actor, mode, item.id === open),
         })));
       }
       const add = section.querySelector(":scope > [data-add-line]");
@@ -466,20 +473,13 @@ export const CLIENT_SCRIPT = String.raw`
     return subtotal > 0 ? label + " (" + ((part * 100) / subtotal).toFixed(1) + "%)" : label;
   }
 
-  function receiptMark(s) {
-    const gap = s.reconciles.discrepancyCents;
-    if (s.reconciles.ok && s.printedTotalCents !== null) return el("span", { class: "mark" }, [icon("check"), sr("Adds up")]);
-    if (s.printedTotalCents === null || gap === null) return el("span", { class: "mark" }, [icon("warn"), sr("Not entered")]);
-    return el("span", { class: "mark" }, [icon("warn"), el("span", null, (gap > 0 ? "+" : "−") + money(Math.abs(gap)))]);
-  }
-
   function amount(mode, field, key, cents, label) {
     const shown = el("span", { "data-total": key }, cents === null ? "—" : money(cents));
     if (mode !== "all") return shown;
-    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [shown, icon("brush", "brush")]);
+    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [icon("brush", "brush"), shown]);
   }
 
-  const FIELD_LABEL = { discount: "Discount", tax: "Tax", tip: "Tip", printedTotal: "Receipt" };
+  const FIELD_LABEL = { discount: "Discount", tax: "Tax", tip: "Tip", printedTotal: "Receipt total" };
 
   function fieldForm(s, field) {
     const id = "edit-" + field;
@@ -518,44 +518,28 @@ export const CLIENT_SCRIPT = String.raw`
     const r = s.result;
     const entries = [];
     const row = (id, key, cls, build) => entries.push({ id, key: JSON.stringify(key), build: () => el("div", { class: "trow" + (cls ? " " + cls : "") }, build()) });
-    const field = (name, key, cents, label, opts) => {
-      const { extra, cls, shown } = opts || {};
+    const field = (name, key, cents, label, shown) => {
       if (editing && editing.kind === "field" && editing.field === name) {
         entries.push({ id: name, key: "editing:" + tipMode, build: () => el("div", { class: "trow is-editing", "data-field-row": name }, fieldForm(s, name)) });
         return;
       }
       entries.push({
         id: name,
-        key: JSON.stringify([cents, mode, shown || "", extra ? extra.key : null, cls || ""]),
-        build: () => el("div", { class: "trow" + (cls ? " " + cls : ""), "data-field-row": name }, [
-          el("dt", null, [shown || label].concat(extra ? extra.nodes() : [])),
-          el("dd", null, amount(mode, name, key, cents, name === "printedTotal" ? "Printed total" : label)),
-        ]),
+        key: JSON.stringify([cents, mode, shown]),
+        build: () => el("div", { class: "trow", "data-field-row": name }, [el("dt", null, shown), el("dd", null, amount(mode, name, key, cents, label))]),
       });
     };
     row("subtotal", [r.billSubtotalCents], "", () => [el("dt", null, "Subtotal"), el("dd", { "data-total": "subtotal" }, money(r.billSubtotalCents))]);
     // The payer sees it at $0.00 too, since that row is where they add one.
-    if (s.discountCents !== 0 || mode === "all") field("discount", "discount", -s.discountCents, "Discount", { shown: withPercent("Discount", s.discountCents, r.billSubtotalCents) });
+    if (s.discountCents !== 0 || mode === "all") field("discount", "discount", -s.discountCents, "Discount", withPercent("Discount", s.discountCents, r.billSubtotalCents));
     // Tax is charged on what's left after the discount, so that is the base
     // a diner would check their local rate against.
-    field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents) });
-    if (s.viewerIsPayer && s.status === "draft") {
-      const cls = "receipt-row " + (s.reconciles.ok ? "is-ok" : "is-off");
-      field("printedTotal", "printed", s.printedTotalCents, "Receipt",
-        { extra: { key: JSON.stringify(s.reconciles), nodes: () => [" ", receiptMark(s)] }, cls });
-      const node = entries[entries.length - 1];
-      const build = node.build;
-      node.build = () => {
-        const built = build();
-        built.setAttribute("data-reconcile", "");
-        return built;
-      };
-    }
-    field("tip", "tip", s.tipCents, "Tip", { shown: withPercent("Tip", s.tipCents, r.billSubtotalCents) });
+    field("tax", "tax", s.taxCents, "Tax", withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents));
+    field("tip", "tip", s.tipCents, "Tip", withPercent("Tip", s.tipCents, r.billSubtotalCents));
     row("total", [r.distributableCents], "grand", () => [el("dt", null, "Total"), el("dd", { "data-total": "total" }, money(r.distributableCents))]);
     if (r.unclaimedCents !== 0) {
       row("unclaimed", [r.unclaimedCents], "short", () => [
-        el("dt", null, [el("span", { class: "dash-ring", "aria-hidden": "true" }), "Unclaimed"]),
+        el("dt", null, [icon("cloud", "cloud"), "Unclaimed"]),
         el("dd", { "data-total": "unclaimed" }, money(r.unclaimedCents)),
       ]);
     }
@@ -655,52 +639,34 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
-  // ---- the bar ------------------------------------------------------------
+  // ---- the footer ---------------------------------------------------------
 
-  // Mirrors claimers in page.ts, plus whoever the payer picked from a guest's
-  // sheet, so the person the ticks belong to always has a chip.
-  function claimerIds(v) {
-    const ids = [v.s.viewer].concat(guestsOf(v, v.s.viewer).map((g) => g.id));
-    if (claimFor && !ids.includes(claimFor)) ids.push(claimFor);
-    return ids;
-  }
-
-  function renderClaimers(v) {
-    const row = root.querySelector("[data-bar] > [data-claimers]");
+  // Mirrors owes in page.ts.
+  function renderOwes(v) {
+    const row = root.querySelector("[data-bar] > [data-owes]");
     if (!row) return;
-    const ids = editable(v.s) === "none" ? [] : claimerIds(v);
+    const ids = [v.s.viewer].concat(guestsOf(v, v.s.viewer).map((g) => g.id));
+    const pick = editable(v.s) !== "none" && ids.length > 1;
     const actor = claimFor || v.s.viewer;
-    row.hidden = ids.length < 2;
     const owed = (id) => (v.shares.get(id) ? v.shares.get(id).owedCents : 0);
-    keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id), owed(id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
-      el("button", { type: "button", class: "claimer", "data-claim-as": id, "aria-pressed": String(id === actor) }, [
-        av(v, id),
-        el("span", { class: "label" }, nameOf(v, id)),
-        el("span", { class: "chip-amt money" }, money(owed(id))),
-      ])));
-  }
-
-  function renderBar(v) {
-    renderClaimers(v);
-    const bar = root.querySelector("[data-bar] > .bar-in");
-    if (!bar) return;
-    const s = v.s;
-    const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-    const cents = s.viewerIsPayer ? s.payerCollectsCents : owedOf(v, s.viewer);
-    keyedInto(bar, JSON.stringify([cents, s.viewerIsPayer, s.participants, s.payerId, open]), () => [
-      el("span", { class: "owe" }, [
-        el("span", { class: "owe-label" }, s.viewerIsPayer ? "to collect" : "you owe"),
-        " ",
-        el("span", { class: "amount money", "data-you-owed": true }, money(cents)),
-      ]),
-      icon("arrow", "arrow"),
-      av(v, s.payerId, "payer"),
-      el("span", { class: "grow" }),
-      open > 0
-        ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " left to claim" },
-          [el("span", { class: "dash-ring", "aria-hidden": "true" }), open + " left"])
-        : null,
-    ]);
+    if (pick) {
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", "Claim for");
+    } else {
+      row.removeAttribute("role");
+      row.removeAttribute("aria-label");
+    }
+    keyedInto(row, JSON.stringify([ids.map((id) => [id, nameOf(v, id), owed(id)]), pick, actor]), () => ids.map((id) => {
+      const mark = pick ? el("span", { class: "mark", "aria-hidden": "true" }, icon("check")) : null;
+      const cls = id === v.s.viewer ? "owe" : "owe is-guest";
+      const inner = [el("span", { class: "owe-av" }, [av(v, id), mark]), el("span", { class: "owe-text" }, [
+        el("span", { class: "owe-label" }, id === v.s.viewer ? "You owe" : nameOf(v, id) + " owes"),
+        el("span", { class: "amount money", "data-you-owed": id === v.s.viewer ? true : null }, money(owed(id))),
+      ])];
+      return pick
+        ? el("button", { type: "button", class: cls, "data-claim-as": id, "aria-pressed": String(id === actor) }, inner)
+        : el("div", { class: cls }, inner);
+    }));
   }
 
   // ---- the confirmed bill -------------------------------------------------
@@ -828,8 +794,8 @@ export const CLIENT_SCRIPT = String.raw`
   let slamming = false;
   const SLAM_MS = 1000;
 
-  function slam() {
-    const mark = el("div", { class: "slam", "aria-hidden": "true" }, el("span", { class: "stamp" }, "付讫"));
+  function slam(seal) {
+    const mark = el("div", { class: "slam", "aria-hidden": "true" }, seal);
     document.body.appendChild(mark);
     setTimeout(() => {
       mark.remove();
@@ -914,11 +880,30 @@ export const CLIENT_SCRIPT = String.raw`
     return s.items.filter((i) => i.claimedBy.length === 0);
   }
 
+  function editingPrinted() {
+    return Boolean(editing && editing.kind === "field" && editing.field === "printedTotal");
+  }
+
+  // Mirrors printedRow in page.ts. The form is kept across redraws of the
+  // card, like a sheet's, so a poll never wipes what is being typed.
+  function printedNodes(v) {
+    if (editingPrinted()) {
+      if (!editing.form) editing.form = fieldForm(v.s, "printedTotal");
+      return el("div", { class: "trow is-editing", "data-field-row": "printedTotal" }, editing.form);
+    }
+    if (v.s.reconciles.ok) return null;
+    return el("div", { class: "trow", "data-field-row": "printedTotal" }, [
+      el("dt", null, "Receipt total"),
+      el("dd", null, amount(editable(v.s), "printedTotal", "printed", v.s.printedTotalCents, "Receipt total")),
+    ]);
+  }
+
   function confirmNodes(v) {
     const blocked = confirmBlock(v.s);
     const open = openLines(v.s).length;
     const why = blocked || (open === 0 ? "" : open === 1 ? "1 line has nobody on it." : open + " lines have nobody on them.");
     return el("div", { class: "confirm-area" }, [
+      printedNodes(v),
       el("button", {
         type: "button",
         class: "confirm-btn",
@@ -926,8 +911,13 @@ export const CLIENT_SCRIPT = String.raw`
         disabled: Boolean(blocked) || stopped,
         "aria-busy": busy.has("confirm") ? "true" : null,
         "aria-describedby": why ? "confirm-why" : null,
-      }, [el("span", { class: "brush", "aria-hidden": "true" }, "定"), "Confirm"]),
-      why ? el("p", { class: "why" + (blocked ? "" : " is-hint"), id: "confirm-why" }, why) : null,
+      }, [
+        el("span", { class: "seal", "aria-hidden": "true" }, "定"),
+        el("span", { class: "confirm-text" }, [
+          el("span", { class: "confirm-word" }, "Confirm"),
+          why ? el("span", { class: "why" + (blocked ? "" : " is-hint"), id: "confirm-why", "aria-hidden": "true" }, why) : null,
+        ]),
+      ]),
     ]);
   }
 
@@ -946,7 +936,8 @@ export const CLIENT_SCRIPT = String.raw`
         s.status === "confirmed"
           ? act({ "data-reopen": true, "aria-busy": busy.has("reopen") ? "true" : null }, "receipt", "Edit the bill", "Paying pauses until you confirm again.")
           : null,
-        act({ "data-delete-bill": true, "aria-busy": busy.has("delete") ? "true" : null }, "trash", "Delete this bill", null, "danger"),
+        act({ "data-delete-bill": true, "aria-busy": busy.has("delete") ? "true" : null }, "basket",
+          armed.has("delete-bill") ? "Tap again to delete this bill" : "Delete this bill", null, armed.has("delete-bill") ? "is-armed" : ""),
       ];
     }
     return [act({ "data-ask": "wrong", "aria-haspopup": "dialog" }, "warn", "Something's wrong", "Paying pauses until " + nameOf(v, s.payerId) + " fixes it.", "is-warn")];
@@ -956,7 +947,7 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-actions]");
     if (!card) return;
     const s = v.s;
-    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), stopped]), () => actionNodes(v));
+    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
   }
 
   // Mirrors paidBy on the server.
@@ -1026,9 +1017,10 @@ export const CLIENT_SCRIPT = String.raw`
       dialog = el("dialog", { class: "sheet", "data-sheet": true, "aria-labelledby": "sheet-title" });
       dialog.addEventListener("close", () => {
         sheet = null;
-        armed.clear();
+        for (const key of Array.from(armed)) if (key !== "delete-bill") armed.delete(key);
         dialog.replaceChildren();
         dialog._key = undefined;
+        render();
         if (dialog._return && document.contains(dialog._return)) dialog._return.focus();
       });
       root.append(dialog);
@@ -1062,7 +1054,7 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
   }
 
-  function linesOf(v, id, withTaxTip) {
+  function linesOf(v, id) {
     const rows = v.s.items.filter((i) => i.claimedBy.includes(id)).map((item) => {
       const n = item.claimedBy.length;
       return el("li", null, [
@@ -1071,7 +1063,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(withTaxTip ? taxTipNodes(v, id) : []) : [el("li", { class: "empty" }, el("span", { class: "dash-ring", "aria-hidden": "true" }))]);
+    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(taxTipNodes(v, id)) : [el("li", { class: "empty" }, "Nothing claimed yet.")]);
   }
 
   function forgiveButton(v, p) {
@@ -1098,6 +1090,7 @@ export const CLIENT_SCRIPT = String.raw`
     const manage = canManageGuest(v, g) && !stopped;
     const share = v.shares.get(g.id);
     const renaming = sheet && sheet.renaming === g.id;
+    const doomed = armed.has("remove:" + g.id);
     const head = renaming
       ? el("form", { class: "guest-form", "data-rename": g.id, novalidate: true }, [
           av(v, g.id),
@@ -1110,25 +1103,18 @@ export const CLIENT_SCRIPT = String.raw`
           el("button", { type: "submit", class: "icon-btn go", "aria-label": "Save" }, icon("check")),
           el("p", { class: "field-msg", role: "status" }),
         ])
-      : el("div", { class: "sheet-head" }, [
+      : el("div", { class: "sheet-head" + (doomed ? " is-struck" : "") }, [
           av(v, g.id),
           el("h3", null, draft && manage
-            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", null, g.displayName), icon("brush", "brush")])
-            : g.displayName),
+            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", { class: "struck" }, g.displayName), icon("brush", "brush")])
+            : el("span", { class: "struck" }, g.displayName)),
           guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
         ]);
     const actions = [];
     if (draft && manage) {
-      actions.push(
-        el("button", { type: "button", class: "chip-btn", "data-claim-for": g.id, "aria-label": "Claim lines for " + g.displayName }, [icon("check"), "Claim"]),
-        el("button", {
-          type: "button",
-          class: "icon-btn danger" + (armed.has("remove:" + g.id) ? " is-armed" : ""),
-          "data-remove-guest": g.id,
-          "aria-label": armed.has("remove:" + g.id) ? "Tap again to remove " + g.displayName : "Remove " + g.displayName,
-        }, icon("trash")),
-      );
+      actions.push(el("button", { type: "button", class: "chip-btn" + (doomed ? " is-armed" : ""), "data-remove-guest": g.id },
+        [icon("basket"), doomed ? "Tap again to remove" : "Remove", el("span", { class: "target" }, g.displayName)]));
     }
     // A guest already paid, directly or with their member, has nothing left
     // to mark, so the chip stays only to take back the viewer's own mark.
@@ -1142,7 +1128,7 @@ export const CLIENT_SCRIPT = String.raw`
       }, [el("span", { "aria-hidden": "true", style: "font-family: var(--brush)" }, "付讫"), "Paid"]));
     }
     if (confirmed && v.s.viewerIsPayer) actions.push(forgiveButton(v, g));
-    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id, true)]
+    return el("div", { class: "sheet-guest" }, [head, linesOf(v, g.id)]
       .concat(actions.filter(Boolean).length > 0 ? [el("div", { class: "sheet-actions" }, actions.filter(Boolean))] : []));
   }
 
@@ -1150,7 +1136,6 @@ export const CLIENT_SCRIPT = String.raw`
     const p = v.people.get(id);
     if (!p) return null;
     const guests = guestsOf(v, id);
-    const forgiven = forgivenWhole(v, id);
     // With guests, each block heads its own lines, so this one says the
     // person's own share and the guests' blocks say theirs. Together they
     // make the amount on the tile.
@@ -1159,10 +1144,9 @@ export const CLIENT_SCRIPT = String.raw`
     const nodes = [
       sheetHead(v, id, p.displayName, money(head), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
     ];
-    // With guests, a food, tax and tip line would mix theirs in. Each block of
-    // lines ends in its own tax and tip instead, so it adds up to that amount.
-    if (!forgiven && guests.length === 0) nodes.push.apply(nodes, splitNodes(counted(v, id)).slice(1));
-    nodes.push(linesOf(v, id, guests.length > 0));
+    // Each block of lines ends in its own discount, tax and tip rows, figures
+    // on the right like the lines above, so it adds up to its heading.
+    nodes.push(linesOf(v, id));
     if (v.s.status === "confirmed" && v.s.viewerIsPayer) {
       const forgive = forgiveButton(v, p);
       if (forgive) nodes.push(el("div", { class: "sheet-actions" }, forgive));
@@ -1211,11 +1195,12 @@ export const CLIENT_SCRIPT = String.raw`
       item ? el("p", { class: "addons-head", "data-addons-head": true }, "Add-ons") : null,
       ...addons.map((a) => addonRow(a)),
       item ? el("button", { type: "button", class: "add-row", "data-add-addon": true }, [icon("plus"), "Add-on"]) : null,
+      item ? el("p", { class: "dish-sum", "data-dish-sum": true }, [el("span", null, "Total"), el("span", { class: "money", "data-dish-total": true })]) : null,
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
-        item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete " + item.label }, icon("trash")) : null,
+        item ? deleteLineButton(item, false) : null,
         item ? null : el("button", { type: "button", class: "icon-btn", "data-cancel": true, "aria-label": "Cancel" }, icon("close")),
-        el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
+        el("button", { type: "submit", class: "chip-btn go" }, [icon("check"), item ? "Save" : "Add line"]),
       ]),
     ]);
     form._addons = JSON.stringify(addons.map((a) => [a.label, a.cents]));
@@ -1226,15 +1211,24 @@ export const CLIENT_SCRIPT = String.raw`
     return form;
   }
 
+  // The form outlives redraws of its sheet, so arming swaps this button in
+  // place rather than waiting for a render to rebuild it.
+  function deleteLineButton(item, doomed) {
+    return el("button", { type: "button", class: "chip-btn" + (doomed ? " is-armed" : ""), "data-delete-line": item.id, "aria-label": (doomed ? "Tap again to delete " : "Delete ") + item.label },
+      [icon("basket"), doomed ? "Tap again to delete" : "Delete line"]);
+  }
+
   function addonRow(addon) {
     const name = el("input", { class: "text-input", "data-addon-label": true, maxlength: MAX_ADDON_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Add-on", placeholder: "Add-on" });
     const price = el("input", { "data-addon-price": true, inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": addon.cents < 0 ? "Add-on money off" : "Add-on price", placeholder: "0.00" });
     name.value = addon.label;
     price.value = addon.cents === 0 ? "" : plain(Math.abs(addon.cents));
     return el("div", { class: "addon", "data-addon": true }, [
-      name,
+      el("span", { class: "addon-field" }, [
+        name,
+        el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
+      ]),
       moneyInput(price, addon.cents),
-      el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
     ]);
   }
 
@@ -1260,9 +1254,8 @@ export const CLIENT_SCRIPT = String.raw`
     form.querySelector("[data-base-label]").textContent = form.elements.price.dataset.off !== undefined ? "Money off" : rows > 0 ? "Base price" : "Price";
     form.querySelector("[data-addons-head]").hidden = rows === 0;
     form.querySelector("[data-add-addon]").hidden = rows >= MAX_ADDONS;
-    const dialog = form.closest("dialog");
-    const total = dialog ? dialog.querySelector("[data-dish-total]") : null;
-    if (total) total.textContent = money(dishCents(form));
+    form.querySelector("[data-dish-sum]").hidden = rows === 0;
+    form.querySelector("[data-dish-total]").textContent = money(dishCents(form));
   }
 
   function lineSheet(v, itemId) {
@@ -1270,9 +1263,8 @@ export const CLIENT_SCRIPT = String.raw`
     if (!item) return null;
     const people = membersFirst(v).reduce((all, p) => all.concat([p], guestsOf(v, p.id)), []);
     return [
-      el("div", { class: "sheet-head" }, [
-        el("h2", { id: "sheet-title" }, item.label),
-        el("span", { class: "money", "data-dish-total": true }, money(sheet.form ? dishCents(sheet.form) : item.cents)),
+      el("div", { class: "sheet-head" + (armed.has("line:" + item.id) ? " is-struck" : "") }, [
+        el("h2", { id: "sheet-title", class: "dish-title" }, el("span", { class: "struck" }, item.label)),
         el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
       ]),
       el("div", { class: "picker", role: "group", "aria-label": "Who had " + item.label }, people.map((p) => pickNode(v, item, p))),
@@ -1324,7 +1316,8 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   // Each ask says what happens in a plain sentence, then does it on a
-  // second, deliberate tap. Delete and undo skip this: they act on one tap.
+  // second, deliberate tap. Deletes skip the sheet and arm in place instead,
+  // and undo acts on one tap.
   function askSheet(v) {
     const s = v.s;
     const payer = nameOf(v, s.payerId);
@@ -1395,7 +1388,7 @@ export const CLIENT_SCRIPT = String.raw`
     renderHeader(v);
     renderItems(v);
     renderPeople(v);
-    renderBar(v);
+    renderOwes(v);
     renderHero(v);
     renderMine(v);
     renderDrill(v);
@@ -1434,8 +1427,11 @@ export const CLIENT_SCRIPT = String.raw`
     }
     if (!moved || moved.bill !== state.billId || moved.to !== state.status || moved.from === moved.to) return;
     if (state.status === "confirmed") {
+      // The big 定 comes down on the page first, then the small one is left
+      // in the header where it landed.
+      slam(el("span", { class: "seal" }, "定"));
       const seal = root.querySelector("[data-status-label] .seal");
-      if (seal) seal.classList.add("is-pressed");
+      if (seal) seal.classList.add("is-pressed", "is-after-slam");
       showNote("定 Confirmed", false);
     } else if (state.status === "draft") {
       showNote("Reopened", false);
@@ -1607,8 +1603,33 @@ export const CLIENT_SCRIPT = String.raw`
     if (button) button.focus();
   }
 
+  // Arms on the first tap and deletes on the second, like every delete on the
+  // page, with the dish's title struck through in between.
+  function armLine(form, item, doomed) {
+    const current = form.querySelector("[data-delete-line]");
+    const fresh = deleteLineButton(item, doomed);
+    const focused = document.activeElement === current;
+    current.replaceWith(fresh);
+    if (focused) fresh.focus();
+  }
+
   async function deleteLine(button) {
     const form = button.closest("form");
+    const item = state.items.find((i) => i.id === button.dataset.deleteLine);
+    if (!item) return;
+    const key = "line:" + item.id;
+    if (!armed.has(key)) {
+      armed.add(key);
+      armLine(form, item, true);
+      render();
+      setTimeout(() => {
+        if (!armed.delete(key)) return;
+        if (form.isConnected) armLine(form, item, false);
+        render();
+      }, ARM_MS);
+      return;
+    }
+    armed.delete(key);
     setBusy(form, true);
     const failure = await write("POST", "/item", { op: "delete", itemId: button.dataset.deleteLine });
     setBusy(form, false);
@@ -1675,20 +1696,12 @@ export const CLIENT_SCRIPT = String.raw`
     stopEdit();
   }
 
-  function jumpUnclaimed() {
-    const row = root.querySelector("li.item.is-unclaimed");
-    if (!row) return;
-    row.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
-    const target = row.querySelector("button");
-    if (target) target.focus({ preventScroll: true });
-  }
-
   function guestIds() {
     return new Set(state.participants.filter((p) => p.kind === "guest").map((p) => p.id));
   }
 
-  // A new guest goes straight into claiming: the bar turns to them and every
-  // line tapped is theirs until Done.
+  // A new guest goes straight into claiming: the footer turns to them and
+  // every line tapped is theirs until someone else there is picked.
   async function addGuest(form) {
     const msg = form.querySelector(".field-msg");
     const name = form.elements.name.value.trim();
@@ -1782,6 +1795,15 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   async function deleteBill() {
+    if (!armed.has("delete-bill")) {
+      armed.add("delete-bill");
+      render();
+      setTimeout(() => {
+        if (armed.delete("delete-bill")) render();
+      }, ARM_MS);
+      return;
+    }
+    armed.delete("delete-bill");
     const paid = state.payments.reduce((n, p) => n + p.cents, 0);
     // The answer is not a bill to draw, so the page asks for itself again
     // and the server says it is gone.
@@ -1838,7 +1860,7 @@ export const CLIENT_SCRIPT = String.raw`
       render();
       return;
     }
-    slam();
+    slam(el("span", { class: "stamp" }, "付讫"));
   }
 
   function confirmBill() {
@@ -1884,7 +1906,6 @@ export const CLIENT_SCRIPT = String.raw`
     if (target.closest("[data-close-sheet]")) return closeSheet();
     const person = target.closest("[data-person]");
     if (person) return openSheet({ kind: "person", id: person.dataset.person }, person);
-    if (target.closest("[data-jump-unclaimed]")) return jumpUnclaimed();
     if (stopped) return;
     const claim = target.closest("[data-claim]");
     if (claim) return onClaim(claim);
@@ -1945,17 +1966,6 @@ export const CLIENT_SCRIPT = String.raw`
       const input = root.querySelector("form[data-guest-form] input");
       if (input) input.focus();
       return;
-    }
-    const claimFrom = target.closest("[data-claim-for]");
-    if (claimFrom) {
-      claimFor = claimFrom.dataset.claimFor;
-      // Claiming happens on the lines, so that is where to land, not back
-      // on the tile the sheet opened from.
-      const dialog = root.querySelector("dialog[data-sheet]");
-      if (dialog) dialog._return = null;
-      closeSheet();
-      render();
-      return focusLines();
     }
     const as = target.closest("[data-claim-as]");
     if (as) {
