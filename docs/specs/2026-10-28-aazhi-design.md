@@ -285,7 +285,7 @@ ordinary line items, positive or negative, prorated like anything else.
 
 ### Confirming
 
-The payer taps **Confirm**. Two gates:
+The payer taps **Confirm**. Three gates:
 
 - **The arithmetic must reconcile** (above). Hard gate.
 - **Every line must be claimed.** Soft gate: Confirm stays available with
@@ -293,6 +293,12 @@ The payer taps **Confirm**. Two gates:
   among everyone who claimed anything. Requiring every diner to respond
   would let one unresponsive person stall the bill, which is an
   anti-goal.
+- **Someone must be there to split with.** Hard gate: another Discord
+  member, besides the payer, needs a share above $0. Guests alone don't
+  count, and the page says "Add someone to split with." The server enforces
+  this at Confirm, not at `/split`, because nobody has joined the bill yet
+  when `/split` runs. Bills confirmed before this gate stay as they are. If
+  one is reopened, it has to pass the gate to be confirmed again.
 
 On confirm, shares are computed and frozen, the message becomes the owe
 card, and pay controls appear.
@@ -453,8 +459,9 @@ server: that recap is where a group sees only itself.
 Guests appear in no statistic, because no guest record survives its bill.
 
 A person counts on a bill only if their share is above $0 and someone else's
-is too. So someone who only tapped Open the split counts for nothing, and a
-one-person bill counts on no statistic.
+is too. So someone who only tapped Open the split counts for nothing. A new
+bill can't be confirmed alone, but older one-person bills exist, and they
+count on no statistic.
 
 One receipt split in two servers counts twice, as two outings. That gap is
 known and has no fix yet.

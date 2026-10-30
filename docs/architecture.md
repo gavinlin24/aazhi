@@ -94,8 +94,9 @@ stored in D1, since Worker instances share no memory.
 
 **6. Confirming.** The payer taps Confirm on the page (`POST
 /b/:billId/confirm`). `confirmBill` (`src/db/bills.ts`) requires the payer, a
-current revision, a matching total and every line claimed. Unclaimed lines
-can instead be split evenly between everyone who claimed something.
+current revision, a matching total, every line claimed and another Discord
+member with a share above $0. Unclaimed lines can instead be split evenly between
+everyone who claimed something.
 `src/money/split.ts` splits each line between its claimants and gives the
 whole-bill discount, tax and tip in proportion to subtotal.
 Largest-remainder rounding (round everyone
@@ -223,10 +224,18 @@ This applies to every stat, including Went with and You and Marcus. Tapping Open
 the split puts anyone on a bill, so a share is what shows they were there. A
 guest with a share is someone else. A forgiven share still counts as being there.
 
-A one-person bill counts on no stat. It can still be made and confirmed, and it
-keeps its own bill page. The Venmo sheet at Confirm is skipped when nobody else
-is on the bill, since nobody would need the button. The rule is one clause in
-`src/db/stats.ts`, so a later kind of bill made to count alone can be let through.
+A new bill can't reach this alone. Confirm is refused until another Discord
+member has a share above $0. A guest doesn't satisfy that, since a guest isn't
+on Discord to settle up. The check runs on the server in
+`confirmBill`, and the page blocks the button with the same rule. It sits at
+Confirm rather than `/split` because nobody else has joined a bill when `/split`
+runs: people join afterward, through Open the split.
+
+Bills confirmed before that rule stay as they are, so the stats rule above still
+has work to do. A one-person bill counts on no stat. A bill with only a guest
+beside the payer still counts, which is why a guest is "someone else" there. The
+rule is one clause in `src/db/stats.ts`, so a later kind of bill made to count
+alone can be let through.
 
 Spent counts at confirm so that not paying can't lower a total, and a past
 month never changes later. "Hosted" means the payer. The word has nothing to do
