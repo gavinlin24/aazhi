@@ -128,9 +128,24 @@ a { color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-/* One look for "tap to change": a brush after the value. Read-only values
-   carry none. */
-.ic.brush { width: 21px; height: 21px; color: var(--muted); stroke-width: 1.5; }
+/* One look for "tap to change": a brush in a small tinted button after the
+   value. Read-only values carry none. The tap target is the whole value
+   around it, so the circle only has to read as a button, and the negative
+   margin keeps it from making its line taller. */
+.ic.brush {
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  margin: -4px 0;
+  padding: 5px;
+  border: 1px solid var(--ring);
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--ink);
+  stroke-width: 1.5;
+}
+button:active .ic.brush { background: var(--line); }
+@media (hover: hover) { button:hover .ic.brush { border-color: var(--ink); } }
 .money, .item-price, .totals dd { font-variant-numeric: tabular-nums lining-nums; }
 .page {
   max-width: 480px;
@@ -182,7 +197,7 @@ button.payer-chip {
   cursor: pointer;
 }
 /* Undoes the coin's size and colour, which the chip's icon rule gives every icon in it. */
-button.payer-chip .brush { width: 21px; height: 21px; color: var(--muted); }
+button.payer-chip .brush { width: 30px; height: 30px; color: var(--ink); }
 
 .toast {
   position: fixed;
@@ -209,11 +224,12 @@ button.payer-chip .brush { width: 21px; height: 21px; color: var(--muted); }
 /* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
 .items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
-/* The figures' right edge. Where the payer can change them, it moves in so
-   the brushes hang in the margin and every figure, brush or not, still lines
-   up on one edge. */
-.receipt { --end: 14px; }
-.receipt.is-editable { --end: 39px; }
+/* --edge is the inset of the tick circles from the card, and the right side
+   mirrors it. Where the payer can change values, the figures' edge (--end)
+   moves in by --hang so the brushes hang in the margin and every figure,
+   brush or not, still lines up on one edge. --hang is a brush and its gap. */
+.receipt { --edge: 13px; --hang: 0px; --end: calc(var(--edge) + var(--hang)); }
+.receipt.is-editable { --hang: 36px; }
 .row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -240,7 +256,7 @@ button.row:active { background: var(--fill); }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
-.has-picker .row .item-price, .amt { display: inline-flex; align-items: center; gap: 4px; margin-right: -25px; }
+.has-picker .row .item-price, .amt { display: inline-flex; align-items: center; gap: 6px; margin-right: calc(0px - var(--hang)); }
 .tick-btn {
   position: absolute;
   z-index: 1;
@@ -309,7 +325,7 @@ button.row:active { background: var(--fill); }
 .av.is-guest { border: 1px dashed var(--av-ink); }
 
 /* Spans from the ticks to the brushes, the full width a line can take. */
-.add-line { padding: 8px 14px 4px 13px; }
+.add-line { padding: 8px var(--edge) 4px; }
 .add-row {
   display: flex;
   align-items: center;
@@ -324,9 +340,9 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-/* Labels start on the ticks, like the add-a-line box, so the tick column
-   is not left empty beside them. */
-.totals { margin: 8px 0 0; padding: 0 var(--end) 10px 13px; }
+/* The labels sit as far in from the left as the figures sit from the right,
+   counted from the last digit, not the brush. */
+.totals { margin: 8px 0 0; padding: 0 var(--end) 10px; }
 .trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
 .trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
 .trow dd { margin: 0; white-space: nowrap; }
@@ -347,12 +363,10 @@ button.row:active { background: var(--fill); }
 .receipt-row.is-ok .mark { color: var(--ok); }
 .receipt-row.is-off .mark { color: var(--warn); font-weight: 600; }
 .receipt-row .mark .ic { width: 18px; height: 18px; }
-/* A ledger's total: one rule above, a double rule below. The rules reach
-   into the brush gutter to span the same width as the add-a-line box, and
-   the padding keeps the figure in the figure column. */
+/* A ledger's total: one rule above, a double rule below. */
 .grand {
-  margin: 6px calc(14px - var(--end)) 2px 0;
-  padding: 4px calc(var(--end) - 14px) 4px 0;
+  margin: 6px 0 2px;
+  padding: 4px 0;
   border-top: 1px solid var(--rule-strong);
   border-bottom: 3px double var(--rule-strong);
   font-size: 19px;
@@ -415,9 +429,9 @@ button.row:active { background: var(--fill); }
 .field-msg { flex-basis: 100%; color: var(--warn); font-size: 15px; }
 .field-msg:empty { display: none; }
 .field-msg.is-hint { color: var(--muted); }
-/* The tip editor needs the card's full width at 390px, so it reaches into
-   the gutter the figures leave for the brushes. */
-.trow.is-editing { flex-wrap: wrap; margin-right: calc(14px - var(--end)); }
+/* The tip editor needs the card's full width at 390px, so it reaches out to
+   the ticks and the brushes. */
+.trow.is-editing { flex-wrap: wrap; margin: 0 calc(var(--edge) - var(--end)); }
 
 /* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
