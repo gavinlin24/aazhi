@@ -937,10 +937,9 @@ export const CLIENT_SCRIPT = String.raw`
     const s = v.s;
     if (!v.people.has(s.viewer)) return null;
     const saved = s.viewerVenmo;
-    const ask = s.viewerIsPayer && s.status === "draft" && !saved;
-    return act({ "data-venmo": true, "aria-haspopup": "dialog" }, "coin",
-      ask ? "How should friends pay you back?" : "Your Venmo",
-      ask ? "Add your Venmo." : saved ? "@" + saved : "Add it so friends can pay you back.", "", true);
+    if (s.viewerIsPayer && s.status === "draft" && !saved) return null;
+    return act({ "data-venmo": true, "aria-haspopup": "dialog" }, "coin", "Your Venmo",
+      saved ? "@" + saved : "Add it so friends can pay you back.", "", true);
   }
 
   function actionNodes(v) {

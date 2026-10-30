@@ -546,13 +546,17 @@ describe("renderPage", () => {
     expect(await select(page("zoe"), "[data-actions]")).toEqual([]);
   });
 
-  it("asks the payer how friends should pay them back, above Confirm, until they say", async () => {
-    const asked = page("gavin");
-    expect(await textOf(asked, "[data-actions] > [data-venmo]")).toBe("How should friends pay you back?Add your Venmo.");
-    expect((await select(asked, "[data-actions] > *")).map((node) => node.attrs["class"])).toEqual(["act", "confirm-area", "act"]);
+  it("leaves the Venmo row off a payer's draft until they have one, since Confirm asks them", async () => {
+    const unset = page("gavin");
+    expect(await select(unset, "[data-venmo]")).toEqual([]);
+    expect((await select(unset, "[data-actions] > *")).map((node) => node.attrs["class"])).toEqual(["confirm-area", "act"]);
 
     const saved = renderPage(bill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { viewerVenmo: "gavin-lin" }, NOW);
     expect(await textOf(saved, "[data-venmo]")).toBe("Your Venmo@gavin-lin");
+
+    const confirmed = { ...bill, status: "confirmed" as const, confirmedAt: "2026-10-28T22:00:00.000Z" };
+    const after = renderPage(confirmed, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", {}, NOW);
+    expect(await textOf(after, "[data-venmo]")).toBe("Your VenmoAdd it so friends can pay you back.");
   });
 
   it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {

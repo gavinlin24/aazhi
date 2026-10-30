@@ -1784,16 +1784,15 @@ function act(attrs: string, iconName: string, title: string, sub: string | null,
     `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span>${chev ? icon("chev") : ""}</button>`;
 }
 
-// Mirrors venmoAct in the client. The payer is asked on their own draft in the
-// words of the question; everywhere else it is just a setting.
+// Mirrors venmoAct in the client. A payer without a Venmo on their own draft
+// gets no row: the sheet at Confirm is the one place that asks them.
 function venmoAct(v: View): string {
   const s = v.s;
   if (!v.onBill) return "";
   const saved = s.viewerVenmo;
-  const ask = s.viewerIsPayer && v.bill.status === "draft" && !saved;
-  return act('data-venmo aria-haspopup="dialog"', "coin",
-    ask ? "How should friends pay you back?" : "Your Venmo",
-    ask ? "Add your Venmo." : saved ? `@${saved}` : "Add it so friends can pay you back.", "", true);
+  if (s.viewerIsPayer && v.bill.status === "draft" && !saved) return "";
+  return act('data-venmo aria-haspopup="dialog"', "coin", "Your Venmo",
+    saved ? `@${saved}` : "Add it so friends can pay you back.", "", true);
 }
 
 // The payer confirms, reopens to fix, and deletes. Anyone else on a
