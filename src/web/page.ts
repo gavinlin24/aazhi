@@ -997,12 +997,11 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .payments { margin-top: 12px; padding: 0 var(--edge) 4px; }
 .payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .payments ul { list-style: none; margin: 0; padding: 0; }
-.payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
+.payments li { display: flex; align-items: center; gap: 8px; min-height: 56px; border-bottom: 1px solid var(--rule); }
 .payments li:last-child { border-bottom: 0; }
 .payments .av { --s: 30px; }
 .payments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.payments .stamp { margin-right: 4px; }
-.payments .chip-btn { padding: 0 14px; font-size: 15px; }
+.payments .chip-btn { flex: none; justify-content: center; width: 96px; padding: 0 8px; font-size: 15px; }
 
 .back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -6px 0 6px -8px; padding: 0 8px; color: var(--muted); text-decoration: none; }
 
@@ -1841,18 +1840,35 @@ function paidBy(v: View): PaidBy[] {
   });
 }
 
+// Whoever still has something left to pay the payer: the people the payer can
+// mark paid when the money reaches them some other way.
+function unpaidBy(v: View): PaidBy[] {
+  return Object.keys(v.s.owing).flatMap((id) => {
+    const left = leftOf(v, id);
+    return id !== v.bill.payerId && left > 0 ? [{ id, cents: left }] : [];
+  });
+}
+
+// The stamp comes before the figure and the chips share a width, so the
+// amounts stay on one edge whichever state a row is in. Who still owes leads.
 function paymentRows(v: View): string {
-  const rows = paidBy(v).map((r) => {
+  const unpaid = unpaidBy(v).map((r) => {
     const name = escapeHtml(nameOf(v, r.id));
     return `<li>${av(v, r.id)}<span class="name">${name}</span><span class="money">${formatCents(r.cents)}</span>` +
-      `<span class="stamp" role="img" aria-label="Paid">付讫</span>` +
+      `<button type="button" class="chip-btn" data-mark-paid="${escapeHtml(r.id)}" aria-label="Mark ${name} paid">Mark paid</button></li>`;
+  });
+  const paid = paidBy(v).map((r) => {
+    const name = escapeHtml(nameOf(v, r.id));
+    return `<li>${av(v, r.id)}<span class="name">${name}</span><span class="stamp" role="img" aria-label="Paid">付讫</span>` +
+      `<span class="money">${formatCents(r.cents)}</span>` +
       `<button type="button" class="chip-btn" data-undo-paid="${escapeHtml(r.id)}" aria-label="Undo ${name}'s payment">Undo</button></li>`;
   });
+  const rows = [...unpaid, ...paid];
   return rows.length > 0 ? `<h2>Payments</h2><ul>${rows.join("")}</ul>` : "";
 }
 
-// Always drawn for the payer of a confirmed bill, hidden while empty, so the
-// first payment has somewhere to appear without a reload.
+// Always drawn for the payer of a confirmed bill, hidden while empty, so a
+// row has somewhere to appear without a reload.
 function payments(v: View): string {
   if (!v.s.viewerIsPayer || v.bill.status !== "confirmed") return "";
   const rows = paymentRows(v);

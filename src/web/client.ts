@@ -986,35 +986,63 @@ export const CLIENT_SCRIPT = String.raw`
     });
   }
 
-  function paymentNodes(rows, v) {
-    if (rows.length === 0) return [];
+  // Mirrors unpaidBy on the server.
+  function unpaidBy(v) {
+    return Object.keys(v.s.owing).flatMap((id) => {
+      const left = leftOf(v, id);
+      return id !== v.s.payerId && left > 0 ? [{ id, cents: left }] : [];
+    });
+  }
+
+  function unpaidNode(r, v) {
+    const name = nameOf(v, r.id);
+    const doomed = armed.has("mark:" + r.id);
+    return el("li", null, [
+      av(v, r.id),
+      el("span", { class: "name" }, name),
+      el("span", { class: "money" }, money(r.cents)),
+      el("button", {
+        type: "button",
+        class: "chip-btn" + (doomed ? " is-armed" : ""),
+        "data-mark-paid": r.id,
+        "aria-busy": busy.has("mark:" + r.id) ? "true" : null,
+        "aria-label": (doomed ? "Tap again to mark " : "Mark ") + name + " paid",
+      }, doomed ? "Tap again" : "Mark paid"),
+    ]);
+  }
+
+  function paidNode(r, v) {
+    const name = nameOf(v, r.id);
+    return el("li", null, [
+      av(v, r.id),
+      el("span", { class: "name" }, name),
+      el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫"),
+      el("span", { class: "money" }, money(r.cents)),
+      el("button", {
+        type: "button",
+        class: "chip-btn",
+        "data-undo-paid": r.id,
+        "aria-busy": busy.has("undo:" + r.id) ? "true" : null,
+        "aria-label": "Undo " + name + "'s payment",
+      }, "Undo"),
+    ]);
+  }
+
+  function paymentNodes(unpaid, paid, v) {
+    if (unpaid.length + paid.length === 0) return [];
     return [
       el("h2", null, "Payments"),
-      el("ul", null, rows.map((r) => {
-        const name = nameOf(v, r.id);
-        return el("li", null, [
-          av(v, r.id),
-          el("span", { class: "name" }, name),
-          el("span", { class: "money" }, money(r.cents)),
-          el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫"),
-          el("button", {
-            type: "button",
-            class: "chip-btn",
-            "data-undo-paid": r.id,
-            "aria-busy": busy.has("undo:" + r.id) ? "true" : null,
-            "aria-label": "Undo " + name + "'s payment",
-          }, "Undo"),
-        ]);
-      })),
+      el("ul", null, unpaid.map((r) => unpaidNode(r, v)).concat(paid.map((r) => paidNode(r, v)))),
     ];
   }
 
   function renderPayments(v) {
     const card = root.querySelector("[data-payments]");
     if (!card) return;
-    const rows = paidBy(v);
-    card.hidden = rows.length === 0;
-    keyedInto(card, JSON.stringify([rows, v.s.participants, Array.from(busy)]), () => paymentNodes(rows, v));
+    const paid = paidBy(v);
+    const unpaid = unpaidBy(v);
+    card.hidden = paid.length + unpaid.length === 0;
+    keyedInto(card, JSON.stringify([paid, unpaid, v.s.participants, Array.from(busy), Array.from(armed)]), () => paymentNodes(unpaid, paid, v));
   }
 
   // A confirmed bill has three views on one page: your share, the receipt
@@ -1913,8 +1941,26 @@ export const CLIENT_SCRIPT = String.raw`
     const id = button.dataset.undoPaid;
     if (!(await toggle("undo:" + id, "DELETE", "/paid/" + encodeURIComponent(id)))) return;
     showNote("Payment undone", false);
-    // The row went with the payment, the button included.
-    const next = root.querySelector("[data-payments] [data-undo-paid]");
+    // The row moved up with the payment gone, its button replaced.
+    const next = root.querySelector('[data-payments] [data-mark-paid="' + CSS.escape(id) + '"]') || root.querySelector("[data-payments] [data-undo-paid]");
+    if (next) next.focus();
+  }
+
+  // Each one tells the channel, so a slip of the thumb gets a second tap to
+  // stop at. A guest the payer added has a mark of their own on the server.
+  async function markPaid(button) {
+    const id = button.dataset.markPaid;
+    const key = "mark:" + id;
+    if (busy.has(key) || !secondTap(key)) return;
+    const v = model(view());
+    const left = leftOf(v, id);
+    if (left <= 0) return;
+    const guest = v.people.get(id).kind === "guest";
+    const done = await toggle(key, "POST", guest ? "/guest/" + encodeURIComponent(id) + "/paid" : "/paid/" + encodeURIComponent(id),
+      guest ? { paid: true } : { id: newId(), amount: plain(left) });
+    if (!done) return;
+    showNote(nameOf(v, id) + " marked paid", false);
+    const next = root.querySelector('[data-payments] [data-undo-paid="' + CSS.escape(id) + '"]');
     if (next) next.focus();
   }
 
@@ -2043,6 +2089,8 @@ export const CLIENT_SCRIPT = String.raw`
     if (target.closest("[data-pay-all]")) return payAll();
     const undo = target.closest("[data-undo-paid]");
     if (undo) return undoPaid(undo);
+    const mark = target.closest("[data-mark-paid]");
+    if (mark) return markPaid(mark);
     const confirm = target.closest("[data-confirm]");
     if (confirm) return confirm.disabled ? null : confirmBill();
     if (target.closest("[data-reopen]")) return toggle("reopen", "POST", "/reopen");

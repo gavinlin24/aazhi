@@ -247,11 +247,11 @@ Nobody is asked who the guest came with: the person who typed the name taps
 the guest onto what they had, can rename or remove them while the bill is a
 draft, and is who the guest settles up with. Their share is owed by that
 member, and the owe card names it that way ("Dani, including Sam: $71.40")
-so there is always a real account to collect from and no row in the ledger
-with nobody behind it. The payer can tidy up any guest too.
+so there is always a real account to collect from and no debt with nobody
+behind it. The payer can tidy up any guest too.
 
 A guest the payer adds simply owes the payer. They get their own row on the
-owe card ("Kim (guest)") and in the payer's `/ledger`, and the payer can
+owe card ("Kim (guest)") and in the payer's `/debts`, and the payer can
 forgive them like anyone else.
 
 Once the bill is confirmed, a guest can be marked paid in two ways, told
@@ -336,7 +336,8 @@ The payee taps to mark their own payment. This trusts the friend group,
 which is the right default here: the alternative, the payer confirming
 each payment individually, puts them back to doing bookkeeping, which is
 the problem this project exists to solve. The payer can undo any
-settlement.
+settlement, and can mark someone paid when cash changed hands at the table.
+The channel is told it was the payer who recorded it.
 
 Paid is yes or no. Tapping I paid records the whole remaining balance, and
 the payer's undo takes the whole of it back.

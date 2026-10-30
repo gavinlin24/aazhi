@@ -105,6 +105,16 @@ export function paymentNotice(bill: BillRow, participants: Participant[], who: P
   );
 }
 
+// The payer recording it says so, since the person named never touched it.
+export function markedPaidNotice(bill: BillRow, participants: Participant[], who: ParticipantId, cents: Cents, leftCents: Cents): string {
+  const name = nameOf(participants, who);
+  const after = leftCents > 0 ? `${name} has ${formatCents(leftCents)} left to pay.` : `${name} is all paid up.`;
+  return clip(
+    `${nameOf(participants, bill.payerId)} marked ${name} paid ${formatCents(cents)} for ${escapeMarkdown(billName(bill))}. ${after}`,
+    MAX_CONTENT,
+  );
+}
+
 // A guest's payment was toward what the member who added them owes, so the
 // balance told is that member's. `leftCents` is theirs, after the undo.
 export function undoNotice(

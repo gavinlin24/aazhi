@@ -894,7 +894,7 @@ describe("renderPage", () => {
       // directly is measured against their own share. Theo's two part
       // payments, from before paid was yes or no, don't cover his share.
       const rows = await select(html, "[data-payments] li");
-      expect(rows.map((r) => r.text)).toEqual([`JJess${money(jess)}付讫Undo`, `SSam${money(sam)}付讫Undo`]);
+      expect(rows.map((r) => r.text).filter((t) => t.endsWith("Undo"))).toEqual([`JJess付讫${money(jess)}Undo`, `SSam付讫${money(sam)}Undo`]);
       expect((await select(html, "[data-payments] [data-undo-paid]")).map((b) => [b.attrs["data-undo-paid"], b.attrs["aria-label"]])).toEqual([
         ["jess", "Undo Jess's payment"],
         ["guest-sam", "Undo Sam's payment"],
@@ -905,8 +905,18 @@ describe("renderPage", () => {
       // One tap does it: no sheet asks first.
       expect(await select(html, "[data-undo-paid][aria-haspopup], [data-delete-bill][aria-haspopup]")).toEqual([]);
 
-      // Drawn even before anyone pays, hidden, so the first payment has a place to land.
-      expect((await one(view("gavin"), "[data-payments]")).attrs).toHaveProperty("hidden");
+      // Who still owes leads, each with what is left. Theo's part payments come
+      // off his row. Sam answers through Dani, so has no row of Sam's own.
+      const marks = await select(html, "[data-payments] [data-mark-paid]");
+      expect(marks.map((b) => b.attrs["data-mark-paid"])).toEqual(["dani", "lena", "omar", "priya", "theo", "guest-kim"]);
+      expect(marks[0]!.attrs["aria-label"]).toBe("Mark Dani paid");
+      const all = await select(html, "[data-payments] li");
+      expect(all.at(-1)!.text).toContain("Undo");
+      expect(all[4]!.text).toContain(money(share("theo").owedCents - 300));
+
+      // Open from the first moment, since the payer may be handed cash at once.
+      expect((await one(view("gavin"), "[data-payments]")).attrs).not.toHaveProperty("hidden");
+      expect(await select(view("gavin"), "[data-payments] [data-undo-paid]")).toEqual([]);
       expect(stateOf(view("dani", { payments })).payments).toEqual([]);
     });
   });
