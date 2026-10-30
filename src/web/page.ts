@@ -791,11 +791,33 @@ button.tile:active { background: var(--fill); }
 .payments { margin-top: 12px; padding: 0 16px 4px; }
 .payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .payments ul { list-style: none; margin: 0; padding: 0; }
-.payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
-.payments li:last-child { border-bottom: 0; }
-.payments .av { --s: 30px; }
-.payments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.payments .chip-btn { padding: 0 14px; font-size: 15px; }
+.payments > ul > li { border-bottom: 1px solid var(--rule); }
+.payments > ul > li:last-child { border-bottom: 0; }
+.paid-by {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.paid-by .av { --s: 30px; }
+.paid-by .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paid-of { color: var(--muted); font-size: 15px; white-space: nowrap; }
+.paid-of .money:first-child { color: var(--ink); font-size: 17px; }
+.paid-by > .ic { width: 18px; height: 18px; color: var(--muted); transition: transform 150ms ease; }
+.paid-by[aria-expanded="true"] > .ic { transform: rotate(90deg); }
+/* Indented to the name, so each payment reads as part of the row above. */
+.payments .paid-list { margin-bottom: 8px; }
+.paid-list li { display: flex; align-items: center; gap: 10px; min-height: 48px; padding-left: 40px; }
+.paid-list .money { flex: 1; }
+.paid-list .chip-btn { padding: 0 14px; font-size: 15px; }
 
 .back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -6px 0 6px -8px; padding: 0 8px; color: var(--muted); text-decoration: none; }
 
@@ -1354,6 +1376,12 @@ function paidOf(done: number, total: number): string {
   return `<p class="legend"><span><span class="money">${formatCents(done)}</span> of <span class="money">${formatCents(total)}</span> paid</span></p>`;
 }
 
+// The bill's whole debt to the payer next to what has come in, so the big
+// number above reads as what is still out.
+function collectedOf(done: Cents, total: Cents): string {
+  return `<p class="legend"><span><span class="money">${formatCents(total)}</span> owed to you · <span class="money">${formatCents(done)}</span> paid</span></p>`;
+}
+
 function hero(v: View): string {
   const s = v.s;
   const arrow = icon("arrow", "arrow");
@@ -1365,7 +1393,7 @@ function hero(v: View): string {
 <div class="flow">${stack(v, debtors, 4)}${arrow}${av(v, s.viewer)}</div>
 <p class="hero-cap">to collect</p>
 <div class="collect"><p class="hero-amt money" data-you-owed>${formatCents(left)}</p>${pie(total - left, total)}</div>
-${paidOf(total - left, total)}
+${collectedOf(total - left, total)}
 </section>`;
   }
   // A guest who paid the payer directly is no longer part of what the viewer pays.
@@ -1407,19 +1435,21 @@ function mineList(v: View, id: ParticipantId): string {
 
 // Grouped the way the amount is broken down: yours, then each guest's. No
 // amount on the headings: a share carries tax and tip, so it would never
-// match the dishes under it. Alone, your lines need no heading.
+// match the dishes under it. A paid guest's stamp is on their row up top,
+// not here again. A diner alone needs no heading, since the card above is
+// their share. The payer's card above is what others owe, so their own
+// lines say whose they are.
 function mine(v: View): string {
   const own = mineList(v, v.s.viewer);
   const guests = guestsOf(v, v.s.viewer)
     .map((g) => {
       const list = mineList(v, g.id);
-      // These are the viewer's own guests, so either mark is theirs to see.
-      const paid = g.paidToPayer || g.paidToHost ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
-      return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}${paid}</p>${list}</div>` : "";
+      return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}</p>${list}</div>` : "";
     })
     .join("");
   if (!own && !guests) return "";
-  const yours = own && guests ? `<div class="mine-group"><p class="mine-guest">${av(v, v.s.viewer)}You</p>${own}</div>` : own;
+  const yours =
+    own && (guests || v.s.viewerIsPayer) ? `<div class="mine-group"><p class="mine-guest">${av(v, v.s.viewer)}You</p>${own}</div>` : own;
   return `<section class="card mine" data-mine aria-label="Your lines">${yours}${guests}</section>`;
 }
 
@@ -1430,7 +1460,7 @@ function drill(v: View): string {
   return `<nav class="card drill" aria-label="More">
 <a class="drill-row" href="#receipt" data-go="receipt">${icon("receipt")}<span class="grow">Total</span><span class="money">${formatCents(v.s.result.distributableCents)}</span>${icon("chev")}</a>
 <a class="drill-row" href="#people" data-go="people">${icon("people")}<span class="grow">${stack(v, members, 6)}</span>` +
-    `${debtors.length > 0 ? `<span class="count">付讫 ${done}/${debtors.length}</span>` : ""}${icon("chev")}</a>
+    `${debtors.length > 0 ? `<span class="count">${done} of ${debtors.length} paid</span>` : ""}${icon("chev")}</a>
 </nav>`;
 }
 
@@ -1480,13 +1510,56 @@ function actions(v: View): string {
   return `<section class="card acts needs-js" data-actions aria-label="Bill actions">${parts.join("")}</section>`;
 }
 
+interface PaidBy {
+  id: ParticipantId;
+  payments: BillState["payments"];
+  paidCents: Cents;
+  ofCents: Cents;
+}
+
+// One entry per person who has paid, in roster order, newest payment first
+// within it. A payment against a guest is the guest paying the payer
+// directly, so it is measured against the guest's own share rather than
+// what their member is asked for.
+function paidBy(v: View): PaidBy[] {
+  const byId = new Map<ParticipantId, BillState["payments"]>();
+  for (const p of v.s.payments) byId.set(p.participant, [...(byId.get(p.participant) ?? []), p]);
+  const order = (id: ParticipantId) => {
+    const at = v.s.participants.findIndex((p) => p.id === id);
+    return at < 0 ? Infinity : at;
+  };
+  return [...byId.keys()]
+    .sort((a, b) => order(a) - order(b))
+    .map((id) => {
+      const share = v.shares.get(id);
+      const payments = byId.get(id) ?? [];
+      return {
+        id,
+        payments,
+        paidCents: payments.reduce((n, p) => n + p.cents, 0),
+        ofCents: id in v.s.owing ? owedOf(v, id) : share && !share.pardoned ? share.owedCents : 0,
+      };
+    });
+}
+
+// A row per person says how far along they are. Their payments, each with
+// its Undo, open under the row, so a list of small payments never buries
+// who has paid.
 function paymentRows(v: View): string {
   if (v.s.payments.length === 0) return "";
-  const rows = v.s.payments.map((p) => {
-    const name = escapeHtml(nameOf(v, p.participant));
-    return `<li>${av(v, p.participant)}<span class="name">${name}</span><span class="money">${formatCents(p.cents)}</span>` +
-      `<button type="button" class="chip-btn" data-undo="${escapeHtml(p.id)}" ` +
-      `aria-label="Undo ${name}'s ${formatCents(p.cents)} payment">Undo</button></li>`;
+  const rows = paidBy(v).map((r) => {
+    const name = escapeHtml(nameOf(v, r.id));
+    const list = `paid-${escapeHtml(r.id)}`;
+    const stamp = r.ofCents > 0 && r.paidCents >= r.ofCents ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
+    const undos = r.payments.map(
+      (p) =>
+        `<li><span class="money">${formatCents(p.cents)}</span><button type="button" class="chip-btn" data-undo="${escapeHtml(p.id)}" ` +
+        `aria-label="Undo ${name}'s ${formatCents(p.cents)} payment">Undo</button></li>`,
+    );
+    return `<li><button type="button" class="paid-by" data-paid-by="${escapeHtml(r.id)}" aria-expanded="false" aria-controls="${list}">` +
+      `${av(v, r.id)}<span class="name">${name}</span>${stamp}` +
+      `<span class="paid-of"><span class="money">${formatCents(r.paidCents)}</span> of <span class="money">${formatCents(r.ofCents)}</span></span>${icon("chev")}</button>` +
+      `<ul class="paid-list" id="${list}" hidden>${undos.join("")}</ul></li>`;
   });
   return `<h2>Payments</h2><ul>${rows.join("")}</ul>`;
 }

@@ -719,6 +719,12 @@ export const CLIENT_SCRIPT = String.raw`
     return el("p", { class: "legend" }, el("span", null, [el("span", { class: "money" }, money(done)), " of ", el("span", { class: "money" }, money(total)), " paid"]));
   }
 
+  function collected(done, total) {
+    return el("p", { class: "legend" }, el("span", null, [
+      el("span", { class: "money" }, money(total)), " owed to you · ", el("span", { class: "money" }, money(done)), " paid",
+    ]));
+  }
+
   function heroNodes(v) {
     const s = v.s;
     if (s.viewerIsPayer) {
@@ -729,7 +735,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("div", { class: "flow" }, [stack(v, debtors, 4), icon("arrow", "arrow"), av(v, s.viewer)]),
         el("p", { class: "hero-cap" }, "to collect"),
         el("div", { class: "collect" }, [el("p", { class: "hero-amt money", "data-you-owed": true }, money(left)), pie(total - left, total)]),
-        fraction(total - left, total),
+        collected(total - left, total),
       ];
     }
     const mine = [s.viewer].concat(guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id));
@@ -817,15 +823,14 @@ export const CLIENT_SCRIPT = String.raw`
   function renderMine(v) {
     const card = root.querySelector("[data-mine]");
     if (!card) return;
-    keyedInto(card, JSON.stringify([v.s.items, v.s.participants]), () => {
+    keyedInto(card, JSON.stringify([v.s.items, v.s.participants, v.s.payerId]), () => {
       const groups = [];
       for (const g of guestsOf(v, v.s.viewer)) {
         const list = mineNodes(v, g.id);
-        const paid = guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null;
-        if (list) groups.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName, paid]), list]));
+        if (list) groups.push(el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, g.id), g.displayName]), list]));
       }
       const own = mineNodes(v, v.s.viewer);
-      const yours = own && groups.length > 0
+      const yours = own && (groups.length > 0 || v.s.viewerIsPayer)
         ? el("div", { class: "mine-group" }, [el("p", { class: "mine-guest" }, [av(v, v.s.viewer), "You"]), own])
         : own;
       return [yours].concat(groups);
@@ -840,7 +845,7 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(people, JSON.stringify([v.s.participants, done, debtors.length]), () => [
       icon("people"),
       el("span", { class: "grow" }, stack(v, membersFirst(v).map((p) => p.id), 6)),
-      debtors.length > 0 ? el("span", { class: "count" }, "付讫 " + done + "/" + debtors.length) : null,
+      debtors.length > 0 ? el("span", { class: "count" }, done + " of " + debtors.length + " paid") : null,
       icon("chev"),
     ]);
     const total = root.querySelector('[data-go="receipt"] .money');
@@ -905,23 +910,55 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), stopped]), () => actionNodes(v));
   }
 
+  // Whose payments the payer has opened, kept across redraws so an undo
+  // leaves the row open on what is left.
+  const openPaid = new Set();
+
+  // Mirrors paidBy on the server.
+  function paidBy(v) {
+    const byId = new Map();
+    for (const p of v.s.payments) byId.set(p.participant, (byId.get(p.participant) || []).concat([p]));
+    const order = (id) => {
+      const at = v.s.participants.findIndex((p) => p.id === id);
+      return at < 0 ? Infinity : at;
+    };
+    return Array.from(byId.keys()).sort((a, b) => order(a) - order(b)).map((id) => {
+      const share = v.shares.get(id);
+      const payments = byId.get(id);
+      return {
+        id,
+        payments,
+        paidCents: payments.reduce((n, p) => n + p.cents, 0),
+        ofCents: id in v.s.owing ? owedOf(v, id) : share && !share.pardoned ? share.owedCents : 0,
+      };
+    });
+  }
+
   function paymentNodes(v) {
     if (v.s.payments.length === 0) return [];
     return [
       el("h2", null, "Payments"),
-      el("ul", null, v.s.payments.map((p) => {
-        const name = nameOf(v, p.participant);
+      el("ul", null, paidBy(v).map((r) => {
+        const name = nameOf(v, r.id);
+        const open = openPaid.has(r.id);
         return el("li", null, [
-          av(v, p.participant),
-          el("span", { class: "name" }, name),
-          el("span", { class: "money" }, money(p.cents)),
-          el("button", {
-            type: "button",
-            class: "chip-btn",
-            "data-undo": p.id,
-            "aria-busy": busy.has("undo:" + p.id) ? "true" : null,
-            "aria-label": "Undo " + name + "'s " + money(p.cents) + " payment",
-          }, "Undo"),
+          el("button", { type: "button", class: "paid-by", "data-paid-by": r.id, "aria-expanded": String(open), "aria-controls": "paid-" + r.id }, [
+            av(v, r.id),
+            el("span", { class: "name" }, name),
+            r.ofCents > 0 && r.paidCents >= r.ofCents ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
+            el("span", { class: "paid-of" }, [el("span", { class: "money" }, money(r.paidCents)), " of ", el("span", { class: "money" }, money(r.ofCents))]),
+            icon("chev"),
+          ]),
+          el("ul", { class: "paid-list", id: "paid-" + r.id, hidden: !open }, r.payments.map((p) => el("li", null, [
+            el("span", { class: "money" }, money(p.cents)),
+            el("button", {
+              type: "button",
+              class: "chip-btn",
+              "data-undo": p.id,
+              "aria-busy": busy.has("undo:" + p.id) ? "true" : null,
+              "aria-label": "Undo " + name + "'s " + money(p.cents) + " payment",
+            }, "Undo"),
+          ]))),
         ]);
       })),
     ];
@@ -931,7 +968,7 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-payments]");
     if (!card) return;
     card.hidden = v.s.payments.length === 0;
-    keyedInto(card, JSON.stringify([v.s.payments, v.s.participants, Array.from(busy)]), () => paymentNodes(v));
+    keyedInto(card, JSON.stringify([v.s.payments, v.s.participants, v.s.owing, Array.from(busy), Array.from(openPaid)]), () => paymentNodes(v));
   }
 
   // A confirmed bill has three views on one page: your share, the receipt
@@ -1671,10 +1708,15 @@ export const CLIENT_SCRIPT = String.raw`
 
   async function undoPayment(button) {
     const id = button.dataset.undo;
+    // Read before the redraw, which takes this button out of the page.
+    const list = button.closest(".paid-list");
+    const person = list ? list.parentElement.querySelector("[data-paid-by]").dataset.paidBy : null;
     if (!(await toggle("undo:" + id, "DELETE", "/payment/" + encodeURIComponent(id)))) return;
     showNote("Payment undone", false);
-    // The row went with the payment, the button included.
-    const next = root.querySelector("[data-payments] [data-undo]");
+    // The payment's line went with it, the button included. Focus stays with
+    // the same person while they have payments left.
+    const row = person ? root.querySelector('[data-paid-by="' + CSS.escape(person) + '"]') : null;
+    const next = (row && row.parentElement.querySelector("[data-undo]")) || row || root.querySelector("[data-payments] [data-paid-by]");
     if (next) next.focus();
   }
 
@@ -1799,6 +1841,13 @@ export const CLIENT_SCRIPT = String.raw`
     if (target.closest("[data-delete-bill]")) return deleteBill();
     const undo = target.closest("[data-undo]");
     if (undo) return undoPayment(undo);
+    const paidRow = target.closest("[data-paid-by]");
+    if (paidRow) {
+      const id = paidRow.dataset.paidBy;
+      if (openPaid.has(id)) openPaid.delete(id);
+      else openPaid.add(id);
+      return render();
+    }
     const confirm = target.closest("[data-confirm]");
     if (confirm) return confirm.disabled ? null : confirmBill();
     if (target.closest("[data-reopen]")) return toggle("reopen", "POST", "/reopen");
