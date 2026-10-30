@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mintToken, readToken, TOKEN_TTL_MS } from "../../src/web/token";
+import { checkMemberProof, mintMemberProof, mintToken, mintViewerToken, readToken, readViewerToken, TOKEN_TTL_MS } from "../../src/web/token";
 
 const KEY = "test-signing-key-generated-for-tests-only";
 const NOW = Date.UTC(2026, 9, 28, 20, 0, 0);
@@ -101,5 +101,68 @@ describe("access tokens", () => {
       billId: "bill-1",
       participantId: "marcus",
     });
+  });
+});
+
+describe("viewer tokens", () => {
+  it("round-trips a viewer and a server, and nothing about who they look at", async () => {
+    const token = await mintViewerToken("guild-1", "gavin", "Friday Table", KEY, NOW);
+    expect(await readViewerToken(token, KEY, NOW)).toEqual({ guildId: "guild-1", viewerId: "gavin", guildName: "Friday Table" });
+    expect(token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  });
+
+  it("works without a server name", async () => {
+    const token = await mintViewerToken("guild-1", "gavin", null, KEY, NOW);
+    expect(await readViewerToken(token, KEY, NOW)).toEqual({ guildId: "guild-1", viewerId: "gavin", guildName: null });
+  });
+
+  it("lasts thirty minutes", async () => {
+    const token = await mintViewerToken("guild-1", "gavin", null, KEY, NOW);
+    expect(await readViewerToken(token, KEY, NOW + TOKEN_TTL_MS - 1)).not.toBeNull();
+    expect(await readViewerToken(token, KEY, NOW + TOKEN_TTL_MS)).toBeNull();
+  });
+
+  it("is refused under another key", async () => {
+    const token = await mintViewerToken("guild-1", "gavin", null, KEY, NOW);
+    expect(await readViewerToken(token, "another-key", NOW)).toBeNull();
+  });
+
+  it("cannot be read as a bill token, nor a bill token as a viewer token", async () => {
+    const viewer = await mintViewerToken("guild-1", "gavin", null, KEY, NOW);
+    const bill = await mintToken("bill-1", "gavin", KEY, NOW);
+    expect(await readToken(viewer, KEY, NOW)).toBeNull();
+    expect(await readViewerToken(bill, KEY, NOW)).toBeNull();
+  });
+
+  it("refuses a signed payload missing a field", async () => {
+    const exp = NOW + 1000;
+    expect(await readViewerToken(await signedWith(JSON.stringify({ g: "guild-1", exp })), KEY, NOW)).toBeNull();
+    expect(await readViewerToken(await signedWith(JSON.stringify({ v: "gavin", exp })), KEY, NOW)).toBeNull();
+    expect(await readViewerToken(await signedWith(JSON.stringify({ g: "guild-1", v: "gavin" })), KEY, NOW)).toBeNull();
+  });
+});
+
+describe("a member proof", () => {
+  const viewer = () => mintViewerToken("guild-1", "gavin", null, KEY, NOW);
+
+  it("holds for the person and token it was made for", async () => {
+    const token = await viewer();
+    expect(await checkMemberProof(await mintMemberProof(token, "theo", KEY), token, "theo", KEY)).toBe(true);
+  });
+
+  it("is refused for another person, another token or another key", async () => {
+    const token = await viewer();
+    const proof = await mintMemberProof(token, "theo", KEY);
+    expect(await checkMemberProof(proof, token, "marcus", KEY)).toBe(false);
+    expect(await checkMemberProof(proof, await mintViewerToken("guild-1", "marcus", null, KEY, NOW), "theo", KEY)).toBe(false);
+    expect(await checkMemberProof(proof, await mintViewerToken("guild-2", "gavin", null, KEY, NOW), "theo", KEY)).toBe(false);
+    expect(await checkMemberProof(proof, token, "theo", "another-key")).toBe(false);
+  });
+
+  it("refuses text that isn't a signature", async () => {
+    const token = await viewer();
+    for (const proof of ["", "nonsense", "a b", token]) {
+      expect(await checkMemberProof(proof, token, "theo", KEY), proof).toBe(false);
+    }
   });
 });

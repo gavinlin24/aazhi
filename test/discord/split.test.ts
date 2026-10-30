@@ -15,6 +15,7 @@ import {
   type NewBill,
 } from "../../src/db/bills";
 import type { Env } from "../../src/env";
+import { personSummary, serverBoards } from "../../src/db/stats";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
 import { editBillMessage, ephemeral, followUp } from "../../src/discord/rest";
 import { PATTY_SHACK } from "../fixtures/modifiers";
@@ -655,5 +656,55 @@ describe("followUp and ephemeral", () => {
       type: 4,
       data: { content: "with a button", flags: EPHEMERAL, components: [row] },
     });
+  });
+});
+
+describe("a bill with one person", () => {
+  async function page(path: string, token: string, init: RequestInit = {}): Promise<Response> {
+    const ctx = createExecutionContext();
+    const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
+    const response = await app.fetch(new Request(`https://aazhi.test${path}`, { ...init, headers }), env(), ctx);
+    await settle(waitOnExecutionContext(ctx));
+    return response;
+  }
+
+  it("goes from /split to a refused Confirm and counts on no stat", async () => {
+    anthropic = () =>
+      toolUse(saigonToolInput({ items: [{ label: "Pho dac biet", price: "18.00", confidence: 0.95 }], tax: "2.00", printed_total: "20.00" }));
+    await run(slashSplit());
+    const { id } = (await db.prepare("SELECT id FROM bills").first<{ id: string }>())!;
+
+    const opened = await run({
+      id: "int-3",
+      application_id: APP_ID,
+      type: 3,
+      token: TOKEN,
+      version: 1,
+      guild_id: "guild-1",
+      channel_id: "chan-1",
+      member: MEMBER,
+      data: { custom_id: `open:${id}`, component_type: 2 },
+    });
+    const reply: any = await opened.json();
+    const link = new URL(reply.data.components[0].components[0].url);
+    const token = link.searchParams.get("t")!;
+
+    const [item] = await getBillItems(db, id);
+    const claimed = await page(`/b/${id}/claim`, token, {
+      method: "POST",
+      body: JSON.stringify({ itemId: item!.id, participantId: "gavin", claimed: true }),
+    });
+    expect(claimed.status).toBe(200);
+    const { revision } = (await getBill(db, id))!;
+    const confirmed = await page(`/b/${id}/confirm`, token, { method: "POST", body: JSON.stringify({ revision }) });
+    expect(confirmed.status).toBe(409);
+    expect(await confirmed.json()).toMatchObject({ error: "Add someone to split with." });
+
+    expect((await getBill(db, id))!.status).toBe("draft");
+    expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
+    const { lists } = await serverBoards(db, "guild-1", Date.UTC(2026, 9, 30));
+    expect(lists["spent:all"]).toEqual([]);
+    expect(lists["visits:all"]).toEqual([]);
+    expect(lists["hosted:all"]).toEqual([]);
   });
 });

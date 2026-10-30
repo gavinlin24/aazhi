@@ -1,6 +1,7 @@
 import { Script, runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { CLIENT_SCRIPT } from "../../src/web/client";
+import { PROFILE_SCRIPT } from "../../src/web/profile-client";
 
 // Lifts named top-level helpers out of the page script, which only runs
 // against a live page, so their logic can be checked on its own. The match
@@ -23,6 +24,36 @@ describe("the page script", () => {
     expect(() => new Script(CLIENT_SCRIPT, { filename: "client.js" })).not.toThrow();
   });
 
+  it("includes the profile script, which has the same trap", () => {
+    expect(() => new Script(PROFILE_SCRIPT, { filename: "profile.js" })).not.toThrow();
+    expect(PROFILE_SCRIPT).not.toContain("</script");
+  });
+
+});
+
+describe("the Confirm button's reason for waiting", () => {
+  const { confirmBlock } = helpers<{ confirmBlock: (s: unknown) => string | null }>("confirmBlock");
+  const gavin = { id: "gavin", kind: "member" };
+  const ready = { printedTotalCents: 2000, reconciles: { ok: true }, items: [{ claimedBy: ["gavin"] }], hasSplitPartner: true, payerId: "gavin", participants: [gavin] };
+
+  it("waits for someone to split with, and matches the page", () => {
+    expect(confirmBlock({ ...ready, hasSplitPartner: false })).toBe("Add someone to split with.");
+    expect(confirmBlock(ready)).toBeNull();
+  });
+
+  it("asks for a claim once another member has joined, and matches the page", () => {
+    const joined = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "marcus", kind: "member" }] };
+    expect(confirmBlock(joined)).toBe("Someone else needs to claim an item.");
+  });
+
+  it("still asks for someone when the only other person is a guest", () => {
+    const guestOnly = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "sam", kind: "guest" }] };
+    expect(confirmBlock(guestOnly)).toBe("Add someone to split with.");
+  });
+
+  it("says nobody has claimed first, since that's the earlier step", () => {
+    expect(confirmBlock({ ...ready, items: [{ claimedBy: [] }], hasSplitPartner: false })).toBe("Nobody has claimed anything yet.");
+  });
 });
 
 describe("a price typed into the line editor", () => {

@@ -16,6 +16,11 @@ what they had. No accounts or installs: Discord already knows who everyone is.
 5. The page links to the payer's Venmo with your amount and a note filled in.
    **I paid** records the payment, and the bot tells the channel.
 
+Run `/profile` to see your months, your favorite place and who you go out with.
+`/profile @someone` shows theirs. Your numbers count every server you eat with.
+The boards rank the people in this server by Hosted, Spent and Unique visits,
+using those same totals. Bills stay in the server they were made in.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">
   <img src="docs/img/architecture-light.svg" width="528" alt="Discord and the split page both talk to one Cloudflare Worker, which stores bills in D1 and sends receipt photos to Claude.">

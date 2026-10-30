@@ -285,7 +285,7 @@ ordinary line items, positive or negative, prorated like anything else.
 
 ### Confirming
 
-The payer taps **Confirm**. Two gates:
+The payer taps **Confirm**. Three gates:
 
 - **The arithmetic must reconcile** (above). Hard gate.
 - **Every line must be claimed.** Soft gate: Confirm stays available with
@@ -293,6 +293,12 @@ The payer taps **Confirm**. Two gates:
   among everyone who claimed anything. Requiring every diner to respond
   would let one unresponsive person stall the bill, which is an
   anti-goal.
+- **Someone must be there to split with.** Hard gate: another Discord
+  member, besides the payer, needs a share above $0. Guests alone don't
+  count, and the page says "Add someone to split with." The server enforces
+  this at Confirm, not at `/split`, because nobody has joined the bill yet
+  when `/split` runs. Bills confirmed before this gate stay as they are. If
+  one is reopened, it has to pass the gate to be confirmed again.
 
 On confirm, shares are computed and frozen, the message becomes the owe
 card, and pay controls appear.
@@ -435,7 +441,6 @@ Worth building:
 
 - Times any two people have eaten together, across every server.
 - Who fronts the bill most often.
-- Median time to settle, per person.
 - Most-ordered item per person.
 - Most-visited restaurant; most expensive night.
 - Pardons given and received.
@@ -443,10 +448,23 @@ Worth building:
 These are what make the bot something to open rather than something to
 endure.
 
-**Everything is visible to everyone in the group**, median time to settle
-included. The social pressure is deliberate: it does the nagging the payer
-would otherwise have to do themselves. Guests appear in no statistic,
-because no guest record survives its bill.
+**A person's numbers count every server**, money included. Spending doesn't
+depend on which friend group you ate with: the fact is you ate out. Anyone
+in a server can see those totals for anyone in it, including who someone
+went out with most, even if that person is a stranger to the viewer. People
+use different names in different groups, so a name comes from the viewing
+server when it can. Boards list the people with a bill in that server, each
+with their full total. Bills stay separate, and the monthly recap stays per
+server: that recap is where a group sees only itself.
+Guests appear in no statistic, because no guest record survives its bill.
+
+A person counts on a bill only if their share is above $0 and someone else's
+is too. So someone who only tapped Open the split counts for nothing. A new
+bill can't be confirmed alone, but older one-person bills exist, and they
+count on no statistic.
+
+One receipt split in two servers counts twice, as two outings. That gap is
+known and has no fix yet.
 
 ## Stack
 
@@ -501,9 +519,8 @@ Indicative, not prescriptive; the builder owns the final schema.
 - `item_claims` — item, person. The many-to-many that drives everything.
 - `shares` — bill, person, subtotal, owed, pardoned, `settled_at`.
   Materialised at confirm so a confirmed bill's numbers are frozen rather
-  than recomputed. `settled_at` is a timestamp rather than a flag, because
-  median time to settle is one of the statistics and a boolean throws that
-  away permanently.
+  than recomputed. `settled_at` is a timestamp rather than a flag, because a
+  boolean throws the moment away permanently.
 - `settlements` — bill, person, cents, recorded at, recorded by.
 
 Access tokens are signed and stateless, so they are not stored.

@@ -1,4 +1,4 @@
-import { getSettled, getShares, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
+import { getSettled, getShares, hasSplitPartner, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
 import { getVenmoHandles } from "../db/handles";
 import { listSettlements, type Settlement } from "../db/settlements";
 import { reconciles } from "../extract/claude";
@@ -37,6 +37,8 @@ export interface BillState {
   participants: StateParticipant[];
   result: SplitResult;
   // Display only, from here down.
+  // Worked out here so the page and its script can't disagree with Confirm.
+  hasSplitPartner: boolean;
   // One entry per debtor: the one amount the page shows as theirs (their own
   // share and their guests', after pardons, less what any guest paid the
   // payer directly), and what they have paid towards it themselves. Worked
@@ -154,6 +156,7 @@ export function billState(
       return p.kind === "guest" ? { ...base, paidToPayer: toPayer.has(p.id), paidToHost: toHost.has(p.id) } : base;
     }),
     result,
+    hasSplitPartner: hasSplitPartner(result.shares, participants, bill.payerId),
     owing,
     pay,
     viewerVenmo: payExtras.viewerVenmo ?? null,

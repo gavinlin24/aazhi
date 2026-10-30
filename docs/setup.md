@@ -78,9 +78,9 @@ To test, run `/split` with a receipt photo. Watch the logs with
 | --- | --- | --- | --- | --- |
 | `DISCORD_APPLICATION_ID` | Discord API paths, command registration | Worker secret, `.dev.vars` | No | Nothing. It is public |
 | `DISCORD_PUBLIC_KEY` | Verifying requests come from Discord | Worker secret, `.dev.vars` | No | Nothing. It can't sign |
-| `DISCORD_BOT_TOKEN` | Posting and editing as the bot, registering commands | Worker secret, `.dev.vars` | Yes | Attacker can post as the bot, edit or delete its messages, and replace its commands. Reset it on the Bot page |
+| `DISCORD_BOT_TOKEN` | Posting and editing as the bot, reading a server's name, registering commands | Worker secret, `.dev.vars` | Yes | Attacker can post as the bot, edit or delete its messages, and replace its commands. Reset it on the Bot page |
 | `ANTHROPIC_API_KEY` | Reading receipts | Worker secret, `.dev.vars` | Yes | Attacker can spend your Anthropic credit. Revoke it in the Console |
-| `TOKEN_SIGNING_KEY` | Signing split-page links | Worker secret, `.dev.vars` | Yes | Attacker can forge page links as anyone on a known bill, including the payer. Can't record payments. Rotate it freely |
+| `TOKEN_SIGNING_KEY` | Signing split-page and profile links | Worker secret, `.dev.vars` | Yes | Attacker can forge page links as anyone on a known bill, including the payer. Can't record payments. Rotate it freely |
 | D1 `database_id` | Telling Wrangler which database is `DB` | `wrangler.jsonc` (committed) | No | Nothing without account access |
 | `CLOUDFLARE_API_TOKEN` | CI migrations and deploys | GitHub Actions secret | Yes | **Worst case:** attacker can deploy code that reads every Worker secret, and read or drop the database. Roll it in Cloudflare |
 | `CLOUDFLARE_ACCOUNT_ID` | Choosing the CI deploy account | GitHub Actions secret | No | Nothing on its own |

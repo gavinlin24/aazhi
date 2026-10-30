@@ -62,4 +62,18 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
       },
     ],
   },
+  // Boards and the @someone picker both need a server, so this has no DM form.
+  {
+    ...guildOnly,
+    name: "profile",
+    type: ApplicationCommandType.ChatInput,
+    description: "See your stats, or someone else's",
+    options: [
+      {
+        type: ApplicationCommandOptionType.User,
+        name: "user",
+        description: "Whose profile to open",
+      },
+    ],
+  },
 ];

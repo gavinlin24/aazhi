@@ -711,6 +711,7 @@ const CONFIRM_REFUSED = {
   stale: "The bill changed while you were looking. Check it and confirm again.",
   unreconciled: "Line items do not add up to total!",
   unclaimed: "Some lines have nobody on them yet.",
+  alone: "Add someone to split with.",
 };
 
 // `revision` is the bill the payer looked at: anything that changed since

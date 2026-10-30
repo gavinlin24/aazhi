@@ -876,6 +876,10 @@ export const CLIENT_SCRIPT = String.raw`
     if (s.printedTotalCents === null) return "Enter the receipt total first.";
     if (!s.reconciles.ok) return "Line items do not add up to total!";
     if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+    if (!s.hasSplitPartner) {
+      const joined = s.participants.some((p) => p.kind === "member" && p.id !== s.payerId);
+      return joined ? "Someone else needs to claim an item." : "Add someone to split with.";
+    }
     return null;
   }
 
