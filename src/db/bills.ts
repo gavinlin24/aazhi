@@ -32,7 +32,7 @@ export interface BillRow {
   confirmedAt: string | null;
 }
 
-export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt">;
+export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt"> & { receiptKey?: string | null };
 
 export interface NewItem {
   id: string;
@@ -145,13 +145,28 @@ async function mutateDraft(db: D1Database, billId: string, writes: D1PreparedSta
   return row.revision;
 }
 
+export class ReceiptInOtherServerError extends Error {
+  constructor() {
+    super("this receipt is on a live bill in another server");
+    this.name = "ReceiptInOtherServerError";
+  }
+}
+
+// The check rides in the insert, so two servers reading one receipt at the same
+// moment can't both get through. A null key equals nothing, so a receipt without
+// one always saves. Stats add up across servers, which is why this crosses them.
+// Within a server it stays allowed: a rescan has to be able to replace a draft.
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
+  const { receiptKey = null, ...bill } = b;
   const createdAt = new Date().toISOString();
-  await db
+  const { meta } = await db
     .prepare(
       `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
-         tax_cents, tip_cents, printed_total_cents, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+       WHERE NOT EXISTS (
+         SELECT 1 FROM bills WHERE receipt_key = ?14 AND guild_id <> ?2 AND status IN ('draft', 'confirmed')
+       )`,
     )
     .bind(
       b.id,
@@ -167,9 +182,11 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       b.printedTotalCents,
       b.status,
       createdAt,
+      receiptKey,
     )
     .run();
-  return { ...b, revision: 1, createdAt, confirmedAt: null };
+  if (meta.changes === 0) throw new ReceiptInOtherServerError();
+  return { ...bill, revision: 1, createdAt, confirmedAt: null };
 }
 
 export async function getBill(db: D1Database, id: string): Promise<BillRow | null> {

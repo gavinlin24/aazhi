@@ -7,6 +7,7 @@ import { SAIGON } from "../fixtures/saigon";
 const SAIGON_EXTRACTION: Extraction = {
   place: "Saigon Kitchen",
   billDate: "2026-10-28",
+  billTime: null,
   items: SAIGON.items.map((item) => ({ label: item.label, cents: item.cents, confidence: 0.95 })),
   discountCents: 0,
   taxCents: 2232,
@@ -103,6 +104,7 @@ describe("reconciles", () => {
     const noTax: Extraction = {
       place: null,
       billDate: null,
+      billTime: null,
       items: [{ label: "Tea", cents: 500, confidence: 1 }],
       discountCents: 0,
       taxCents: null,
@@ -115,6 +117,7 @@ describe("reconciles", () => {
     const comped: Extraction = {
       place: null,
       billDate: null,
+      billTime: null,
       items: [
         { label: "Pho", cents: 2100, confidence: 1 },
         { label: "Comp", cents: -800, confidence: 1 },
