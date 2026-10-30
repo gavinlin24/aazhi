@@ -7,6 +7,7 @@ import {
 import type { Env } from "../env";
 import { ledgerCommand } from "./handlers/ledger";
 import { paywithCommand } from "./handlers/paywith";
+import { postProfile, profileCommand } from "./handlers/profile";
 import { retired } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
@@ -29,6 +30,7 @@ export const commandHandlers: Record<string, InteractionHandler> = {
   "Split this receipt": splitMessageCommand,
   paywith: paywithCommand,
   ledger: ledgerCommand,
+  profile: profileCommand,
 };
 // Everything else a bill needs is done on the page now. The prefixes of the
 // buttons and forms that used to do it stay mapped, so a tap on a message
@@ -51,6 +53,7 @@ const RETIRED = [
 export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
+  "profile-post:": postProfile,
   ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),
 };
 // A modal's submit is its own interaction type, keyed the same way by the

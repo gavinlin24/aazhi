@@ -8,20 +8,22 @@ const API = "https://discord.com/api/v10";
 const USER_AGENT = "DiscordBot (https://github.com/gavinlin24/aazhi, 0.1.0)";
 
 export const EDIT_WINDOW_MS = 3000;
+const GUILD_LOOKUP_MS = 1000;
 
 // `what` names the call in errors instead of the path, because a webhook path
 // carries the interaction token and logs are no place for it.
 async function discord(
   env: Env,
   what: string,
-  method: "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH",
   path: string,
   body: unknown,
   auth: "bot" | "none",
+  signal?: AbortSignal,
 ): Promise<Response> {
   const headers: Record<string, string> = { "content-type": "application/json", "user-agent": USER_AGENT };
   if (auth === "bot") headers.authorization = `Bot ${env.DISCORD_BOT_TOKEN}`;
-  const response = await fetch(`${API}${path}`, { method, headers, body: JSON.stringify(body) });
+  const response = await fetch(`${API}${path}`, { method, headers, body: JSON.stringify(body), signal });
   if (!response.ok) throw new Error(`Discord ${what} failed: ${response.status} ${await response.text()}`);
   return response;
 }
@@ -36,6 +38,20 @@ export async function followUp(interactionToken: string, body: unknown, env: Env
 // the bot token because it is sent long after any interaction token expired.
 export async function postChannelMessage(channelId: string, body: unknown, env: Env): Promise<void> {
   await discord(env, "channel message", "POST", `/channels/${channelId}/messages`, body, "bot");
+}
+
+// An interaction carries the server's id but not its name. The name is
+// decoration on the profile page, so a slow or failed lookup gives up rather
+// than risk the three seconds Discord allows for the reply.
+export async function guildName(guildId: string, env: Env): Promise<string | null> {
+  try {
+    const response = await discord(env, "guild lookup", "GET", `/guilds/${guildId}`, undefined, "bot", AbortSignal.timeout(GUILD_LOOKUP_MS));
+    const { name } = await response.json<{ name?: string }>();
+    return name ?? null;
+  } catch (error) {
+    console.error("could not look up the server name", error);
+    return null;
+  }
 }
 
 export async function editOriginal(

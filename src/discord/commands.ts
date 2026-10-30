@@ -89,4 +89,18 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
       },
     ],
   },
+  // Stats live inside one server, so this has no DM form.
+  {
+    ...guildOnly,
+    name: "profile",
+    type: ApplicationCommandType.ChatInput,
+    description: "See your stats in this server, or someone else's",
+    options: [
+      {
+        type: ApplicationCommandOptionType.User,
+        name: "user",
+        description: "Whose profile to open",
+      },
+    ],
+  },
 ];
