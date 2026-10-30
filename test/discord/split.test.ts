@@ -660,76 +660,83 @@ describe("followUp and ephemeral", () => {
   });
 });
 
-describe("a receipt on a bill in another server", () => {
-  const REFUSED = "This receipt is already on a bill in another server. Deleting that bill frees it.";
+describe("a receipt already on a confirmed bill", () => {
+  const REFUSED = "This receipt was already split.";
   const timed = (overrides: Record<string, unknown> = {}) => () => toolUse(saigonToolInput({ bill_time: "19:42", ...overrides }));
   const inOtherServer = (member: unknown = MEMBER) => ({ ...slashSplit(undefined, member), guild_id: "guild-2", channel_id: "chan-2" });
   const lastReply = () => originalEdits().at(-1)!.body;
   const billsNow = async () => (await db.prepare("SELECT id, guild_id, status FROM bills ORDER BY rowid").all<{ id: string; guild_id: string; status: string }>()).results;
   const setStatus = (status: string) => db.prepare("UPDATE bills SET status = ?").bind(status).run();
 
-  async function splitInBoth(first: () => Response, second: () => Response = first) {
-    anthropic = first;
+  beforeEach(() => {
+    anthropic = timed();
+  });
+
+  async function confirmedHere() {
     await run(slashSplit());
-    anthropic = second;
-    await run(inOtherServer());
+    await setStatus("confirmed");
   }
 
-  it("refuses the second split and saves nothing", async () => {
-    await splitInBoth(timed());
+  it("refuses in another server and saves nothing", async () => {
+    await confirmedHere();
+    await run(inOtherServer());
 
     expect(lastReply()).toEqual({ content: REFUSED, allowed_mentions: { parse: [] } });
     expect(await billsNow()).toHaveLength(1);
-    expect((await billsNow())[0]!.guild_id).toBe("guild-1");
+  });
+
+  it("refuses in the same server too", async () => {
+    await confirmedHere();
+    await run(slashSplit());
+
+    expect(lastReply().content).toBe(REFUSED);
+    expect(await billsNow()).toHaveLength(1);
   });
 
   it("refuses whoever runs it, since a receipt has one table", async () => {
-    anthropic = timed();
-    await run(slashSplit());
+    await confirmedHere();
     await run(inOtherServer({ ...MEMBER, user: { id: "marcus", username: "marcus", global_name: "Marcus" } }));
 
     expect(lastReply().content).toBe(REFUSED);
   });
 
-  it("refuses against a confirmed bill too", async () => {
-    anthropic = timed();
-    await run(slashSplit());
-    await setStatus("confirmed");
-    await run(inOtherServer());
-
-    expect(lastReply().content).toBe(REFUSED);
-  });
-
   it("knows the receipt from a second read with the lines reordered and the name read differently", async () => {
-    const items = saigonToolInput().items;
-    await splitInBoth(timed(), timed({ place: "SAIGON KITCHEN.", items: [...items].reverse() }));
+    await confirmedHere();
+    anthropic = timed({ place: "SAIGON KITCHEN.", items: [...saigonToolInput().items].reverse() });
+    await run(inOtherServer());
 
     expect(lastReply().content).toBe(REFUSED);
   });
 
   it("leaves the open draft in the refused channel alone", async () => {
+    await confirmedHere();
     await seedDraft("open-there", { guildId: "guild-2", channelId: "chan-2", payerId: "gavin" });
-    await splitInBoth(timed());
+    await run(inOtherServer());
 
     expect((await getBill(db, "open-there"))!.status).toBe("draft");
     expect(discordCalls().some((c) => c.url.includes("msg-open-there"))).toBe(false);
   });
 
-  it.each(["deleted", "superseded"])("frees the receipt once its bill is %s", async (status) => {
-    anthropic = timed();
+  it("isn't stopped by a draft of the same receipt, anywhere", async () => {
     await run(slashSplit());
+    await run(inOtherServer({ ...MEMBER, user: { id: "marcus", username: "marcus", global_name: "Marcus" } }));
+
+    expect(lastReply().content).not.toBe(REFUSED);
+    expect((await billsNow()).map((b) => b.status)).toEqual(["draft", "draft"]);
+  });
+
+  it.each(["deleted", "superseded", "draft"])("isn't stopped once the bill is %s", async (status) => {
+    await confirmedHere();
     await setStatus(status);
     await run(inOtherServer());
 
     expect(lastReply().content).not.toBe(REFUSED);
-    expect((await billsNow()).map((b) => b.status)).toEqual([status, "draft"]);
+    expect(await billsNow()).toHaveLength(2);
   });
 
   it("frees the receipt through the real delete", async () => {
-    anthropic = timed();
-    await run(slashSplit());
-    const [first] = await billsNow();
-    await deleteBill(db, first!.id, 0);
+    await confirmedHere();
+    await deleteBill(db, (await billsNow())[0]!.id, 0);
     await run(inOtherServer());
 
     expect(lastReply().content).not.toBe(REFUSED);
@@ -740,49 +747,35 @@ describe("a receipt on a bill in another server", () => {
     ["date", { bill_date: null }],
     ["total", { printed_total: null }],
   ])("lets a receipt with no printed %s through, rather than refuse a real one", async (_, missing) => {
-    await splitInBoth(timed(missing));
+    anthropic = timed(missing);
+    await confirmedHere();
+    await run(inOtherServer());
 
     expect(lastReply().content).not.toBe(REFUSED);
     expect(await billsNow()).toHaveLength(2);
   });
 
   it("lets a receipt printed a minute later through", async () => {
-    await splitInBoth(timed(), timed({ bill_time: "19:43" }));
+    await confirmedHere();
+    anthropic = timed({ bill_time: "19:43" });
+    await run(inOtherServer());
 
     expect(await billsNow()).toHaveLength(2);
   });
 
   it("can't be matched against a bill from before keys existed", async () => {
-    await seedDraft("older", { guildId: "guild-1", channelId: "chan-1", billDate: "2026-10-28", printedTotalCents: 27382 });
-    anthropic = timed();
+    await seedDraft("older", { billDate: "2026-10-28", printedTotalCents: 27382 });
+    await setStatus("confirmed");
     await run(inOtherServer());
 
     expect(lastReply().content).not.toBe(REFUSED);
   });
 
-  it("lets only one through when two servers save at the same moment", async () => {
-    const bill = (id: string, guildId: string) => ({ ...newBill(id, { guildId, channelId: `chan-${id}` }), receiptKey: "same-receipt" });
-    const saves = await Promise.allSettled([createBill(db, bill("a", "guild-1")), createBill(db, bill("b", "guild-2"))]);
-
-    expect(saves.map((s) => s.status).sort()).toEqual(["fulfilled", "rejected"]);
-    expect(await billsNow()).toHaveLength(1);
-  });
-
-  it("still lets a rescan in the same channel replace the draft", async () => {
-    anthropic = timed();
+  it("still lets a rescan replace the payer's open draft in the channel", async () => {
     await run(slashSplit());
     await run(slashSplit());
 
     expect((await billsNow()).map((b) => b.status)).toEqual(["superseded", "draft"]);
-  });
-
-  it("still allows the same receipt twice in one server", async () => {
-    anthropic = timed();
-    await run(slashSplit());
-    await setStatus("confirmed");
-    await run(slashSplit());
-
-    expect((await billsNow()).map((b) => b.status)).toEqual(["confirmed", "draft"]);
   });
 });
 

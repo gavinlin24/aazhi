@@ -21,6 +21,7 @@ export interface Outing {
   // A bill from before Confirm wanted another member with a share. Those stay
   // confirmed in D1, so the stats still have to leave them out.
   older?: boolean;
+  receiptKey?: string;
 }
 
 // One outing the way the app leaves it in D1: rows through the same writes the
@@ -34,6 +35,7 @@ export async function seedOuting(db: D1Database, outing: Outing): Promise<void> 
   const guestCents = o.guest?.item[1] ?? 0;
   await createBill(db, {
     id: o.id,
+    receiptKey: o.receiptKey,
     guildId: o.guild ?? "guild-1",
     channelId: o.channel ?? "chan-1",
     messageId: null,

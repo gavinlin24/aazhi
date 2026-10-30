@@ -7,14 +7,16 @@ import { PROFILE_SCRIPT } from "../../src/web/profile-client";
 // against a live page, so their logic can be checked on its own. The match
 // leans on the script's two-space indent: a reshaped helper fails loudly here
 // rather than passing silently.
-function helpers<T>(...names: string[]): T {
+function lift<T>(names: string[], page: Record<string, unknown> = {}): T {
   const source = names.map((name) => {
     const found = new RegExp(`\\n  function ${name}\\([^]*?\\n  }\\n`).exec(CLIENT_SCRIPT);
     if (!found) throw new Error(`no helper named ${name} in the page script`);
     return found[0];
   });
-  return runInNewContext(`${source.join("")}({ ${names.join(", ")} })`) as T;
+  return runInNewContext(`${source.join("")}({ ${names.join(", ")} })`, page) as T;
 }
+
+const helpers = <T>(...names: string[]): T => lift<T>(names);
 
 // The page script is a string no compiler ever reads, so a syntax slip in it
 // would pass every other test and deploy. workerd refuses to compile code
@@ -29,6 +31,42 @@ describe("the page script", () => {
     expect(PROFILE_SCRIPT).not.toContain("</script");
   });
 
+});
+
+// Every open page polls, and a bill confirmed elsewhere changes nothing on this
+// bill but its answer to "is the receipt taken". The redraw has to notice that.
+describe("the actions card on an open page", () => {
+  const card = { _key: "", draws: 0, contains: () => false, replaceChildren() { this.draws += 1; } };
+  const { renderActions } = lift<{ renderActions: (v: unknown) => void }>(
+    ["renderActions", "keyedInto", "confirmBlock"],
+    {
+      root: { querySelector: () => card },
+      busy: new Set(),
+      armed: new Set(),
+      editingPrinted: () => false,
+      stopped: false,
+      actionNodes: () => [],
+      document: { activeElement: null },
+    },
+  );
+  const ready = {
+    status: "draft",
+    printedTotalCents: 2000,
+    reconciles: { ok: true },
+    items: [{ claimedBy: ["gavin"] }],
+    participants: [],
+    payerId: "gavin",
+    hasSplitPartner: true,
+    receiptTaken: false,
+  };
+
+  it("redraws when the receipt is taken by another bill", () => {
+    renderActions({ s: ready });
+    renderActions({ s: ready });
+    expect(card.draws).toBe(1);
+    renderActions({ s: { ...ready, receiptTaken: true } });
+    expect(card.draws).toBe(2);
+  });
 });
 
 describe("the Confirm button's reason for waiting", () => {
@@ -49,6 +87,11 @@ describe("the Confirm button's reason for waiting", () => {
   it("still asks for someone when the only other person is a guest", () => {
     const guestOnly = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "sam", kind: "guest" }] };
     expect(confirmBlock(guestOnly)).toBe("Add someone to split with.");
+  });
+
+  it("puts a receipt already split ahead of everything, since nothing else can help", () => {
+    const taken = { ...ready, receiptTaken: true, items: [{ claimedBy: [] }], hasSplitPartner: false };
+    expect(confirmBlock(taken)).toBe("This receipt was already split.");
   });
 
   it("says nobody has claimed first, since that's the earlier step", () => {

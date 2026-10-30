@@ -39,6 +39,7 @@ export interface BillState {
   // Display only, from here down.
   // Worked out here so the page and its script can't disagree with Confirm.
   hasSplitPartner: boolean;
+  receiptTaken: boolean;
   // One entry per debtor: the one amount the page shows as theirs (their own
   // share and their guests', after pardons, less what any guest paid the
   // payer directly), and what they have paid towards it themselves. Worked
@@ -83,8 +84,12 @@ export interface PayExtras {
   payments?: Settlement[];
 }
 
+export interface StateFlags {
+  receiptTaken?: boolean;
+}
+
 // Everything renderPage takes besides the bill, in one bag.
-export type StateExtras = { hasPayments?: boolean; paid?: ParticipantId[] } & GuestsPaid & PayExtras;
+export type StateExtras = { hasPayments?: boolean; paid?: ParticipantId[] } & GuestsPaid & PayExtras & StateFlags;
 
 // Someone holding a link to a bill they are not on (they opened it while it
 // was confirmed, and it was reopened since) gets nothing to tap: claiming
@@ -125,6 +130,7 @@ export function billState(
   paid: ParticipantId[] = [],
   guestsPaid: GuestsPaid = {},
   payExtras: PayExtras = {},
+  flags: StateFlags = {},
 ): BillState {
   const toPayer = new Set(guestsPaid.paidToPayer);
   const toHost = new Set(guestsPaid.paidToHost);
@@ -157,6 +163,7 @@ export function billState(
     }),
     result,
     hasSplitPartner: hasSplitPartner(result.shares, participants, bill.payerId),
+    receiptTaken: flags.receiptTaken ?? false,
     owing,
     pay,
     viewerVenmo: payExtras.viewerVenmo ?? null,
@@ -213,13 +220,13 @@ export async function pageData(
   snapshot: BillSnapshot,
   viewer: ParticipantId,
 ): Promise<{ result: SplitResult; extras: StateExtras }> {
-  const { hasPayments, paid, paidToPayer, paidToHost } = snapshot;
+  const { hasPayments, paid, paidToPayer, paidToHost, receiptTaken } = snapshot;
   const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, ...pay } };
+  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, ...pay } };
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
-  const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
+  const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost, receiptTaken } = snapshot;
   const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay);
+  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken });
 }

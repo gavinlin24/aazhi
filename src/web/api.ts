@@ -712,6 +712,7 @@ const CONFIRM_REFUSED = {
   unreconciled: "Line items do not add up to total!",
   unclaimed: "Some lines have nobody on them yet.",
   alone: "Add someone to split with.",
+  "receipt-taken": "This receipt was already split.",
 };
 
 // `revision` is the bill the payer looked at: anything that changed since

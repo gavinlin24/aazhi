@@ -6,7 +6,7 @@ import {
   type APIAttachment,
   type APIInteraction,
 } from "discord-api-types/v10";
-import { addParticipant, createBill, insertItems, ReceiptInOtherServerError, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
+import { addParticipant, createBill, insertItems, ReceiptAlreadySplitError, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
 import type { Env } from "../../env";
 import { extractReceipt, type Extraction } from "../../extract/claude";
 import { receiptKey } from "../../extract/receipt-key";
@@ -38,7 +38,7 @@ const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string
 
 const SAVE_FAILED = "Something went wrong saving this bill. Try again in a minute.";
 
-const IN_OTHER_SERVER = "This receipt is already on a bill in another server. Deleting that bill frees it.";
+const ALREADY_SPLIT = "This receipt was already split.";
 
 // Cloudflare cancels background work 30 s after the response, silently, so a
 // hung read would leave "thinking..." forever. Reading gets 20 s across both
@@ -180,8 +180,8 @@ async function readAndPost(
     }
   } catch (error) {
     // Refused before anything was saved, so this channel's open draft stays.
-    if (error instanceof ReceiptInOtherServerError) {
-      await editOriginal(interactionToken, { content: IN_OTHER_SERVER, allowed_mentions: { parse: [] } }, env);
+    if (error instanceof ReceiptAlreadySplitError) {
+      await editOriginal(interactionToken, { content: ALREADY_SPLIT, allowed_mentions: { parse: [] } }, env);
       return;
     }
     console.error("split failed", error);

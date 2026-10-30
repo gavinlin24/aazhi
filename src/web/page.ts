@@ -1753,6 +1753,7 @@ function drill(v: View): string {
 // Why the payer can't confirm yet, in their words, or null when they can.
 // The server refuses the same cases; this says so before the tap.
 function confirmBlock(s: BillState): string | null {
+  if (s.receiptTaken) return "This receipt was already split.";
   if (s.printedTotalCents === null) return "Enter the receipt total first.";
   if (!s.reconciles.ok) return "Line items do not add up to total!";
   if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
@@ -1893,7 +1894,7 @@ export function renderPage(
   extras: StateExtras = {},
   nowMs: number = Date.now(),
 ): string {
-  const s = billState(bill, result, items, participants, viewer, extras.hasPayments ?? false, extras.paid ?? [], extras, extras);
+  const s = billState(bill, result, items, participants, viewer, extras.hasPayments ?? false, extras.paid ?? [], extras, extras, extras);
   const v: View = {
     bill,
     s,

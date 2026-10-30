@@ -873,6 +873,7 @@ export const CLIENT_SCRIPT = String.raw`
   // ---- what can be done to the bill ----------------------------------------
 
   function confirmBlock(s) {
+    if (s.receiptTaken) return "This receipt was already split.";
     if (s.printedTotalCents === null) return "Enter the receipt total first.";
     if (!s.reconciles.ok) return "Line items do not add up to total!";
     if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
@@ -971,7 +972,7 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-actions]");
     if (!card) return;
     const s = v.s;
-    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, s.viewerVenmo, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
+    keyedInto(card, JSON.stringify([s.status, confirmBlock(s), s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, s.viewerVenmo, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
   }
 
   // Mirrors paidBy on the server.
