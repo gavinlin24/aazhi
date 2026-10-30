@@ -720,7 +720,7 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   function fraction(done, total) {
-    return el("p", { class: "legend" }, el("span", null, [icon("check"), el("span", { class: "money" }, money(done)), " / ", el("span", { class: "money" }, money(total))]));
+    return el("p", { class: "legend" }, el("span", null, [el("span", { class: "money" }, money(done)), " of ", el("span", { class: "money" }, money(total)), " paid"]));
   }
 
   function heroNodes(v) {
@@ -731,6 +731,7 @@ export const CLIENT_SCRIPT = String.raw`
       const left = debtors.reduce((n, id) => n + leftOf(v, id), 0);
       return [
         el("div", { class: "flow" }, [stack(v, debtors, 4), icon("arrow", "arrow"), av(v, s.viewer)]),
+        el("p", { class: "hero-cap" }, "to collect"),
         el("div", { class: "collect" }, [el("p", { class: "hero-amt money", "data-you-owed": true }, money(left)), pie(total - left, total)]),
         fraction(total - left, total),
       ];

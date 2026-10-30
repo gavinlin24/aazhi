@@ -571,7 +571,7 @@ describe("renderPage", () => {
 
       const theo = view("theo", { settled, paid: ["jess", "theo"], hasPayments: true });
       expect(await textOf(theo, "[data-you-owed]")).toBe(money(share("theo").owedCents - 100));
-      expect(await textOf(theo, "[data-you] .legend:not([data-you-detail])")).toBe(`${money(100)} / ${money(share("theo").owedCents)}`);
+      expect(await textOf(theo, "[data-you] .legend:not([data-you-detail])")).toBe(`${money(100)} of ${money(share("theo").owedCents)} paid`);
 
       // Everyone who owes something but the forgiven, less the two payments.
       // Kim, whom the payer added, owes the payer directly.
@@ -579,7 +579,8 @@ describe("renderPage", () => {
       const total = debtors.reduce((n, id) => n + share(id).owedCents, 0) + share("guest-sam").owedCents;
       const payer = view("gavin", { settled, paid: ["jess", "theo"], hasPayments: true });
       expect(await textOf(payer, "[data-you-owed]")).toBe(money(total - jess - 100));
-      expect(await textOf(payer, "[data-you] .legend")).toBe(`${money(jess + 100)} / ${money(total)}`);
+      expect(await textOf(payer, "[data-you] .hero-cap")).toBe("to collect");
+      expect(await textOf(payer, "[data-you] .legend")).toBe(`${money(jess + 100)} of ${money(total)} paid`);
       expect(await textOf(payer, '[data-go="people"] .count')).toBe(`付讫 1/${debtors.length}`);
     });
 

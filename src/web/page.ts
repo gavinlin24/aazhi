@@ -565,6 +565,9 @@ button.tile:active { background: var(--fill); }
 .flow .stack .av + .av { margin-left: -6px; }
 .flow .arrow { width: 26px; height: 26px; color: var(--muted); }
 .hero-amt { font: 500 50px/1.1 var(--display); letter-spacing: -0.02em; margin-top: 12px; }
+/* Same words and weight as the bar's label, so the two read as one sentence. */
+.hero-cap { margin-top: 14px; font-size: 14px; line-height: 1; color: var(--muted); }
+.hero-cap + .collect .hero-amt { margin-top: 2px; }
 .hero .was { color: var(--muted); font-size: 18px; margin-top: 12px; }
 .hero .was + .hero-amt { margin-top: 0; }
 .hero .stamp { position: absolute; right: 20px; top: 54px; font-size: 26px; padding: 5px 4px; border-width: 2.5px; letter-spacing: 3px; }
@@ -1241,6 +1244,10 @@ function sentRow(v: View): string {
   return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I sent it</button></div>`;
 }
 
+function paidOf(done: number, total: number): string {
+  return `<p class="legend"><span><span class="money">${formatCents(done)}</span> of <span class="money">${formatCents(total)}</span> paid</span></p>`;
+}
+
 function hero(v: View): string {
   const s = v.s;
   const arrow = icon("arrow", "arrow");
@@ -1250,8 +1257,9 @@ function hero(v: View): string {
     const left = debtors.reduce((n, id) => n + leftOf(v, id), 0);
     return `<section class="card hero is-payer" data-you aria-label="Owed to you">
 <div class="flow">${stack(v, debtors, 4)}${arrow}${av(v, s.viewer)}</div>
+<p class="hero-cap">to collect</p>
 <div class="collect"><p class="hero-amt money" data-you-owed>${formatCents(left)}</p>${pie(total - left, total)}</div>
-<p class="legend"><span>${icon("check")}<span class="money">${formatCents(total - left)}</span> / <span class="money">${formatCents(total)}</span></span></p>
+${paidOf(total - left, total)}
 </section>`;
   }
   // A guest who paid the payer directly is no longer part of what the viewer pays.
@@ -1273,7 +1281,7 @@ function hero(v: View): string {
 <div class="flow">${stack(v, mine, 3)}${arrow}${av(v, s.payerId)}</div>
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${forgiven ? "" : splitBar(parts)}
-${partial ? `<p class="legend"><span>${icon("check")}<span class="money">${formatCents(o.paidCents)}</span> / <span class="money">${formatCents(o.owedCents)}</span></span></p>` : ""}
+${partial ? paidOf(o.paidCents, o.owedCents) : ""}
 ${paid ? "" : payRow(v)}
 ${sentRow(v)}
 </section>`;
