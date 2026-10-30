@@ -31,6 +31,20 @@ describe("the page script", () => {
 
 });
 
+describe("the Confirm button's reason for waiting", () => {
+  const { confirmBlock } = helpers<{ confirmBlock: (s: unknown) => string | null }>("confirmBlock");
+  const ready = { printedTotalCents: 2000, reconciles: { ok: true }, items: [{ claimedBy: ["gavin"] }], hasSplitPartner: true };
+
+  it("waits for someone to split with, and matches the page", () => {
+    expect(confirmBlock({ ...ready, hasSplitPartner: false })).toBe("Add someone to split with.");
+    expect(confirmBlock(ready)).toBeNull();
+  });
+
+  it("says nobody has claimed first, since that's the earlier step", () => {
+    expect(confirmBlock({ ...ready, items: [{ claimedBy: [] }], hasSplitPartner: false })).toBe("Nobody has claimed anything yet.");
+  });
+});
+
 describe("a price typed into the line editor", () => {
   type Input = { value: string; dataset: { off?: string } };
   const { amountOf, addonPrice } = helpers<{
@@ -62,24 +76,5 @@ describe("a price typed into the line editor", () => {
     expect(addonPrice(charge(""))).toBe("0.00");
     expect(addonPrice(moneyOff("  "))).toBe("0.00");
     expect(addonPrice(charge("-0.50"))).toBeNull();
-  });
-});
-
-describe("the Venmo sheet at Confirm", () => {
-  const { asksForVenmo } = helpers<{
-    asksForVenmo: (s: { viewer: string; viewerVenmo: string | null; participants: { id: string }[] }) => boolean;
-  }>("asksForVenmo");
-  const onBill = (...ids: string[]) => ids.map((id) => ({ id }));
-
-  it("asks a payer with no Venmo when anyone else is on the bill", () => {
-    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: null, participants: onBill("gavin", "marcus") })).toBe(true);
-  });
-
-  it("skips it for a payer alone on the bill", () => {
-    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: null, participants: onBill("gavin") })).toBe(false);
-  });
-
-  it("skips it once a Venmo is saved", () => {
-    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: "gavin-l", participants: onBill("gavin", "marcus") })).toBe(false);
   });
 });

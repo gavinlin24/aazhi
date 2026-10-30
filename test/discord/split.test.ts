@@ -668,7 +668,7 @@ describe("a bill with one person", () => {
     return response;
   }
 
-  it("goes from /split through Confirm and counts on no stat", async () => {
+  it("goes from /split to a refused Confirm and counts on no stat", async () => {
     anthropic = () =>
       toolUse(saigonToolInput({ items: [{ label: "Pho dac biet", price: "18.00", confidence: 0.95 }], tax: "2.00", printed_total: "20.00" }));
     await run(slashSplit());
@@ -697,9 +697,10 @@ describe("a bill with one person", () => {
     expect(claimed.status).toBe(200);
     const { revision } = (await getBill(db, id))!;
     const confirmed = await page(`/b/${id}/confirm`, token, { method: "POST", body: JSON.stringify({ revision }) });
-    expect(confirmed.status).toBe(200);
+    expect(confirmed.status).toBe(409);
+    expect(await confirmed.json()).toMatchObject({ error: "Add someone to split with." });
 
-    expect((await getBill(db, id))!.status).toBe("confirmed");
+    expect((await getBill(db, id))!.status).toBe("draft");
     expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
     const { lists } = await serverBoards(db, "guild-1", Date.UTC(2026, 9, 30));
     expect(lists["spent:all"]).toEqual([]);

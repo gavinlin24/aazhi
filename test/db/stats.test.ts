@@ -52,7 +52,7 @@ describe("the month a bill counts in", () => {
 
 describe("the boards", () => {
   it("leaves a bill with nobody else on it off every board", async () => {
-    await seedOuting(db, { id: "solo", people: [gavin], items: [["Pho", 2000, ["gavin"]]], billDate: "2026-10-05" });
+    await seedOuting(db, { id: "solo", older: true, people: [gavin], items: [["Pho", 2000, ["gavin"]]], billDate: "2026-10-05" });
     await seedOuting(db, { id: "two", people: [marcus, gavin], items: [["Pho", 2000, ["marcus"]], ["Bun", 1500, ["gavin"]]], billDate: "2026-10-06" });
 
     const { lists } = await serverBoards(db, G1, NOW);
@@ -62,7 +62,7 @@ describe("the boards", () => {
   });
 
   it("does not let a bystander turn a solo bill into an outing or a hosted bill", async () => {
-    await seedOuting(db, { id: "b1", people: [gavin, lena], items: [["Pho", 2000, ["gavin"]]], billDate: "2026-10-05" });
+    await seedOuting(db, { id: "b1", older: true, people: [gavin, lena], items: [["Pho", 2000, ["gavin"]]], billDate: "2026-10-05" });
 
     const { lists } = await serverBoards(db, G1, NOW);
     expect(lists["hosted:all"]).toEqual([]);
@@ -75,6 +75,7 @@ describe("the boards", () => {
   it("counts a bill with a guest as hosted, and never counts the guest", async () => {
     await seedOuting(db, {
       id: "b1",
+      older: true,
       people: [gavin],
       items: [["Pho", 2000, ["gavin"]]],
       guest: { name: "Sam", addedBy: "gavin", item: ["Bun", 900] },
@@ -247,7 +248,7 @@ describe("a profile", () => {
   });
 
   it("counts nothing from a bill with nobody else on it", async () => {
-    await seedOuting(db, { id: "solo", people: [lena], items: [["Toast", 1200, ["lena"]]], billDate: "2026-10-05" });
+    await seedOuting(db, { id: "solo", older: true, people: [lena], items: [["Toast", 1200, ["lena"]]], billDate: "2026-10-05" });
     expect(await personProfile(db, G1, "lena", NOW)).toBeNull();
     expect(await personSummary(db, G1, "lena")).toBeNull();
     expect(await hasBillHere(db, G1, "lena")).toBe(false);
@@ -256,6 +257,7 @@ describe("a profile", () => {
   it("takes a guest as somebody else, with no one to name", async () => {
     await seedOuting(db, {
       id: "b1",
+      older: true,
       people: [lena],
       place: null,
       items: [["Toast", 1200, ["lena"]]],
@@ -356,7 +358,7 @@ describe("two servers", () => {
 
   it("does not put someone on a board for a solo bill here, whatever they have elsewhere", async () => {
     await both();
-    await seedOuting(db, { id: "s1", people: [["theo", "Theo Solo"]], items: [["A", 100, ["theo"]]], billDate: "2026-10-09" });
+    await seedOuting(db, { id: "s1", older: true, people: [["theo", "Theo Solo"]], items: [["A", 100, ["theo"]]], billDate: "2026-10-09" });
     expect(await hasBillHere(db, G1, "theo")).toBe(false);
     expect(scores((await serverBoards(db, G1, NOW)).lists["spent:all"]).map(([, id]) => id)).toEqual(["marcus", "gavin"]);
     expect((await personProfile(db, G1, "marcus", NOW))!.companions[0]).toMatchObject({ name: "Theo", inServer: false });

@@ -215,7 +215,7 @@ describe("/profile", () => {
   });
 
   it("counts a bill with nobody else on it as no bills", async () => {
-    await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]] });
+    await seedOuting(db, { id: "b1", older: true, people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]] });
     expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
   });
 

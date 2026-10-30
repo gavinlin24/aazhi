@@ -798,11 +798,23 @@ export function amountChanges(
   });
 }
 
-export type ConfirmRefusal = "stale" | "unreconciled" | "not-payer" | "not-draft" | "unclaimed";
+export type ConfirmRefusal = "stale" | "unreconciled" | "not-payer" | "not-draft" | "unclaimed" | "alone";
 export type ConfirmResult = { ok: true; changes: AmountChange[] } | { ok: false; reason: ConfirmRefusal };
 
 function refused(reason: ConfirmRefusal): ConfirmResult {
   return { ok: false, reason };
+}
+
+// A split needs another Discord member with something to pay back. A guest
+// doesn't count: their share lands on whoever brought them, so a bill with only
+// the payer's guests has nobody else on Discord to settle it.
+export function hasSplitPartner(
+  shares: Pick<Share, "participant" | "owedCents">[],
+  participants: Pick<Participant, "id" | "kind">[],
+  payerId: ParticipantId,
+): boolean {
+  const members = new Set(participants.filter((p) => p.kind === "member" && p.id !== payerId).map((p) => p.id));
+  return shares.some((s) => s.owedCents > 0 && members.has(s.participant));
 }
 
 // `revision` is the one the payer's Confirm was drawn from. Every check runs
@@ -830,6 +842,7 @@ export async function confirmBill(
   // With every line claimed the claimed slice is the whole bill, so the
   // frozen shares sum to the printed total.
   if (!split.fullyClaimed) return refused("unclaimed");
+  if (!hasSplitPartner(split.shares, snapshot.participants, bill.payerId)) return refused("alone");
 
   // A bill confirmed before carries its old frozen rows; comparing against
   // them is what lets a re-confirm say out loud whose amount moved.

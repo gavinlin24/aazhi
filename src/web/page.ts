@@ -1756,6 +1756,7 @@ function confirmBlock(s: BillState): string | null {
   if (s.printedTotalCents === null) return "Enter the receipt total first.";
   if (!s.reconciles.ok) return "Line items do not add up to total!";
   if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+  if (!s.hasSplitPartner) return "Add someone to split with.";
   return null;
 }
 

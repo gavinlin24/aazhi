@@ -18,6 +18,9 @@ export interface Outing {
   pardon?: string;
   // Stop before Confirm, for a draft that must not count.
   draft?: boolean;
+  // A bill from before Confirm wanted another member with a share. Those stay
+  // confirmed in D1, so the stats still have to leave them out.
+  older?: boolean;
 }
 
 // One outing the way the app leaves it in D1: rows through the same writes the
@@ -59,9 +62,14 @@ export async function seedOuting(db: D1Database, outing: Outing): Promise<void> 
     await addClaim(db, o.id, `${o.id}-guest`, id);
   }
   if (!o.draft) {
+    // Confirm no longer makes these, so someone else stands in as payer for
+    // the freeze, which keeps the shares the real ones.
+    const actor = o.older ? "older-bill-stand-in" : payer;
+    if (o.older) await db.prepare("UPDATE bills SET payer_id = ? WHERE id = ?").bind(actor, o.id).run();
     const bill = (await getBill(db, o.id))!;
-    const result = await confirmBill(db, o.id, bill.revision, payer);
+    const result = await confirmBill(db, o.id, bill.revision, actor);
     if (!result.ok) throw new Error(`could not confirm ${o.id}: ${result.reason}`);
+    if (o.older) await db.prepare("UPDATE bills SET payer_id = ? WHERE id = ?").bind(payer, o.id).run();
     if (o.pardon) await setPardon(db, o.id, o.pardon, true);
   }
   // The month guard reads a print date against the day the bill was made, so a

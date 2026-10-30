@@ -876,6 +876,7 @@ export const CLIENT_SCRIPT = String.raw`
     if (s.printedTotalCents === null) return "Enter the receipt total first.";
     if (!s.reconciles.ok) return "Line items do not add up to total!";
     if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+    if (!s.hasSplitPartner) return "Add someone to split with.";
     return null;
   }
 
@@ -1954,17 +1955,11 @@ export const CLIENT_SCRIPT = String.raw`
     slam(el("span", { class: "stamp" }, "付讫"));
   }
 
-  // The sheet's pitch is friends paying you back, which means nothing with
-  // nobody else on the bill.
-  function asksForVenmo(s) {
-    return !s.viewerVenmo && s.participants.some((p) => p.id !== s.viewer);
-  }
-
   // Each sheet hands to the next in place. Closing first would land its close
   // event on the sheet that follows.
   function confirmBill(skipVenmo) {
     const from = root.querySelector("[data-confirm]");
-    if (!skipVenmo && asksForVenmo(state)) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
+    if (!skipVenmo && !state.viewerVenmo) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
     if (openLines(state).length > 0) return openSheet({ kind: "split" }, from);
     closeSheet();
     return toggle("confirm", "POST", "/confirm", { revision: state.revision });
