@@ -213,10 +213,20 @@ button is close to Discord's limit, and it expires with the token it signs.
 
 | Stat | Counts | Leaves out |
 |---|---|---|
-| Outings | Confirmed bills you were on | Drafts, reopened, deleted and replaced bills |
-| Hosted | Bills you paid with at least one other person on them | A bill with only you on it |
+| Outings | Confirmed bills that count for you | Drafts, reopened, deleted and replaced bills |
+| Hosted | Bills that count for you and that you paid | Bills you paid with a $0 share of your own |
 | Spent | Your own share at confirm, paid or not | Forgiven shares and guests |
 | Unique visits | Distinct places, after folding | Bills with no place name |
+
+A bill counts for you only if your share is above $0 and someone else's is too.
+This applies to every stat, including Went with and You and Marcus. Tapping Open
+the split puts anyone on a bill, so a share is what shows they were there. A
+guest with a share is someone else. A forgiven share still counts as being there.
+
+A one-person bill counts on no stat. It can still be made and confirmed, and it
+keeps its own bill page. The Venmo sheet at Confirm is skipped when nobody else
+is on the bill, since nobody would need the button. The rule is one clause in
+`src/db/stats.ts`, so a later kind of bill made to count alone can be let through.
 
 Spent counts at confirm so that not paying can't lower a total, and a past
 month never changes later. "Hosted" means the payer. The word has nothing to do

@@ -452,6 +452,10 @@ with their full total. Bills stay separate, and the monthly recap stays per
 server: that recap is where a group sees only itself.
 Guests appear in no statistic, because no guest record survives its bill.
 
+A person counts on a bill only if their share is above $0 and someone else's
+is too. So someone who only tapped Open the split counts for nothing, and a
+one-person bill counts on no statistic.
+
 One receipt split in two servers counts twice, as two outings. That gap is
 known and has no fix yet.
 
