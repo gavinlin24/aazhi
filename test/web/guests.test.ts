@@ -505,8 +505,7 @@ describe("a guest another member added", () => {
 
     const state = await stateFor("dani");
     expect(state.owing.dani).toEqual({ owedCents: together, paidCents: 0 });
-    const venmo = state.pay.find((o: any) => o.method === "venmo");
-    expect(new URL(venmo.url).searchParams.get("amount")).toBe(plain(together));
+    expect(new URL(state.pay.webUrl).searchParams.get("amount")).toBe(plain(together));
 
     expect((await payment("dani", together)).status).toBe(200);
     expect(lastPost()).toBe(`Dani paid Gavin ${formatCents(together)} for ${SAIGON_KITCHEN}, and is all paid up.`);
@@ -611,7 +610,7 @@ describe("a guest the payer added", () => {
     await confirmed();
 
     const state = await stateFor("gavin");
-    expect(state.pay).toEqual([]);
+    expect(state.pay).toBeNull();
     expect(state.owing.gavin.owedCents).toBe(await owedOf("gavin"));
     expect(state.owing[kim].owedCents).toBe(await owedOf(kim));
     const refused = await payment("gavin", 100);
@@ -1109,7 +1108,7 @@ describe("pardons", () => {
     await pardon("gavin", sam);
     const covered = await stateFor("dani");
     expect(covered.owing.dani.owedCents).toBe(0);
-    expect(covered.pay).toEqual([]);
+    expect(covered.pay).toBeNull();
     expect(await select(await page("dani"), "[data-sent]")).toEqual([]);
   });
 });

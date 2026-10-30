@@ -148,7 +148,7 @@ function components(bill: BillRow): APIActionRowComponent<APIComponentInMessageA
         {
           type: ComponentType.UserSelect,
           custom_id: `roster:${bill.id}`,
-          placeholder: "Add people who were at dinner",
+          placeholder: "Add people who were there",
           min_values: 1,
           max_values: 25,
         },
@@ -218,8 +218,9 @@ function groupAmount(group: DebtorGroup, names: Map<string, string>): string {
 // The owe card. Amounts are the rows frozen at confirm, never a recomputation
 // from the lines. One row per person who owes the payer, so the list is
 // exactly what the payer is collecting: the payer's own share is owed to
-// nobody. What each amount covers, paying it, and saying something is wrong
-// are all on the page.
+// nobody, and neither is $0.00 from someone who opened the bill and claimed
+// nothing. A forgiven share keeps its row, struck through. What each amount
+// covers, paying it, and saying something is wrong are all on the page.
 function oweCard(
   bill: BillRow,
   result: SplitResult,
@@ -233,7 +234,7 @@ function oweCard(
     names.get(bill.payerId) ?? "the person who paid",
   );
   const rows = groupByDebtor(frozen, participants, bill.payerId)
-    .filter((group) => group.debtor !== bill.payerId)
+    .filter((group) => group.debtor !== bill.payerId && [group.own, ...group.guests].some((s) => s && s.owedCents !== 0))
     .map((group) => {
       const member = participants.find((p) => p.id === group.debtor);
       const who = group.guests.length === 0 ? mention(member, names, group.debtor) : groupName(group, names);

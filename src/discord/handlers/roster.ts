@@ -126,7 +126,7 @@ export const pickRoster: InteractionHandler = async (body, env, ctx) => {
     return json(
       ephemeral(
         `Only ${payer ? escapeMarkdown(payer) : "the person who paid"} can add people here. ` +
-          "If you were at dinner, tap **Open the split** and you're on the bill.",
+          "If you were there, tap **Open the split** and you're on the bill.",
       ),
     );
   }

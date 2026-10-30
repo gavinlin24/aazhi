@@ -730,7 +730,7 @@ export function renderMath(share: Share, items: LineItem[], bill: BillRow): stri
 - `Show my math` is ephemeral: the person's items, their displayed tax and tip slices, and the fraction used.
 - `That's not mine` calls `reopenBill`, so pay controls vanish for everyone, and posts who flagged it.
 - Zelle returns instructions, not a URL, because the network is closed to third parties.
-- The handle comes from a `payment_handles` table keyed on Discord user id, holding one row per method. The payer sets theirs once with a `/paywith` command and it is reused on every later bill. **The spec leaves the diner-to-handle mapping to the builder; this is that call.** A payer with no handle on file gets a `Pay my share` button that asks them to set one, rather than a dead link.
+- The handle comes from a `payment_handles` table keyed on Discord user id, holding one row per method. The payer sets theirs once and it is reused on every later bill. **The spec leaves the diner-to-handle mapping to the builder; this is that call.** A payer with no handle on file gets a `Pay my share` button that asks them to set one, rather than a dead link.
 
 - [ ] **Step 1: Write the failing tests**
 

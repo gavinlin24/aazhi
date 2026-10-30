@@ -722,9 +722,9 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   function payNodes(v) {
-    if (v.s.pay.length === 0) return null;
-    return el("div", { class: "pay-row", "data-pay": true }, v.s.pay.map((o) =>
-      el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])));
+    if (!v.s.pay) return null;
+    const link = (kind, url) => el("a", { class: "pay " + kind, href: url }, ["Venmo", icon("out")]);
+    return el("div", { class: "pay-row", "data-pay": true }, [link("is-app", v.s.pay.appUrl), link("is-web", v.s.pay.webUrl)]);
   }
 
   function collected(done, total) {
@@ -758,8 +758,11 @@ export const CLIENT_SCRIPT = String.raw`
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
       whoNodes(v),
     ].concat(forgiven || mixed ? [] : splitNodes(counted(v, s.viewer)))
-      .concat(paid ? [] : [payNodes(v)])
-      .concat([sentNodes(v)]);
+      .concat([payActs(paid ? null : payNodes(v), sentNodes(v))]);
+  }
+
+  function payActs(pay, sent) {
+    return pay || sent ? el("div", { class: "pay-acts" }, [pay, sent]) : null;
   }
 
   function whoNodes(v) {
@@ -921,17 +924,29 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
   }
 
-  function act(attrs, iconName, title, sub, cls) {
+  function act(attrs, iconName, title, sub, cls, chev) {
     return el("button", Object.assign({ type: "button", class: "act" + (cls ? " " + cls : "") }, attrs), [
       icon(iconName),
       el("span", { class: "grow" }, [el("span", null, title), sub ? el("span", { class: "act-sub" }, sub) : null]),
+      chev ? icon("chev") : null,
     ]);
+  }
+
+  // Mirrors venmoAct on the server.
+  function venmoAct(v) {
+    const s = v.s;
+    if (!v.people.has(s.viewer)) return null;
+    const saved = s.viewerVenmo;
+    if (s.viewerIsPayer && s.status === "draft" && !saved) return null;
+    return act({ "data-venmo": true, "aria-haspopup": "dialog" }, "coin", "Your Venmo",
+      saved ? "@" + saved : "Add it so friends can pay you back.", "", true);
   }
 
   function actionNodes(v) {
     const s = v.s;
     if (s.viewerIsPayer) {
       return [
+        venmoAct(v),
         s.status === "draft" ? confirmNodes(v) : null,
         s.status === "confirmed"
           ? act({ "data-reopen": true, "aria-busy": busy.has("reopen") ? "true" : null }, "receipt", "Edit the bill", "Paying pauses until you confirm again.")
@@ -940,14 +955,19 @@ export const CLIENT_SCRIPT = String.raw`
           armed.has("delete-bill") ? "Tap again to delete this bill" : "Delete this bill", null, armed.has("delete-bill") ? "is-armed" : ""),
       ];
     }
-    return [act({ "data-ask": "wrong", "aria-haspopup": "dialog" }, "warn", "Something's wrong", "Paying pauses until " + nameOf(v, s.payerId) + " fixes it.", "is-warn")];
+    return [
+      venmoAct(v),
+      s.status === "confirmed"
+        ? act({ "data-ask": "wrong", "aria-haspopup": "dialog" }, "warn", "Something's wrong", "Paying pauses until " + nameOf(v, s.payerId) + " fixes it.", "is-warn")
+        : null,
+    ];
   }
 
   function renderActions(v) {
     const card = root.querySelector("[data-actions]");
     if (!card) return;
     const s = v.s;
-    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
+    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, s.viewerVenmo, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
   }
 
   // Mirrors paidBy on the server.
@@ -1044,10 +1064,10 @@ export const CLIENT_SCRIPT = String.raw`
     if (dialog && dialog.open) dialog.close();
   }
 
-  function sheetHead(v, id, title, amountText, extra) {
-    return el("div", { class: "sheet-head" }, [
+  function sheetHead(v, id, title, amountText, extra, doomed) {
+    return el("div", { class: "sheet-head" + (doomed ? " is-struck" : "") }, [
       av(v, id),
-      el("h2", { id: "sheet-title" }, title),
+      el("h2", { id: "sheet-title" }, el("span", { class: "struck" }, title)),
       amountText === null ? null : el("span", { class: "money" }, amountText),
       extra || null,
       el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
@@ -1141,8 +1161,9 @@ export const CLIENT_SCRIPT = String.raw`
     // make the amount on the tile.
     const own = v.shares.get(id);
     const head = guests.length > 0 && own ? own.owedCents : owedOf(v, id);
+    const doomed = armed.has("remove:" + id);
     const nodes = [
-      sheetHead(v, id, p.displayName, money(head), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
+      sheetHead(v, id, p.displayName, money(head), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null, doomed),
     ];
     // Each block of lines ends in its own discount, tax and tip rows, figures
     // on the right like the lines above, so it adds up to its heading.
@@ -1155,8 +1176,63 @@ export const CLIENT_SCRIPT = String.raw`
       nodes.push(el("div", { class: "sheet-actions" }, el("button", { type: "button", class: "chip-btn", "data-add-guest": true }, [icon("plus"), "Guest"])));
     }
     for (const g of guests) nodes.push(guestBlock(v, g));
+    if (canRemove(v, p)) {
+      nodes.push(el("div", { class: "sheet-actions" }, el("button", { type: "button", class: "chip-btn" + (doomed ? " is-armed" : ""), "data-remove-member": id },
+        [icon("basket"), doomed ? "Tap again to remove" : "Remove", el("span", { class: "target" }, p.displayName)])));
+    }
     nodes.push(el("p", { class: "sheet-msg", role: "status" }, sheet.msg || ""));
     return nodes;
+  }
+
+  // The rules removeMember holds on the server, so the button only shows when
+  // it would work. Someone's guests have to come off first, in this same sheet.
+  function canRemove(v, p) {
+    const s = v.s;
+    return s.viewerIsPayer && s.status === "draft" && p.kind === "member" && p.id !== s.payerId && !stopped
+      && guestsOf(v, p.id).length === 0 && !(s.payments || []).some((x) => x.participant === p.id);
+  }
+
+  // One node for the sheet's life, like a line's form, so a redraw keeps what
+  // has been typed. On the nudge, "Confirm anyway" sits here too, and it never
+  // needs the field to be right.
+  function venmoForm(nudge) {
+    const input = el("input", {
+      class: "text-input",
+      name: "username",
+      autocomplete: "off",
+      autocapitalize: "none",
+      autocorrect: "off",
+      spellcheck: "false",
+      enterkeyhint: "done",
+      placeholder: "venmo-username",
+      "aria-label": "Venmo username",
+      "data-autofocus": !nudge,
+    });
+    input.value = state.viewerVenmo || "";
+    const field = el("span", { class: "handle-field" }, [el("span", { class: "at", "aria-hidden": "true" }, "@"), input]);
+    const msg = el("p", { class: "field-msg", role: "status" });
+    return el("form", { class: "handle-form", "data-venmo-form": nudge ? "confirm" : "", novalidate: true }, nudge
+      ? [field, msg, el("div", { class: "sheet-actions" }, [
+          el("button", { type: "button", class: "chip-btn sheet-go", "data-confirm-anyway": true }, "Confirm anyway"),
+          el("button", { type: "submit", class: "chip-btn sheet-go is-seal" }, "Save and confirm"),
+        ])]
+      : [field, el("button", { type: "submit", class: "chip-btn go" }, [icon("check"), "Save"]), msg]);
+  }
+
+  function venmoSheet() {
+    return [
+      askHead("Your Venmo"),
+      el("p", { class: "sheet-body" }, "Friends pay you here when you cover a bill."),
+      sheet.form,
+    ];
+  }
+
+  function nudgeSheet() {
+    return [
+      askHead("Add your Venmo first?"),
+      el("p", { class: "sheet-body" }, "Friends get a Venmo button once you do."),
+      sheet.form,
+    ];
   }
 
   function pickNode(v, item, p) {
@@ -1347,10 +1423,11 @@ export const CLIENT_SCRIPT = String.raw`
   function askStale(v) {
     const s = v.s;
     if (sheet.kind === "wrong") return s.status !== "confirmed";
+    if (sheet.kind === "nudge") return s.status !== "draft";
     return s.status !== "draft" || openLines(s).length === 0;
   }
 
-  const ASKS = ["wrong", "split"];
+  const ASKS = ["wrong", "split", "nudge"];
 
   function renderSheet(v) {
     const dialog = root.querySelector("dialog[data-sheet]");
@@ -1368,9 +1445,13 @@ export const CLIENT_SCRIPT = String.raw`
       ? () => lineSheet(v, sheet.id)
       : sheet.kind === "payer"
         ? () => payerSheet(v)
-        : ASKS.includes(sheet.kind)
-          ? () => askSheet(v)
-          : () => personSheet(v, sheet.id);
+        : sheet.kind === "venmo"
+          ? () => venmoSheet()
+          : sheet.kind === "nudge"
+            ? () => nudgeSheet()
+            : ASKS.includes(sheet.kind)
+              ? () => askSheet(v)
+              : () => personSheet(v, sheet.id);
     keyedInto(dialog, key, () => el("div", { class: "sheet-in" }, build()));
   }
 
@@ -1753,19 +1834,29 @@ export const CLIENT_SCRIPT = String.raw`
     if (name) name.focus();
   }
 
+  // The first tap only names what would go.
+  function secondTap(key) {
+    if (armed.delete(key)) return true;
+    armed.add(key);
+    render();
+    setTimeout(() => {
+      if (!armed.delete(key)) return;
+      render();
+    }, ARM_MS);
+    return false;
+  }
+
+  async function removeMember(button) {
+    const id = button.dataset.removeMember;
+    if (!secondTap("remove:" + id)) return;
+    const failure = await write("DELETE", "/member/" + encodeURIComponent(id));
+    if (failure && sheet) sheet.msg = failure.message;
+    render();
+  }
+
   async function removeGuest(button) {
     const id = button.dataset.removeGuest;
-    const key = "remove:" + id;
-    if (!armed.has(key)) {
-      armed.add(key);
-      render();
-      setTimeout(() => {
-        if (!armed.delete(key)) return;
-        render();
-      }, ARM_MS);
-      return;
-    }
-    armed.delete(key);
+    if (!secondTap("remove:" + id)) return;
     const failure = await write("DELETE", "/guest/" + encodeURIComponent(id));
     if (failure && sheet) sheet.msg = failure.message;
     if (claimFor === id) claimFor = null;
@@ -1863,9 +1954,28 @@ export const CLIENT_SCRIPT = String.raw`
     slam(el("span", { class: "stamp" }, "付讫"));
   }
 
-  function confirmBill() {
-    if (openLines(state).length > 0) return openSheet({ kind: "split" }, root.querySelector("[data-confirm]"));
+  // Each sheet hands to the next in place. Closing first would land its close
+  // event on the sheet that follows.
+  function confirmBill(skipVenmo) {
+    const from = root.querySelector("[data-confirm]");
+    if (!skipVenmo && !state.viewerVenmo) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
+    if (openLines(state).length > 0) return openSheet({ kind: "split" }, from);
+    closeSheet();
     return toggle("confirm", "POST", "/confirm", { revision: state.revision });
+  }
+
+  async function saveVenmo(form) {
+    const msg = form.querySelector(".field-msg");
+    msg.textContent = "";
+    setBusy(form, true);
+    const failure = await write("POST", "/venmo", { username: form.elements.username.value });
+    setBusy(form, false);
+    if (failure) {
+      msg.textContent = failure.message;
+      return;
+    }
+    if (form.dataset.venmoForm === "confirm") confirmBill();
+    else closeSheet();
   }
 
   function newId() {
@@ -1982,6 +2092,11 @@ export const CLIENT_SCRIPT = String.raw`
     }
     const remove = target.closest("[data-remove-guest]");
     if (remove) return removeGuest(remove);
+    const removing = target.closest("[data-remove-member]");
+    if (removing) return removeMember(removing);
+    const venmo = target.closest("[data-venmo]");
+    if (venmo) return openSheet({ kind: "venmo", form: venmoForm(false) }, venmo);
+    if (target.closest("[data-confirm-anyway]")) return confirmBill(true);
     const forgive = target.closest("[data-forgive]");
     if (forgive) {
       if (forgive.disabled) return;
@@ -2024,6 +2139,7 @@ export const CLIENT_SCRIPT = String.raw`
     else if (form.dataset.editLine || form.dataset.addLine !== undefined) submitLine(form);
     else if (form.dataset.guestForm !== undefined) addGuest(form);
     else if (form.dataset.rename) renameGuest(form);
+    else if (form.dataset.venmoForm !== undefined) saveVenmo(form);
   });
 
   root.addEventListener("input", (event) => {

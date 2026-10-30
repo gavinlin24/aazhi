@@ -46,10 +46,10 @@ function participantsOf(input: BillInput): Participant[] {
   }));
 }
 
-// Tea and water unclaimed: the spec's mid-dinner draft.
+// Tea and water unclaimed: the spec's half-claimed draft.
 const draft = withUnclaimed(SAIGON, ["tea", "water"]);
 
-// The day after the dinner, so the header's date drops the year it shares.
+// The day after the bill, so the header's date drops the year it shares.
 const NOW = Date.parse("2026-10-29T12:00:00.000Z");
 
 function page(viewer: string, b: BillRow = bill, input: BillInput = draft, people: Participant[] = participantsOf(input)) {
@@ -422,7 +422,8 @@ describe("renderPage", () => {
       tipCents: 5030,
       printedTotalCents: 27382,
       reconciles: { ok: true, discrepancyCents: null },
-      pay: [],
+      pay: null,
+      viewerVenmo: null,
     });
     expect(state.owing.marcus).toEqual({ owedCents: 3802, paidCents: 0 });
     expect(state.owing).not.toHaveProperty("guest-sam");
@@ -540,9 +541,22 @@ describe("renderPage", () => {
     expect(await textOf(unread, "#confirm-why")).toBe("Enter the receipt total first.");
   });
 
-  it("gives everyone else on a draft nothing to do to the bill as a whole", async () => {
-    expect(await select(page("marcus"), "[data-actions]")).toEqual([]);
+  it("gives everyone else on a draft only their Venmo, and someone off the bill nothing", async () => {
+    expect(await textOf(page("marcus"), "[data-actions]")).toBe("Your VenmoAdd it so friends can pay you back.");
     expect(await select(page("zoe"), "[data-actions]")).toEqual([]);
+  });
+
+  it("leaves the Venmo row off a payer's draft until they have one, since Confirm asks them", async () => {
+    const unset = page("gavin");
+    expect(await select(unset, "[data-venmo]")).toEqual([]);
+    expect((await select(unset, "[data-actions] > *")).map((node) => node.attrs["class"])).toEqual(["confirm-area", "act"]);
+
+    const saved = renderPage(bill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { viewerVenmo: "gavin-lin" }, NOW);
+    expect(await textOf(saved, "[data-venmo]")).toBe("Your Venmo@gavin-lin");
+
+    const confirmed = { ...bill, status: "confirmed" as const, confirmedAt: "2026-10-28T22:00:00.000Z" };
+    const after = renderPage(confirmed, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", {}, NOW);
+    expect(await textOf(after, "[data-venmo]")).toBe("Your VenmoAdd it so friends can pay you back.");
   });
 
   it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {
@@ -806,27 +820,40 @@ describe("renderPage", () => {
       expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
     });
 
-    it("offers the viewer the payer's ways to pay, for what they have left", async () => {
-      const handles = [{ method: "venmo" as const, handle: "gavin-l" }];
-      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], handles });
+    it("offers the viewer the payer's Venmo, for what they have left", async () => {
+      const payerVenmo = "gavin-l";
+      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], payerVenmo });
+      const left = share("theo").owedCents - 100;
 
-      const link = await one(html, "[data-pay] a.pay");
-      expect(link.attrs.href).toContain("venmo.com/gavin-l");
-      expect(link.attrs.href).toContain(`amount=${((share("theo").owedCents - 100) / 100).toFixed(2)}`);
-      expect(link.attrs).toMatchObject({ target: "_blank", rel: "noopener noreferrer" });
-      expect(link.text).toBe("Venmo");
-      expect(await select(view("gavin", { handles }), "[data-pay]")).toEqual([]);
-      expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
+      const app = await one(html, "[data-pay] a.pay.is-app");
+      const web = await one(html, "[data-pay] a.pay.is-web");
+      const amount = (left / 100).toFixed(2);
+      expect(app.attrs.href).toBe(`venmo://paycharge?txn=pay&amp;recipients=gavin-l&amp;amount=${amount}&amp;note=Saigon%20Kitchen%2010%2F28`);
+      expect(web.attrs.href).toBe(`https://venmo.com/gavin-l?txn=pay&amp;amount=${amount}&amp;note=Saigon%20Kitchen%2010%2F28`);
+      for (const link of [app, web]) {
+        // A new window for a custom scheme is more likely to be blocked.
+        expect(link.attrs).not.toHaveProperty("target");
+        expect(link.text).toBe("Venmo");
+      }
+      expect(await select(view("gavin", { payerVenmo }), "[data-pay]")).toEqual([]);
+      expect(await select(view("marcus", { payerVenmo }), "[data-pay]")).toEqual([]);
     });
 
-    it("offers a button per app the payer has, and just I paid when they have none", async () => {
-      const venmo = { method: "venmo" as const, handle: "gavin-l" };
-      const cashapp = { method: "cashapp" as const, handle: "GavinL" };
+    it("keeps I paid beside the Venmo button, since Venmo can't tell us a payment happened", async () => {
+      const row = await select(view("theo", { payerVenmo: "gavin-l" }), "[data-you] .pay-acts > *");
 
-      const both = view("theo", { handles: [venmo, cashapp] });
-      expect((await select(both, "[data-pay] a.pay")).map((x) => x.text)).toEqual(["Venmo", "Cash App"]);
+      expect(row.map((node) => node.attrs["class"])).toEqual(["pay-row", "sent-row needs-js"]);
+    });
 
-      const none = view("theo", { handles: [] });
+    it("draws no row at all for someone with nothing left", async () => {
+      const paid = view("theo", { payerVenmo: "gavin-l", settled: [{ participant: "theo", cents: share("theo").owedCents }] });
+
+      expect(await select(paid, ".pay-acts")).toEqual([]);
+    });
+
+    it("leaves just I paid when the payer has no Venmo saved", async () => {
+      const none = view("theo", { payerVenmo: null });
+
       expect(await select(none, "[data-pay]")).toEqual([]);
       expect(await textOf(none, "[data-you] [data-sent] [data-pay-all]")).toBe("I paid");
     });
@@ -841,7 +868,7 @@ describe("renderPage", () => {
       // No handle on file, so no link: "I paid" stands alone.
       expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
       const actions = await one(html, "[data-actions]");
-      expect(actions.text).toBe("Something&#39;s wrongPaying pauses until Gavin fixes it.");
+      expect(actions.text).toBe("Your VenmoAdd it so friends can pay you back.Something&#39;s wrongPaying pauses until Gavin fixes it.");
       expect(await select(html, "[data-actions] [data-ask]")).toEqual([expect.objectContaining({ attrs: expect.objectContaining({ "data-ask": "wrong" }) })]);
       expect(await select(html, "[data-confirm], [data-reopen], [data-delete-bill], [data-payments]")).toEqual([]);
     });

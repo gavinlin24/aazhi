@@ -15,12 +15,15 @@ import {
   getParticipants,
   getShares,
   GuestRefusedError,
+  MemberRefusedError,
   NobodyClaimedError,
+  NotOnRosterError,
   PardonRefusedError,
   PaymentsChangedError,
   PaymentsRecordedError,
   reassignPayer,
   removeGuest,
+  removeMember,
   renameGuest,
   reopenBill,
   setBillAmounts,
@@ -33,6 +36,7 @@ import {
   type BillSnapshot,
   type Participant,
 } from "../db/bills";
+import { setVenmoHandle } from "../db/handles";
 import {
   GuestPaidRefusedError,
   outstanding,
@@ -50,6 +54,7 @@ import { parsePriceCents } from "../extract/schema";
 import { formatCents } from "../format";
 import { debtorOf } from "../money/debtors";
 import type { Addon, Cents, ParticipantId } from "../money/types";
+import { normalizeVenmo, VENMO_RULE } from "./paylink";
 import { stateOf } from "./state";
 import { readToken } from "./token";
 
@@ -59,13 +64,13 @@ type Grant = { billId: string; participantId: ParticipantId };
 const LINK_REFUSED =
   "This link has expired or isn't yours. Go back to the bill in Discord and tap Open the split for a fresh one.";
 const NOT_FOUND = "This bill doesn't exist any more.";
-const NOT_ON_BILL = "You're not on this bill. If you were at dinner, tap Open the split on the bill in Discord to join it.";
+const NOT_ON_BILL = "You're not on this bill. If you were there, tap Open the split on the bill in Discord to join it.";
 const GONE: Partial<Record<BillRow["status"], string>> = {
   superseded: "This split was replaced by a newer one. Open the newer bill message in Discord and tap Open the split there.",
   deleted: "This split was deleted, so there's nothing left to change on it.",
 };
 
-// $999,999.99. Far past any dinner, and it keeps every sum of lines well
+// $999,999.99. Far past any bill, and it keeps every sum of lines well
 // inside the range where integer arithmetic stays exact.
 const MAX_CENTS = 99_999_999;
 const MAX_LABEL = 120;
@@ -322,6 +327,8 @@ api.post(
   }),
 );
 
+const ON_BILL_FIRST = "That person isn't on this bill. They join it by tapping Open the split in Discord.";
+
 // A separate write from the amounts, because handing the bill over also hands
 // over the right to make every other change.
 async function changePayer(c: Ctx, grant: Grant, body: Record<string, unknown>): Promise<Response> {
@@ -334,11 +341,13 @@ async function changePayer(c: Ctx, grant: Grant, body: Record<string, unknown>):
     return refuse(403, `Only ${payerName(snapshot)} can hand the bill to someone else.`);
   }
   const target = snapshot.participants.find((p) => p.id === to);
-  if (!target) return refuse(400, "That person isn't on this bill. They join it by tapping Open the split in Discord.");
+  if (!target) return refuse(400, ON_BILL_FIRST);
   if (target.kind !== "member") return refuse(400, "A guest can't be the one who paid. Pick someone with a Discord account.");
   try {
     return await commit(c, grant, snapshot.bill, () => reassignPayer(c.env.DB, grant.billId, to));
   } catch (error) {
+    // Taken off the bill between the read above and the write.
+    if (error instanceof NotOnRosterError) return refuse(400, ON_BILL_FIRST);
     if (!(error instanceof PaymentsRecordedError)) throw error;
     return refuse(
       409,
@@ -489,6 +498,56 @@ api.delete(
           `Take ${guest.displayName} off their lines instead, and their share drops to nothing.`,
       );
     }
+  }),
+);
+
+const MEMBER_REFUSED: Record<Exclude<MemberRefusedError["reason"], "no-member" | "payer">, (name: string) => string> = {
+  guests: (name) => `${name} brought a guest. Take the guest off first.`,
+  paid: (name) => `${name} has already paid on this bill, so they stay on it.`,
+};
+
+// Only the payer tidies the roster, and only while the bill is a draft: once
+// it is confirmed, everyone on it was told an amount.
+api.delete(
+  "/:billId/member/:memberId",
+  route(async (c, grant) => {
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (grant.participantId !== snapshot.bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can take people off the bill, because they paid.`);
+    }
+    const memberId = c.req.param("memberId") ?? "";
+    try {
+      return await commit(c, grant, snapshot.bill, () => removeMember(c.env.DB, grant.billId, memberId));
+    } catch (error) {
+      if (!(error instanceof MemberRefusedError)) throw error;
+      if (error.reason === "no-member") return refuse(404, "That person isn't on this bill any more.");
+      if (error.reason === "payer") return refuse(400, "You paid the bill, so you stay on it.");
+      const name = snapshot.participants.find((p) => p.id === memberId)?.displayName ?? "That person";
+      return refuse(409, MEMBER_REFUSED[error.reason](name));
+    }
+  }),
+);
+
+// The username belongs to the person, not the bill, so this changes nothing on
+// the bill and bumps no revision: every page reads it fresh on its next poll.
+// The bill only answers who is asking. The token names them, so nobody can set
+// another person's. It doesn't check they own the Venmo account, and can't:
+// Venmo has no API for that.
+api.post(
+  "/:billId/venmo",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["username"]);
+    const username = typeof body.username === "string" ? normalizeVenmo(body.username) : null;
+    if (username === null) bad(VENMO_RULE);
+
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (!snapshot.participants.some((p) => p.id === grant.participantId && p.kind === "member")) return refuse(403, NOT_ON_BILL);
+
+    await setVenmoHandle(c.env.DB, grant.participantId, username);
+    return currentState(c, grant);
   }),
 );
 
