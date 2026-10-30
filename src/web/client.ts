@@ -1110,8 +1110,13 @@ export const CLIENT_SCRIPT = String.raw`
     if (!p) return null;
     const guests = guestsOf(v, id);
     const forgiven = forgivenWhole(v, id);
+    // With guests, each block heads its own lines, so this one says the
+    // person's own share and the guests' blocks say theirs. Together they
+    // make the amount on the tile.
+    const own = v.shares.get(id);
+    const head = guests.length > 0 && own ? own.owedCents : owedOf(v, id);
     const nodes = [
-      sheetHead(v, id, p.displayName, money(owedOf(v, id)), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
+      sheetHead(v, id, p.displayName, money(head), paidUp(v, id) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null),
     ];
     // With guests, a food, tax and tip line would mix theirs in. Each block of
     // lines ends in its own tax and tip instead, so it adds up to that amount.
