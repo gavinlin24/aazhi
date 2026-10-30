@@ -737,6 +737,11 @@ button.tile:active { background: var(--fill); }
 .guest-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0 4px; }
 .guest-form .text-input { flex: 1; min-width: 0; }
 .guest-form > .av { --s: 36px; }
+.handle-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.handle-field { position: relative; flex: 1; min-width: 0; }
+.handle-field .at { position: absolute; top: 0; left: 11px; color: var(--muted); line-height: 44px; pointer-events: none; }
+.handle-field .text-input { width: 100%; padding-left: 28px; }
+.handle-form .sheet-actions { flex-basis: 100%; margin-top: 4px; }
 
 .bar {
   position: fixed;
@@ -831,7 +836,11 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .legend.parts > span { flex-direction: column; align-items: flex-start; gap: 1px; }
 .part-name { display: inline-flex; align-items: center; gap: 5px; height: 18px; font-size: 14px; }
 .legend.parts .money { color: var(--ink); }
-.pay-row { display: flex; gap: 8px; margin-top: 16px; }
+/* Venmo can't tell us a payment happened, so I paid stays beside the way out
+   to it, and has the row to itself when there is no Venmo to go to. */
+.pay-acts { display: flex; gap: 8px; margin-top: 16px; }
+.pay-acts > * { flex: 1 1 0; min-width: 0; }
+.pay-row { display: flex; }
 .pay {
   display: flex;
   flex: 1 1 0;
@@ -865,9 +874,7 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .whose .is-off { color: var(--muted); }
 .hero .whose .stamp { position: static; font-size: 12px; padding: 2px 1px; border-width: 1.5px; letter-spacing: 1px; }
 /* Recording a payment is the person's own word, not a link out, so it is
-   inked rather than sealed and sits under the ways to pay. */
-.sent-row { margin-top: 16px; }
-.pay-row + .sent-row { margin-top: 10px; }
+   inked rather than sealed. */
 .sent {
   display: flex;
   align-items: center;
@@ -1611,6 +1618,10 @@ function payRow(v: View): string {
   return `<div class="pay-row" data-pay>${link("is-app", pay.appUrl)}${link("is-web", pay.webUrl)}</div>`;
 }
 
+function payActs(pay: string, sent: string): string {
+  return pay || sent ? `<div class="pay-acts">${pay}${sent}</div>` : "";
+}
+
 // Only someone with something left to pay has anything to record. Paid is
 // yes or no, so the tap records all of it, with nothing to ask first.
 function sentRow(v: View): string {
@@ -1681,8 +1692,7 @@ ${collectedOf(total - left, total)}
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${whoRows(v)}
 ${split}
-${paid ? "" : payRow(v)}
-${sentRow(v)}
+${payActs(paid ? "" : payRow(v), sentRow(v))}
 </section>`;
 }
 
@@ -1769,17 +1779,30 @@ function confirmArea(v: View): string {
     `${why ? `<span class="why${blocked ? "" : " is-hint"}" id="confirm-why" aria-hidden="true">${escapeHtml(why)}</span>` : ""}</span></button></div>`;
 }
 
-function act(attrs: string, iconName: string, title: string, sub: string | null, cls = ""): string {
+function act(attrs: string, iconName: string, title: string, sub: string | null, cls = "", chev = false): string {
   return `<button type="button" class="act${cls ? ` ${cls}` : ""}" ${attrs}>${icon(iconName)}<span class="grow"><span>${escapeHtml(title)}</span>` +
-    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span></button>`;
+    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span>${chev ? icon("chev") : ""}</button>`;
+}
+
+// Mirrors venmoAct in the client. The payer is asked on their own draft in the
+// words of the question; everywhere else it is just a setting.
+function venmoAct(v: View): string {
+  const s = v.s;
+  if (!v.onBill) return "";
+  const saved = s.viewerVenmo;
+  const ask = s.viewerIsPayer && v.bill.status === "draft" && !saved;
+  return act('data-venmo aria-haspopup="dialog"', "coin",
+    ask ? "How should friends pay you back?" : "Your Venmo",
+    ask ? "Add your Venmo." : saved ? `@${saved}` : "Add it so friends can pay you back.", "", true);
 }
 
 // The payer confirms, reopens to fix, and deletes. Anyone else on a
 // confirmed bill can say something is wrong, which reopens it for the payer
-// to fix. Nothing here for someone who is only claiming on a draft.
+// to fix. Everyone on the bill can set their Venmo.
 function actions(v: View): string {
   const s = v.s;
   const parts: string[] = [];
+  parts.push(venmoAct(v));
   if (s.viewerIsPayer) {
     if (v.bill.status === "draft") parts.push(confirmArea(v));
     if (v.bill.status === "confirmed") parts.push(act("data-reopen", "receipt", "Edit the bill", "Paying pauses until you confirm again."));
@@ -1789,7 +1812,7 @@ function actions(v: View): string {
       act('data-ask="wrong" aria-haspopup="dialog"', "warn", "Something's wrong", `Paying pauses until ${nameOf(v, s.payerId)} fixes it.`, "is-warn"),
     );
   }
-  if (parts.length === 0) return "";
+  if (!parts.some(Boolean)) return "";
   return `<section class="card acts needs-js" data-actions aria-label="Bill actions">${parts.join("")}</section>`;
 }
 

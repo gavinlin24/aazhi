@@ -541,9 +541,18 @@ describe("renderPage", () => {
     expect(await textOf(unread, "#confirm-why")).toBe("Enter the receipt total first.");
   });
 
-  it("gives everyone else on a draft nothing to do to the bill as a whole", async () => {
-    expect(await select(page("marcus"), "[data-actions]")).toEqual([]);
+  it("gives everyone else on a draft only their Venmo, and someone off the bill nothing", async () => {
+    expect(await textOf(page("marcus"), "[data-actions]")).toBe("Your VenmoAdd it so friends can pay you back.");
     expect(await select(page("zoe"), "[data-actions]")).toEqual([]);
+  });
+
+  it("asks the payer how friends should pay them back, above Confirm, until they say", async () => {
+    const asked = page("gavin");
+    expect(await textOf(asked, "[data-actions] > [data-venmo]")).toBe("How should friends pay you back?Add your Venmo.");
+    expect((await select(asked, "[data-actions] > *")).map((node) => node.attrs["class"])).toEqual(["act", "confirm-area", "act"]);
+
+    const saved = renderPage(bill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { viewerVenmo: "gavin-lin" }, NOW);
+    expect(await textOf(saved, "[data-venmo]")).toBe("Your Venmo@gavin-lin");
   });
 
   it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {
@@ -826,6 +835,18 @@ describe("renderPage", () => {
       expect(await select(view("marcus", { payerVenmo }), "[data-pay]")).toEqual([]);
     });
 
+    it("keeps I paid beside the Venmo button, since Venmo can't tell us a payment happened", async () => {
+      const row = await select(view("theo", { payerVenmo: "gavin-l" }), "[data-you] .pay-acts > *");
+
+      expect(row.map((node) => node.attrs["class"])).toEqual(["pay-row", "sent-row needs-js"]);
+    });
+
+    it("draws no row at all for someone with nothing left", async () => {
+      const paid = view("theo", { payerVenmo: "gavin-l", settled: [{ participant: "theo", cents: share("theo").owedCents }] });
+
+      expect(await select(paid, ".pay-acts")).toEqual([]);
+    });
+
     it("leaves just I paid when the payer has no Venmo saved", async () => {
       const none = view("theo", { payerVenmo: null });
 
@@ -843,7 +864,7 @@ describe("renderPage", () => {
       // No handle on file, so no link: "I paid" stands alone.
       expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
       const actions = await one(html, "[data-actions]");
-      expect(actions.text).toBe("Something&#39;s wrongPaying pauses until Gavin fixes it.");
+      expect(actions.text).toBe("Your VenmoAdd it so friends can pay you back.Something&#39;s wrongPaying pauses until Gavin fixes it.");
       expect(await select(html, "[data-actions] [data-ask]")).toEqual([expect.objectContaining({ attrs: expect.objectContaining({ "data-ask": "wrong" }) })]);
       expect(await select(html, "[data-confirm], [data-reopen], [data-delete-bill], [data-payments]")).toEqual([]);
     });
