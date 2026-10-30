@@ -57,8 +57,8 @@ type Embed = {
 };
 type Button = { type: number; custom_id?: string; label?: string; placeholder?: string; min_values?: number; max_values?: number };
 
-function render(b: BillRow, input: BillInput, leastConfident: string[] = []) {
-  return renderBill(b, splitBill(input), input.items, participantsOf(input), leastConfident);
+function render(b: BillRow, input: BillInput) {
+  return renderBill(b, splitBill(input), input.items, participantsOf(input));
 }
 
 function embedOf(data: ReturnType<typeof renderBill>): Embed {
@@ -161,64 +161,45 @@ describe("renderBill", () => {
     expect(text).not.toMatch(/⚠️|add up|receipt total/i);
   });
 
-  it("leads with the receipt's total, then says what the dishes add up to, which are probably misread, and which button fixes it", () => {
+  it("leads with the receipt's total and says only that the lines do not add up", () => {
     // The model read Garlic noodles as $82.00; the receipt says $273.82.
     const misread: BillInput = {
       ...draftState,
       items: draftState.items.map((i) => (i.id === "noodles" ? { ...i, cents: 8200 } : i)),
     };
-    const data = render(bill, misread, ["noodles", "comtam"]);
+    const data = render(bill, misread);
     const embed = embedOf(data);
-    const text = embedText(embed);
 
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
-    expect(embed.description!.split("\n").slice(0, 4)).toEqual([
+    expect(embed.description!.split("\n")).toEqual([
       "**Receipt total $273.82**",
       "🪙 Gavin paid · 8 people",
-      "⚠️ **The dishes and tax add up to $323.82, $50.00 more than the receipt.**",
-      "Probably misread: Garlic noodles $82.00, Com tam $9.50. Gavin can fix it in Open the split, then Confirm appears.",
+      "⚠️ **Line items do not add up to total!**",
+      // Claiming goes on while the payer fixes the lines.
+      "◌ **$26.06 unclaimed.** Open the split to claim what you had.",
     ]);
-    // The total of a read in doubt is not shown as the bill's total.
-    expect(text).not.toMatch(/\*\*Total/);
-    expect(text).not.toContain("$374.12");
     expect(embed.color).toBe(0x8a520f);
-    // Claiming goes on while the payer fixes the read.
-    expect(text).toMatch(/\$\d+\.\d\d unclaimed/);
   });
 
-  it("suggests a missing dish when the dishes come to less than the receipt and none stands out", () => {
+  it("says the same when the lines come to less than the receipt", () => {
     const short: BillInput = { ...SAIGON, items: SAIGON.items.filter((i) => i.id !== "coconut") };
     expect(embedOf(render(bill, short)).description!.split("\n")).toEqual([
       "**Receipt total $273.82**",
       "🪙 Gavin paid · 8 people",
-      "⚠️ **The dishes and tax add up to $269.82, $4.00 less than the receipt.**",
-      "A dish may be missing. Gavin can add it in Open the split, then Confirm appears.",
+      "⚠️ **Line items do not add up to total!**",
     ]);
   });
 
-  it("asks the payer to fix it when the dishes come to more than the receipt and none stands out", () => {
-    const over = withItem(SAIGON, { id: "extra", label: "Extra rice", cents: 300, claimedBy: ["gavin"] });
-    expect(embedOf(render(bill, over)).description!.split("\n").slice(2)).toEqual([
-      "⚠️ **The dishes and tax add up to $276.82, $3.00 more than the receipt.**",
-      "Gavin can fix it in Open the split, then Confirm appears.",
-    ]);
-  });
-
-  it("says when the read comes to less than the printed total", () => {
-    const short: BillInput = {
-      ...draftState,
-      items: draftState.items.filter((i) => i.id !== "coconut"),
-    };
-    const text = embedText(embedOf(render(bill, short)));
-    expect(text).toMatch(/\$4\.00 (short|under|less)/i);
-  });
-
-  it("asks the payer for the total when it could not be read, and offers no Confirm", () => {
+  it("says the receipt total could not be read, and offers no Confirm", () => {
     const data = render({ ...bill, printedTotalCents: null }, draftState);
-    const text = embedText(embedOf(data));
 
     expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
-    expect(text).toContain("⚠️ **Couldn't read the receipt's total.** Gavin can enter it in Open the split, then Confirm appears.");
+    expect(embedOf(data).description!.split("\n")).toEqual([
+      "**Total $324.12**",
+      "🪙 Gavin paid · 8 people",
+      "⚠️ **Couldn't read the receipt total!**",
+      "◌ **$27.06 unclaimed.** Open the split to claim what you had.",
+    ]);
   });
 
   it("offers the payer a picker to add people who were at dinner, on a row of its own", () => {
@@ -251,20 +232,15 @@ describe("renderBill", () => {
   });
 
   it("escapes Discord markdown in text that came from the receipt or from people", () => {
-    const input = withItem(
-      { ...draftState, participants: [...draftState.participants, "x"], payer: "x" },
-      { id: "odd", label: "**Chef's** _special_ `x` ~~y~~ ||z||", cents: 100, claimedBy: ["x"] },
-    );
+    const input = { ...draftState, participants: [...draftState.participants, "x"], payer: "x" };
     const data = renderBill(
       { ...bill, place: "Bar *Star*", payerId: "x" },
       splitBill(input),
       input.items,
       [...participantsOf(draftState), { billId: bill.id, id: "x", kind: "member", displayName: "__ann__", addedBy: null }],
-      ["odd"],
     );
     const text = embedText(embedOf(data));
 
-    expect(text).toContain("\\*\\*Chef's\\*\\* \\_special\\_ \\`x\\` \\~\\~y\\~\\~ \\|\\|z\\|\\|");
     expect(text).toContain("\\_\\_ann\\_\\_ paid");
     expect(embedOf(data).title).toBe("Bar \\*Star\\* · Oct 28, 2026");
   });
@@ -288,13 +264,13 @@ describe("renderBill", () => {
       expect(embedLength(embed)).toBeLessThanOrEqual(6000);
     };
 
-    const draft = embedOf(renderBill({ ...bill, place: "P".repeat(400) }, splitBill(input), many, people, ["i0", "i1", "i2"]));
+    const draft = embedOf(renderBill({ ...bill, place: "P".repeat(400) }, splitBill(input), many, people));
     withinLimits(draft);
     expect(draft.description).toMatch(/^\*\*Receipt total \$/);
 
     // The guests the payer added owe the payer directly, one row each.
     const confirmed = embedOf(
-      renderBill({ ...bill, status: "confirmed" }, splitBill(input), many, people, [], splitBill(input).shares),
+      renderBill({ ...bill, status: "confirmed" }, splitBill(input), many, people, splitBill(input).shares),
     );
     withinLimits(confirmed);
     expect(confirmed.description).toMatch(/and \d+ more in Open the split$/);
@@ -302,19 +278,12 @@ describe("renderBill", () => {
     expect(confirmed.description).toMatch(/^\*\*Total \$/);
   });
 
-  it("cuts an absurdly long label it points at rather than the whole message", () => {
-    const input = withItem(draftState, { id: "long", label: "Z".repeat(500), cents: 100, claimedBy: [] });
-    const text = embedText(embedOf(render(bill, input, ["long"])));
-    expect(text).not.toContain("Z".repeat(200));
-    expect(text).toMatch(/Probably misread: Z+… \$1\.00\. Gavin can fix it/);
-  });
-
   it("shows what each person owes the payer once confirmed, with pay controls and the payer's Reopen and Delete", () => {
     const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
     // The frozen rows, not a fresh split: Marcus's row says $40.00 here even
     // though the lines would give him $44.46 today.
     const frozen = splitBill(SAIGON).shares.map((s) => (s.participant === "marcus" ? { ...s, owedCents: 4000 } : s));
-    const data = renderBill(confirmedBill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), [], frozen);
+    const data = renderBill(confirmedBill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), frozen);
     const embed = embedOf(data);
     const text = embedText(embed);
 
@@ -348,18 +317,6 @@ describe("renderBill", () => {
     ]);
     expect(JSON.stringify(data.components)).not.toMatch(/confirm:/);
     expect(data.allowed_mentions).toEqual({ parse: [] });
-  });
-
-  it("never leaves a dangling escape where a long label it points at is cut", () => {
-    // Markdown characters right where the label is cut.
-    const input = withItem(draftState, { id: "stars", label: "*".repeat(100), cents: 100, claimedBy: [] });
-    const line = lineFor(embedText(embedOf(render(bill, input, ["stars"]))), "Probably misread");
-    const label = line.slice(line.indexOf(": ") + ": ".length, line.lastIndexOf(" $1.00"));
-
-    // Every "*" stays escaped, and no backslash is left escaping the cut mark.
-    expect(label).not.toMatch(/(^|[^\\])\*/);
-    expect(label).not.toMatch(/\\…/);
-    expect(label).toMatch(/…$/);
   });
 
   it("tells people a deleted bill was deleted and strips its buttons", () => {

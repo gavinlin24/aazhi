@@ -430,10 +430,7 @@ describe("/split", () => {
     const text = shown(post!.body);
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
     expect(text).toContain("Receipt total $273.82");
-    expect(text).toContain("The dishes and tax add up to $323.82, $50.00 more than the receipt.");
-    expect(text).toContain("Probably misread: Garlic noodles $82.00, Com tam $9.50. Gavin can fix it in Open the split");
-    // Lines read as confidently as the rest are not worth pointing at.
-    expect(text).not.toMatch(/Spring rolls \$15\.00/);
+    expect(text).toContain("Line items do not add up to total!");
   });
 
   it("asks for the total when the receipt's printed total could not be read", async () => {
@@ -444,7 +441,7 @@ describe("/split", () => {
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
     expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
-    expect(shown(post!.body)).toMatch(/Couldn't read the receipt's total.*Gavin can enter it in Open the split/);
+    expect(shown(post!.body)).toMatch(/Couldn't read the receipt total!/);
   });
 
   it.each([

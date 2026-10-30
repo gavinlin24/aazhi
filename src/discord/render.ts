@@ -9,7 +9,6 @@ import {
 } from "discord-api-types/v10";
 import {
   getBill,
-  getLeastConfidentItemIds,
   getParticipants,
   getShares,
   toSplitInput,
@@ -25,7 +24,6 @@ import type { LineItem, Share, SplitResult } from "../money/types";
 // Discord rejects the whole edit if any of these is exceeded, so the renderer
 // trims to fit instead of trusting the receipt to be short.
 const LIMITS = { title: 256, description: 4096, embed: 6000 };
-const MAX_LABEL = 60;
 const MAX_NAME = 40;
 
 // The coin the page puts on the payer's avatar, standing in for "paid the
@@ -74,46 +72,15 @@ function fitLines(lines: string[], budget: number, more: (n: number) => string):
 }
 
 // A bill that doesn't add up leads with the receipt's own total, since the
-// total of the dishes as read is the number in doubt. Both sides of the
-// comparison are before tip, which is how the receipt prints it. The dishes
-// read with the least confidence are named because the page does not point
-// them out. Everything is said in what the reader can see: dishes, the
-// receipt, and the buttons by their labels.
-function readProblem(
-  bill: BillRow,
-  items: LineItem[],
-  leastConfident: string[],
-  payerName: string,
-): { headline: string | null; lines: string[] } | null {
+// total of the dishes as read is the number in doubt. The problem itself is
+// one short sentence: the gap and the lines to edit are in Open the split.
+function readProblem(bill: BillRow, items: LineItem[]): { headline: string | null; line: string } | null {
   const check = reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents });
   if (check.ok) return null;
-  const then = "in Open the split, then Confirm appears.";
-  if (bill.printedTotalCents === null || check.discrepancyCents === null) {
-    return {
-      headline: null,
-      lines: [`⚠️ **Couldn't read the receipt's total.** ${payerName} can enter it ${then}`],
-    };
-  }
-  const gap = check.discrepancyCents;
-  const suspects = leastConfident
-    .map((id) => items.find((i) => i.id === id))
-    .filter((i): i is LineItem => i !== undefined)
-    .map((i) => `${escapeMarkdown(clip(i.label, MAX_LABEL))} ${formatCents(i.cents)}`);
-  // Too little with nothing doubtful usually means a dish the receipt reader
-  // skipped, not a price it got wrong.
-  const next =
-    suspects.length > 0
-      ? `Probably misread: ${suspects.join(", ")}. ${payerName} can fix it ${then}`
-      : gap < 0
-        ? `A dish may be missing. ${payerName} can add it ${then}`
-        : `${payerName} can fix it ${then}`;
+  if (bill.printedTotalCents === null) return { headline: null, line: "⚠️ **Couldn't read the receipt total!**" };
   return {
     headline: `**Receipt total ${formatCents(bill.printedTotalCents)}**`,
-    lines: [
-      `⚠️ **The dishes and tax add up to ${formatCents(bill.printedTotalCents + gap)}, ` +
-        `${formatCents(Math.abs(gap))} ${gap > 0 ? "more" : "less"} than the receipt.**`,
-      next,
-    ],
+    line: "⚠️ **Line items do not add up to total!**",
   };
 }
 
@@ -129,10 +96,9 @@ function draftSummary(
   result: SplitResult,
   items: LineItem[],
   participants: Participant[],
-  leastConfident: string[],
   payerName: string,
 ): { ok: boolean; text: string } {
-  const problem = readProblem(bill, items, leastConfident, payerName);
+  const problem = readProblem(bill, items);
   const count = participants.length === 1 ? "1 person" : `${participants.length} people`;
   // The page draws an unclaimed line with a dashed ring; ◌ is the same mark.
   const progress =
@@ -144,7 +110,7 @@ function draftSummary(
   const lines = [
     problem?.headline ?? totalLine(result),
     `${PAYER_MARK} ${payerName} paid · ${count}`,
-    ...(problem?.lines ?? []),
+    problem?.line,
     progress,
   ];
   return { ok: problem === null, text: lines.filter(Boolean).join("\n") };
@@ -343,7 +309,6 @@ export function renderBill(
   result: SplitResult,
   items: LineItem[],
   participants: Participant[],
-  leastConfident: string[] = [],
   frozen?: Share[],
 ): APIInteractionResponseCallbackData {
   if (bill.status === "superseded") return superseded(bill);
@@ -352,7 +317,7 @@ export function renderBill(
   if (bill.status === "deleted") return deleted(bill, names);
   if (bill.status === "confirmed") return oweCard(bill, result, participants, frozen ?? result.shares, names);
   const payerName = names.get(bill.payerId) ?? "Payer";
-  const summary = draftSummary(bill, result, items, participants, leastConfident, payerName);
+  const summary = draftSummary(bill, result, items, participants, payerName);
 
   return {
     content: "",
@@ -378,11 +343,10 @@ export async function loadBillMessage(
   // confirm check refuses, never the other way round.
   const bill = await getBill(db, billId);
   if (!bill) return null;
-  const [input, participants, leastConfident, frozen] = await Promise.all([
+  const [input, participants, frozen] = await Promise.all([
     toSplitInput(db, billId),
     getParticipants(db, billId),
-    getLeastConfidentItemIds(db, billId),
     bill.status === "confirmed" ? getShares(db, billId) : undefined,
   ]);
-  return { bill, data: renderBill(bill, splitBill(input), input.items, participants, leastConfident, frozen) };
+  return { bill, data: renderBill(bill, splitBill(input), input.items, participants, frozen) };
 }

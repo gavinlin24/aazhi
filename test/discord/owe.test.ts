@@ -196,7 +196,7 @@ const items = SAIGON.items;
 
 describe("the owe card", () => {
   it("renders frozen amounts and pay controls once confirmed", () => {
-    const data = renderBill(bill, splitBill(SAIGON), items, participantsOf(SAIGON), [], shares);
+    const data = renderBill(bill, splitBill(SAIGON), items, participantsOf(SAIGON), shares);
     const text = shown(data);
 
     expect(text).toContain("$44.46");

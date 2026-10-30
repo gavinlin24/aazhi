@@ -248,7 +248,7 @@ async function settledAt(who: string): Promise<string | null> {
 
 async function renderedCard() {
   const snapshot = (await getBillSnapshot(db, BILL))!;
-  return renderBill(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, [], await getShares(db, BILL));
+  return renderBill(snapshot.bill, splitBill(snapshot.input), snapshot.input.items, snapshot.participants, await getShares(db, BILL));
 }
 
 function cardRows(card: ReturnType<typeof renderBill>): string[] {
