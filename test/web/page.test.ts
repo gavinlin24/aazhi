@@ -422,7 +422,8 @@ describe("renderPage", () => {
       tipCents: 5030,
       printedTotalCents: 27382,
       reconciles: { ok: true, discrepancyCents: null },
-      pay: [],
+      pay: null,
+      viewerVenmo: null,
     });
     expect(state.owing.marcus).toEqual({ owedCents: 3802, paidCents: 0 });
     expect(state.owing).not.toHaveProperty("guest-sam");
@@ -806,27 +807,25 @@ describe("renderPage", () => {
       expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
     });
 
-    it("offers the viewer the payer's ways to pay, for what they have left", async () => {
-      const handles = [{ method: "venmo" as const, handle: "gavin-l" }];
-      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], handles });
+    it("offers the viewer the payer's Venmo, for what they have left", async () => {
+      const payerVenmo = "gavin-l";
+      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], payerVenmo });
+      const left = share("theo").owedCents - 100;
 
       const link = await one(html, "[data-pay] a.pay");
-      expect(link.attrs.href).toContain("venmo.com/gavin-l");
-      expect(link.attrs.href).toContain(`amount=${((share("theo").owedCents - 100) / 100).toFixed(2)}`);
-      expect(link.attrs).toMatchObject({ target: "_blank", rel: "noopener noreferrer" });
-      expect(link.text).toBe("Venmo");
-      expect(await select(view("gavin", { handles }), "[data-pay]")).toEqual([]);
-      expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
+      expect(link.attrs.href).toBe(
+        `venmo://paycharge?txn=pay&amp;recipients=gavin-l&amp;amount=${(left / 100).toFixed(2)}&amp;note=Saigon%20Kitchen%2010%2F28`,
+      );
+      // A new window for a custom scheme is more likely to be blocked.
+      expect(link.attrs).not.toHaveProperty("target");
+      expect(link.text).toBe(`Pay @gavin-l ${money(left)}`);
+      expect(await select(view("gavin", { payerVenmo }), "[data-pay]")).toEqual([]);
+      expect(await select(view("marcus", { payerVenmo }), "[data-pay]")).toEqual([]);
     });
 
-    it("offers a button per app the payer has, and just I paid when they have none", async () => {
-      const venmo = { method: "venmo" as const, handle: "gavin-l" };
-      const cashapp = { method: "cashapp" as const, handle: "GavinL" };
+    it("leaves just I paid when the payer has no Venmo saved", async () => {
+      const none = view("theo", { payerVenmo: null });
 
-      const both = view("theo", { handles: [venmo, cashapp] });
-      expect((await select(both, "[data-pay] a.pay")).map((x) => x.text)).toEqual(["Venmo", "Cash App"]);
-
-      const none = view("theo", { handles: [] });
       expect(await select(none, "[data-pay]")).toEqual([]);
       expect(await textOf(none, "[data-you] [data-sent] [data-pay-all]")).toBe("I paid");
     });

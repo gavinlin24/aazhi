@@ -249,15 +249,19 @@ export async function openDraftInChannel(db: D1Database, channelId: string): Pro
   return row ? toBill(row) : null;
 }
 
-// Supersedes only drafts older than the new bill, so two /split runs racing in
-// one channel leave the later one open instead of killing each other. A bill
-// that was confirmed once and reopened is not a stale draft: it may carry
-// payments, and a new /split must not quietly void them.
+// A /split replaces its own payer's rescan of the same receipt. Someone else's
+// draft in the channel is a different bill, and every message's buttons carry
+// their own bill id, so two payers' drafts sit side by side without confusion.
+// Only drafts older than the new bill go, so two /split runs racing in one
+// channel leave the later one open instead of killing each other. A bill that
+// was confirmed once and reopened is not a stale draft: it may carry payments,
+// and a new /split must not quietly void them.
 export async function supersedeOlderDrafts(db: D1Database, channelId: string, newBillId: string): Promise<BillRow[]> {
   const { results } = await db
     .prepare(
       `UPDATE bills SET status = 'superseded', revision = revision + 1
        WHERE channel_id = ?1 AND status IN ('reading', 'draft') AND confirmed_at IS NULL
+         AND payer_id = (SELECT payer_id FROM bills WHERE id = ?2)
          AND rowid < (SELECT rowid FROM bills WHERE id = ?2)
        RETURNING ${BILL_COLUMNS}`,
     )
@@ -945,17 +949,13 @@ export async function splitOrphansEvenly(
 }
 
 // For when somebody else's card went down. Only a member can be the payer: a
-// guest has no account to collect into. Nobody leaves a roster, so the check
-// up front still holds when the write lands. A payment, though, can land at
-// any time, and every recorded one was paid to the current payer; moving the
-// bill would quietly credit it to someone else, so that check is in the write.
+// guest has no account to collect into. A payment can land at any time, and
+// every recorded one was paid to the current payer; moving the bill would
+// quietly credit it to someone else, so that check is in the write. So is the
+// roster check, since the payer can take a member off in the meantime.
 export async function reassignPayer(db: D1Database, billId: string, to: ParticipantId): Promise<number> {
-  const target = await db
-    .prepare("SELECT kind FROM participants WHERE bill_id = ? AND id = ?")
-    .bind(billId, to)
-    .first<{ kind: string }>();
-  if (target?.kind !== "member") throw new NotOnRosterError(billId, to);
-  const open = "status = 'draft' AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1)";
+  const open = `status = 'draft' AND NOT EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1)
+    AND EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'member')`;
   const [, moved] = await db.batch<{ revision: number }>([
     db
       .prepare(`UPDATE shares SET pardoned = 0 WHERE bill_id = ?1 AND EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND payer_id <> ?2 AND ${open})`)
@@ -964,6 +964,11 @@ export async function reassignPayer(db: D1Database, billId: string, to: Particip
   ]);
   const row = moved!.results[0];
   if (row) return row.revision;
+  const target = await db
+    .prepare("SELECT kind FROM participants WHERE bill_id = ? AND id = ?")
+    .bind(billId, to)
+    .first<{ kind: string }>();
+  if (target?.kind !== "member") throw new NotOnRosterError(billId, to);
   const bill = await getBill(db, billId);
   throw bill?.status === "draft" ? new PaymentsRecordedError(billId) : new BillNotDraftError(billId);
 }
@@ -1074,6 +1079,52 @@ export async function removeGuest(db: D1Database, billId: string, guestId: Parti
   ]);
   const row = bump!.results[0];
   return row ? row.revision : guestRefusal(db, billId, guestId, "paid");
+}
+
+// "no-member": there is no member by that id on the bill (any more). The rest
+// are what keeps someone on it: the person who paid, lines they claimed, guests
+// they answer for, or a payment of theirs on a reopened bill.
+export type MemberRefusal = "no-member" | "payer" | "claims" | "guests" | "paid";
+
+export class MemberRefusedError extends Error {
+  constructor(readonly reason: MemberRefusal) {
+    super(`member refused: ${reason}`);
+    this.name = "MemberRefusedError";
+  }
+}
+
+// Opening a draft joins it, so anyone curious ends up on the roster. This takes
+// such a bystander back off, and only a bystander: someone with claims has a
+// number that means something. Every rule sits in the write, so a claim landing
+// first keeps them on. They can rejoin by tapping Open the split again. A
+// reopened bill kept a share row for them, which goes with them.
+export async function removeMember(db: D1Database, billId: string, memberId: ParticipantId): Promise<number> {
+  const claimed = `EXISTS (SELECT 1 FROM item_claims c JOIN bill_items i ON i.id = c.bill_item_id
+    WHERE i.bill_id = ?1 AND c.participant_id = ?2)`;
+  const hosting = "EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND added_by = ?2)";
+  const paying = "EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND participant_id = ?2)";
+  const present = "EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'member')";
+  const payer = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND payer_id = ?2)";
+  const allowed = `${WHILE_DRAFT} AND ${present} AND NOT ${payer} AND NOT ${claimed} AND NOT ${hosting} AND NOT ${paying}`;
+  // Children first: a share row points at its participant.
+  const [bump] = await db.batch<{ revision: number }>([
+    db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, memberId),
+    db.prepare(`DELETE FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed}`).bind(billId, memberId),
+    db.prepare(`DELETE FROM participants WHERE bill_id = ?1 AND id = ?2 AND ${allowed}`).bind(billId, memberId),
+  ]);
+  const row = bump!.results[0];
+  if (row) return row.revision;
+
+  const bill = await getBill(db, billId);
+  if (bill?.status !== "draft") throw new BillNotDraftError(billId);
+  const why = await db
+    .prepare(`SELECT ${present} AS present, ${payer} AS payer, ${claimed} AS claimed, ${hosting} AS hosting`)
+    .bind(billId, memberId)
+    .first<{ present: number; payer: number; claimed: number; hosting: number }>();
+  if (!why?.present) throw new MemberRefusedError("no-member");
+  if (why.payer) throw new MemberRefusedError("payer");
+  if (why.claimed) throw new MemberRefusedError("claims");
+  throw new MemberRefusedError(why.hosting ? "guests" : "paid");
 }
 
 // "payer": the share is the payer's own, so there is nobody to forgive.

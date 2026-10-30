@@ -1,12 +1,11 @@
 import { getSettled, getShares, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
-import { getPaymentHandles, type PaymentHandle } from "../db/handles";
+import { getVenmoHandles } from "../db/handles";
 import { listSettlements, type Settlement } from "../db/settlements";
-import { billName, clip, MAX_NOTE } from "../discord/notices";
 import { reconciles } from "../extract/claude";
 import { groupByDebtor, paidByDebtor } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
-import { METHOD_NAMES, payLink, type PayMethod } from "./paylink";
+import { payLinks, payNote } from "./paylink";
 
 export type Editable = "all" | "self" | "none";
 
@@ -43,9 +42,12 @@ export interface BillState {
   // payer directly), and what they have paid towards it themselves. Worked
   // out here so the page and its script never redo the debtor rule.
   owing: Record<ParticipantId, { owedCents: Cents; paidCents: Cents }>;
-  // The viewer's ways to pay what they have left. Empty unless the bill is
-  // confirmed and they owe.
-  pay: PayOption[];
+  // The viewer's way to pay what they have left. Null unless the bill is
+  // confirmed, they owe, and the payer saved a Venmo.
+  pay: PayOption | null;
+  // The viewer's own saved Venmo username, so the page can ask for it or
+  // offer to change it. It is theirs, not the bill's.
+  viewerVenmo: string | null;
   // Every payment recorded on the bill, newest first, so the payer can take
   // one back or see what deleting the bill would throw away. Only the payer's
   // view carries them: they were paid to the payer.
@@ -67,14 +69,15 @@ export interface GuestsPaid {
   paidToHost?: ParticipantId[];
 }
 
-export type PayOption = { method: PayMethod; name: string; url: string };
+export type PayOption = { username: string; appUrl: string; webUrl: string };
 
 // What the page needs beyond the server's state. For a confirmed bill: the
-// payments, for what is left, and the payer's handles, for links. For the
-// payer: the payments one by one.
+// payments, for what is left. For the payer: the payments one by one. For
+// everyone: the saved Venmo usernames that matter here.
 export interface PayExtras {
   settled?: Settled[];
-  handles?: PaymentHandle[];
+  payerVenmo?: string | null;
+  viewerVenmo?: string | null;
   payments?: Settlement[];
 }
 
@@ -105,10 +108,9 @@ function owingOf(shares: Share[], participants: Participant[], payer: Participan
 
 // What is left, not the frozen amount: a link for the full share after a
 // partial payment would ask the person to pay twice.
-function payOptions(bill: BillRow, handles: PaymentHandle[], leftCents: Cents): PayOption[] {
-  if (leftCents <= 0) return [];
-  const note = clip(billName(bill), MAX_NOTE);
-  return handles.map(({ method, handle }) => ({ method, name: METHOD_NAMES[method], url: payLink(method, handle, leftCents, note).url }));
+function payOption(bill: BillRow, username: string | null | undefined, leftCents: Cents): PayOption | null {
+  if (!username || leftCents <= 0) return null;
+  return { username, ...payLinks(username, leftCents, payNote(bill.place, bill.billDate)) };
 }
 
 export function billState(
@@ -128,8 +130,8 @@ export function billState(
   const mine = owing[viewer];
   const pay =
     bill.status === "confirmed" && viewer !== bill.payerId && mine
-      ? payOptions(bill, payExtras.handles ?? [], mine.owedCents - mine.paidCents)
-      : [];
+      ? payOption(bill, payExtras.payerVenmo, mine.owedCents - mine.paidCents)
+      : null;
   return {
     billId: bill.id,
     revision: bill.revision,
@@ -154,6 +156,7 @@ export function billState(
     result,
     owing,
     pay,
+    viewerVenmo: payExtras.viewerVenmo ?? null,
     payments:
       viewer === bill.payerId
         ? (payExtras.payments ?? []).map(({ id, participant, cents, recordedAt }) => ({ id, participant, cents, recordedAt }))
@@ -181,17 +184,24 @@ export async function pageResult(db: D1Database, snapshot: BillSnapshot): Promis
   return frozenResult(split, await getShares(db, snapshot.bill.id), snapshot.bill.payerId);
 }
 
-// Payments and handles are reads of their own for the same reason. Totals and
-// handles only matter once the bill is confirmed: nobody pays a draft. The
-// payer's list of payments matters on a reopened draft too, since deleting
-// it would throw them away.
+// Payments and handles are reads of their own for the same reason. Totals only
+// matter once the bill is confirmed: nobody pays a draft. The payer's list of
+// payments matters on a reopened draft too, since deleting it would throw them
+// away. Handles matter throughout, because the payer is asked for theirs while
+// the bill is still a draft.
 async function payExtrasOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<PayExtras> {
   const { bill, hasPayments } = snapshot;
-  const [payments, confirmed] = await Promise.all([
+  const [payments, settled, venmo] = await Promise.all([
     viewer === bill.payerId && hasPayments ? listSettlements(db, bill.id) : undefined,
-    bill.status === "confirmed" ? Promise.all([getSettled(db, bill.id), getPaymentHandles(db, bill.payerId)]) : undefined,
+    bill.status === "confirmed" ? getSettled(db, bill.id) : undefined,
+    getVenmoHandles(db, [bill.payerId, viewer]),
   ]);
-  return { ...(confirmed ? { settled: confirmed[0], handles: confirmed[1] } : {}), ...(payments ? { payments } : {}) };
+  return {
+    payerVenmo: venmo.get(bill.payerId) ?? null,
+    viewerVenmo: venmo.get(viewer) ?? null,
+    ...(settled ? { settled } : {}),
+    ...(payments ? { payments } : {}),
+  };
 }
 
 // Everything the page is rendered from besides the bill's own rows.

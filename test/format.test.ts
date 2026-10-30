@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCents, formatDate } from "../src/format";
+import { formatCents, formatDate, formatMonthDay } from "../src/format";
 
 describe("formatCents", () => {
   it.each([
@@ -26,5 +26,18 @@ describe("formatDate", () => {
     expect(formatDate(null)).toBeNull();
     expect(formatDate("28/10/2026")).toBeNull();
     expect(formatDate("2026-13-01")).toBeNull();
+  });
+});
+
+describe("formatMonthDay", () => {
+  it("writes the month and day the way people do", () => {
+    expect(formatMonthDay("2026-10-28")).toBe("10/28");
+    expect(formatMonthDay("2026-01-05")).toBe("1/5");
+  });
+
+  it("gives null for a missing or unreadable date", () => {
+    expect(formatMonthDay(null)).toBeNull();
+    expect(formatMonthDay("28/10/2026")).toBeNull();
+    expect(formatMonthDay("2026-13-01")).toBeNull();
   });
 });

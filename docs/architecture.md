@@ -102,9 +102,11 @@ down, then give spare cents to the largest fractions) makes shares sum to the
 cent. The shares are frozen in the `shares` table, and the message becomes
 the owe card.
 
-**7. Paying.** `/paywith` stores the payer's handle (`src/db/handles.ts`).
-Once the bill is confirmed, the page shows Venmo or Cash App links for what
-you have left (`src/web/paylink.ts`).
+**7. Paying.** Anyone on a bill can save their Venmo username from the page,
+or with `/paywith` (`src/db/handles.ts`). Once the bill is confirmed, the page
+shows a `venmo://` link to the payer for what you have left, with the https
+link beside it for a computer (`src/web/paylink.ts`). Only Venmo fills in the
+amount and the note from a link, so it is the only app.
 
 **8. Recording.** Someone has paid or they haven't. **I paid** on the page
 (`POST /b/:billId/payment`) records everything they have left, guests they

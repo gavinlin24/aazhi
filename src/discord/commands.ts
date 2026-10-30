@@ -45,28 +45,17 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     name: "Split this receipt",
     type: ApplicationCommandType.Message,
   },
-  // One handle per app, kept per person: whoever pays sets theirs once and
-  // every later bill offers it.
+  // Kept per person: whoever pays sets theirs once and every later bill offers it.
   {
     ...guildOnly,
     name: "paywith",
     type: ApplicationCommandType.ChatInput,
-    description: "Set how people pay you back when you cover the bill",
+    description: "Set the Venmo people pay you back on when you cover the bill",
     options: [
       {
         type: ApplicationCommandOptionType.String,
-        name: "method",
-        description: "Which app",
-        required: true,
-        choices: [
-          { name: "Venmo", value: "venmo" },
-          { name: "Cash App", value: "cashapp" },
-        ],
-      },
-      {
-        type: ApplicationCommandOptionType.String,
         name: "handle",
-        description: "Your Venmo username or $Cashtag",
+        description: "Your Venmo username",
         required: true,
         max_length: 254,
       },

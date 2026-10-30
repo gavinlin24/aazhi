@@ -1599,10 +1599,10 @@ function pie(done: Cents, total: Cents): string {
 // With no app link to offer, "I paid" stands alone: the person pays the
 // way they usually would and records it here after.
 function payRow(v: View): string {
-  const links = v.s.pay.map(
-    (o) => `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`,
-  );
-  return links.length > 0 ? `<div class="pay-row" data-pay>${links.join("")}</div>` : "";
+  const pay = v.s.pay;
+  if (!pay) return "";
+  const label = `Pay @${escapeHtml(pay.username)} ${formatCents(leftOf(v, v.s.viewer))}`;
+  return `<div class="pay-row" data-pay><a class="pay" href="${escapeHtml(pay.appUrl)}">${label}${icon("out")}</a></div>`;
 }
 
 // Only someone with something left to pay has anything to record. Paid is

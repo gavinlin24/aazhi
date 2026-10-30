@@ -2,7 +2,7 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env as workerEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
-import { getPaymentHandles } from "../../src/db/handles";
+import { getVenmoHandles } from "../../src/db/handles";
 import { commands } from "../../src/discord/commands";
 import type { Env } from "../../src/env";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
@@ -51,7 +51,12 @@ function member(id: string, nick: string) {
 
 const GAVIN = member("gavin", "Gavin");
 
-function paywith(method: string, handle: string, who: unknown) {
+async function savedVenmo(id: string): Promise<string | undefined> {
+  return (await getVenmoHandles(db, [id])).get(id);
+}
+
+// `method` is what a client still holding the old command list sends.
+function paywith(handle: string, who: unknown, method?: string) {
   return {
     id: "int-2",
     application_id: APP_ID,
@@ -66,57 +71,56 @@ function paywith(method: string, handle: string, who: unknown) {
       id: "cmd-1",
       name: "paywith",
       type: 1,
-      options: [
-        { name: "method", type: 3, value: method },
-        { name: "handle", type: 3, value: handle },
-      ],
+      options: [...(method ? [{ name: "method", type: 3, value: method }] : []), { name: "handle", type: 3, value: handle }],
     },
   };
 }
 
 describe("/paywith", () => {
-  it("is registered with a method choice and a handle", () => {
+  it("is registered with just a handle", () => {
     const command = commands.find((c) => c.name === "paywith") as any;
 
     expect(command).toBeDefined();
-    expect(command.options.map((o: any) => [o.name, o.required])).toEqual([
-      ["method", true],
-      ["handle", true],
-    ]);
-    expect(command.options[0].choices.map((c: any) => c.value)).toEqual(["venmo", "cashapp"]);
+    expect(command.options.map((o: any) => [o.name, o.required])).toEqual([["handle", true]]);
   });
 
-  it("saves a handle, replaces it on a second run, and answers privately", async () => {
-    const first = await run(paywith("venmo", "@gavin-lin", GAVIN));
-    await run(paywith("venmo", "gavin-l2", GAVIN));
+  it("saves a username, replaces it on a second run, and answers privately", async () => {
+    const first = await run(paywith("@gavin-lin", GAVIN));
+    await run(paywith("gavin-l2", GAVIN));
 
     expect(first.type).toBe(4);
     expect(first.data.flags).toBe(EPHEMERAL);
     expect(first.data.content).toContain("@gavin-lin");
-    expect(await getPaymentHandles(db, "gavin")).toEqual([{ method: "venmo", handle: "gavin-l2" }]);
+    expect(await savedVenmo("gavin")).toBe("gavin-l2");
   });
 
-  it("rejects a handle that is not valid for the method and stores nothing", async () => {
-    const reply = await run(paywith("venmo", "evil.example/x?txn=charge", GAVIN));
-    const cash = await run(paywith("cashapp", "a/b", GAVIN));
+  it("rejects a username that is not valid and stores nothing", async () => {
+    const reply = await run(paywith("evil.example/x?txn=charge", GAVIN));
 
     expect(reply.data.flags).toBe(EPHEMERAL);
     expect(reply.data.content).toMatch(/venmo/i);
-    expect(cash.data.content).toMatch(/cash app/i);
-    expect(await getPaymentHandles(db, "gavin")).toEqual([]);
+    expect(await savedVenmo("gavin")).toBeUndefined();
   });
 
-  // A Discord client can still send zelle from the command list it cached
-  // before the choice went away.
-  it("turns down Zelle and stores nothing", async () => {
-    const reply = await run(paywith("zelle", "gavin@example.com", GAVIN));
+  it("still saves from a client on the old command list that picked Venmo", async () => {
+    await run(paywith("gavin-lin", GAVIN, "venmo"));
 
-    expect(reply.data.flags).toBe(EPHEMERAL);
-    expect(reply.data.content).toBe("Pick Venmo or Cash App.");
-    expect(await getPaymentHandles(db, "gavin")).toEqual([]);
+    expect(await savedVenmo("gavin")).toBe("gavin-lin");
   });
 
-  it("ignores a Zelle handle saved before Zelle was dropped", async () => {
+  // A Discord client can still send these from the command list it cached
+  // before the choices went away.
+  it("turns down the apps it dropped and stores nothing", async () => {
+    for (const [method, handle] of [["cashapp", "GavinL"], ["zelle", "gavin@example.com"]] as const) {
+      const reply = await run(paywith(handle, GAVIN, method));
+
+      expect(reply.data.flags).toBe(EPHEMERAL);
+      expect(reply.data.content).toBe("Only Venmo works now, so I didn't save that.");
+    }
+    expect(await savedVenmo("gavin")).toBeUndefined();
+  });
+
+  it("ignores rows saved for the apps it dropped", async () => {
     await db
       .prepare(
         `INSERT INTO payment_handles (user_id, method, handle, updated_at) VALUES
@@ -124,6 +128,6 @@ describe("/paywith", () => {
       )
       .run();
 
-    expect(await getPaymentHandles(db, "gavin")).toEqual([{ method: "cashapp", handle: "GavinL" }]);
+    expect(await savedVenmo("gavin")).toBeUndefined();
   });
 });

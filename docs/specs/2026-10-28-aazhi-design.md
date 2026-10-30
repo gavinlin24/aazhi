@@ -161,9 +161,10 @@ owe card, and pay controls appear. This is the only state in which anyone
 is asked for money.
 
 **Superseded.** A new `/split` in the same channel supersedes any
-unconfirmed draft there. The bot edits the old message to say so and
-strips its buttons, so nobody claims items on a session that will never
-be confirmed. At most one open draft exists per channel at a time.
+unconfirmed draft by the same payer there. The bot edits the old message
+to say so and strips its buttons, so nobody claims items on a session
+that will never be confirmed. At most one open draft exists per payer per
+channel at a time; two payers' drafts sit side by side.
 
 **Reopened.** The payer can return a confirmed bill to draft with all
 claims intact, correct whatever was wrong, and confirm again. This is the

@@ -722,9 +722,9 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   function payNodes(v) {
-    if (v.s.pay.length === 0) return null;
-    return el("div", { class: "pay-row", "data-pay": true }, v.s.pay.map((o) =>
-      el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])));
+    if (!v.s.pay) return null;
+    return el("div", { class: "pay-row", "data-pay": true },
+      el("a", { class: "pay", href: v.s.pay.appUrl }, ["Pay @" + v.s.pay.username + " " + money(leftOf(v, v.s.viewer)), icon("out")]));
   }
 
   function collected(done, total) {

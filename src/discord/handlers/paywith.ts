@@ -1,6 +1,6 @@
 import { ApplicationCommandOptionType, ApplicationCommandType, InteractionType, type APIInteraction } from "discord-api-types/v10";
-import { setPaymentHandle } from "../../db/handles";
-import { describeHandle, HANDLE_RULES, METHOD_NAMES, normalizeHandle, PAY_METHODS, type PayMethod } from "../../web/paylink";
+import { setVenmoHandle } from "../../db/handles";
+import { normalizeVenmo, VENMO_RULE } from "../../web/paylink";
 import type { InteractionHandler } from "../interactions";
 import { invokerOf } from "../members";
 import { escapeMarkdown } from "../render";
@@ -21,19 +21,18 @@ function stringOption(body: APIInteraction, name: string): string | null {
 // up each time it is drawn.
 export const paywithCommand: InteractionHandler = async (body, env) => {
   const who = invokerOf(body);
-  const method = stringOption(body, "method");
   const raw = stringOption(body, "handle");
-  if (!who || method === null || raw === null) return privately("That action is not supported.");
-  if (!PAY_METHODS.includes(method as PayMethod)) return privately("Pick Venmo or Cash App.");
-  const payMethod = method as PayMethod;
+  if (!who || raw === null) return privately("That action is not supported.");
+  // A Discord client can still send a method from the command list it cached
+  // when /paywith offered more than Venmo.
+  const method = stringOption(body, "method");
+  if (method !== null && method !== "venmo") return privately("Only Venmo works now, so I didn't save that.");
 
-  const handle = normalizeHandle(payMethod, raw);
-  if (handle === null) {
-    return privately(`That doesn't look like a ${METHOD_NAMES[payMethod]} handle, so I didn't save it. ${HANDLE_RULES[payMethod]}`);
-  }
-  await setPaymentHandle(env.DB, who.id, payMethod, handle);
+  const handle = normalizeVenmo(raw);
+  if (handle === null) return privately(`That doesn't look like a Venmo username, so I didn't save it. ${VENMO_RULE}`);
+  await setVenmoHandle(env.DB, who.id, handle);
   return privately(
-    `Saved: ${METHOD_NAMES[payMethod]} ${escapeMarkdown(describeHandle(payMethod, handle))}. Anyone paying you back on a bill ` +
-      "you paid for sees it on the page, including bills already posted. Run `/paywith` again to change it.",
+    `Saved: Venmo ${escapeMarkdown(`@${handle}`)}. Anyone paying you back on a bill you paid for sees it on the page, ` +
+      "including bills already posted. Run `/paywith` again to change it.",
   );
 };

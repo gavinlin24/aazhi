@@ -2,7 +2,20 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env as workerEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
-import { confirmBill, editItem, getBill, getBillItems, getShares, setBillAmounts, setClaim, toSplitInput } from "../../src/db/bills";
+import {
+  addGuest,
+  addParticipant,
+  confirmBill,
+  editItem,
+  getBill,
+  getBillItems,
+  getParticipants,
+  getShares,
+  setBillAmounts,
+  setClaim,
+  toSplitInput,
+} from "../../src/db/bills";
+import { getVenmoHandles } from "../../src/db/handles";
 import { listSettlements, recordSettlement } from "../../src/db/settlements";
 import type { Env } from "../../src/env";
 import { formatCents } from "../../src/format";
@@ -35,6 +48,7 @@ let calls: { url: string; method: string; body: any }[];
 
 beforeEach(async () => {
   await db.prepare("DELETE FROM bills").run();
+  await db.prepare("DELETE FROM payment_handles").run();
   calls = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
@@ -515,5 +529,110 @@ describe("deleting", () => {
     expect(await status()).toBe("confirmed");
     expect((await send("DELETE", "", "gavin", { paid: "0.00" })).status).toBe(200);
     expect(await status()).toBe("deleted");
+  });
+});
+
+describe("taking someone off a draft", () => {
+  const bystander = () => addParticipant(db, { billId: BILL, id: "bystander", kind: "member", displayName: "Sam", addedBy: null });
+  const remove = (as: string, id = "bystander") => send("DELETE", `/member/${id}`, as);
+
+  it("takes off a member who claimed nothing and updates the message", async () => {
+    await seedSaigon(db, BILL);
+    await bystander();
+
+    const reply = await remove("gavin");
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.participants.map((p: any) => p.id)).not.toContain("bystander");
+    expect(messageEdits()).toHaveLength(1);
+  });
+
+  it("is for the payer only", async () => {
+    await seedSaigon(db, BILL);
+    await bystander();
+
+    const reply = await remove("theo");
+
+    expect(reply.status).toBe(403);
+    expect(reply.body.error).toBe("Only Gavin can take people off the bill, because they paid.");
+    expect((await getParticipants(db, BILL)).map((p) => p.id)).toContain("bystander");
+  });
+
+  it("says why it can't take someone off", async () => {
+    await seedSaigon(db, BILL);
+    await bystander();
+    await addGuest(db, BILL, { id: "guest-kim", displayName: "Kim", addedBy: "bystander" });
+
+    expect(await remove("gavin", "theo")).toEqual({ status: 409, body: { error: "Theo has lines on this bill. Take them off those lines first." } });
+    expect(await remove("gavin")).toEqual({ status: 409, body: { error: "Sam brought a guest. Take the guest off first." } });
+    expect(await remove("gavin", "gavin")).toEqual({ status: 400, body: { error: "You paid the bill, so you stay on it." } });
+    expect((await remove("gavin", "nobody")).status).toBe(404);
+  });
+
+  it("refuses once the bill is confirmed, when everyone on it was told an amount", async () => {
+    await seedSaigon(db, BILL);
+    await bystander();
+    await confirmed();
+
+    expect((await remove("gavin")).status).toBe(409);
+    expect((await getParticipants(db, BILL)).map((p) => p.id)).toContain("bystander");
+  });
+});
+
+describe("saving a Venmo username", () => {
+  const save = (as: string, username: unknown) => send("POST", "/venmo", as, { username });
+  const saved = async (id: string) => (await getVenmoHandles(db, [id])).get(id);
+
+  it("saves it for whoever the link belongs to, on a draft or a confirmed bill", async () => {
+    await seedSaigon(db, BILL);
+
+    const reply = await save("gavin", " @gavin-lin ");
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.viewerVenmo).toBe("gavin-lin");
+    expect(await saved("gavin")).toBe("gavin-lin");
+
+    await confirmed();
+    expect((await save("theo", "theo-ng")).status).toBe(200);
+    expect(await saved("theo")).toBe("theo-ng");
+  });
+
+  it("replaces an earlier one, and the other pages pick it up without a new revision", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    const before = await revision();
+
+    await save("gavin", "gavin-lin");
+    await save("gavin", "gavin-l2");
+
+    expect(await revision()).toBe(before);
+    const theo = await send("GET", "/state", "theo");
+    expect(theo.body.pay.username).toBe("gavin-l2");
+    expect(theo.body.pay.appUrl).toContain("venmo://paycharge?txn=pay&recipients=gavin-l2&amount=");
+    expect(theo.body.viewerVenmo).toBeNull();
+  });
+
+  it("turns down something that isn't a Venmo username and keeps what was there", async () => {
+    await seedSaigon(db, BILL);
+    await save("gavin", "gavin-lin");
+
+    for (const bad of ["no", "evil.example/x?txn=charge", 12345]) {
+      expect(await save("gavin", bad)).toEqual({
+        status: 400,
+        body: { error: "A Venmo username is 5 to 30 letters, numbers, hyphens or underscores, like @gavin-lin." },
+      });
+    }
+    expect(await saved("gavin")).toBe("gavin-lin");
+  });
+
+  it("is for people on the bill, and only while it's live", async () => {
+    await seedSaigon(db, BILL);
+
+    expect((await save("stranger", "strange-1")).status).toBe(403);
+    expect(await saved("stranger")).toBeUndefined();
+
+    await db.prepare("UPDATE bills SET status = 'deleted' WHERE id = ?").bind(BILL).run();
+    expect((await save("gavin", "gavin-lin")).status).toBe(409);
+    expect(await saved("gavin")).toBeUndefined();
   });
 });
