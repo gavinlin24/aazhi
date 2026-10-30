@@ -51,7 +51,6 @@ const STYLES = `${FONT_FACES}
   --ring: #8a8274;
   --line: #ddd3c1;
   --fill: #e9e1d1;
-  --tint: #eee7d9;
   --warn: #8a520f;
   --warn-soft: #f1e1c4;
   --ok: #2f6446;
@@ -88,7 +87,6 @@ const STYLES = `${FONT_FACES}
     --ring: #827968;
     --line: #3a342c;
     --fill: #2c2721;
-    --tint: #2e2923;
     --warn: #dda458;
     --warn-soft: #3a2b16;
     --ok: #8fc7a2;
@@ -130,6 +128,28 @@ a { color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+/* One look for "tap to change": the value sits in a tinted pill with a small
+   brush inside, so the pill's edge, not a brush hanging past it, lines up
+   with the plain values. Read-only values stay plain. The negative margin
+   keeps a pill from making its line taller. */
+.ic.brush { width: 16px; height: 16px; color: var(--muted); stroke-width: 1.6; }
+.amt, .is-editable .item-price, button.payer-chip, .name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  margin: -4px 0;
+  padding: 0 9px 0 11px;
+  border: 0;
+  border-radius: 15px;
+  background: var(--fill);
+  color: var(--ink);
+}
+.amt:active, .is-editable button.row:active .item-price, button.payer-chip:active, .name-btn:active { background: var(--line); }
+@media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
+/* A 30px pill is easier to see than to hit, so the buttons reach 44px. */
+.amt, button.payer-chip, .name-btn { position: relative; cursor: pointer; }
+.amt::after, button.payer-chip::after, .name-btn::after { content: ""; position: absolute; inset: -7px -4px; }
 .money, .item-price, .totals dd { font-variant-numeric: tabular-nums lining-nums; }
 .page {
   max-width: 480px;
@@ -172,15 +192,8 @@ html:has(.has-bar .claimers:not([hidden])) { scroll-padding-bottom: calc(140px +
 .meta { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 16px; min-height: 30px; }
 .payer-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
 .payer-chip .ic { width: 17px; height: 17px; color: var(--warn); }
-button.payer-chip {
-  margin: -7px -6px;
-  padding: 7px 6px;
-  min-height: 44px;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-button.payer-chip .name { padding: 2px 8px; border-radius: 7px; background: var(--tint); }
+/* Undoes the coin's size and colour, which the chip's icon rule gives every icon in it. */
+button.payer-chip .brush { width: 16px; height: 16px; color: var(--muted); }
 
 .toast {
   position: fixed;
@@ -207,6 +220,9 @@ button.payer-chip .name { padding: 2px 8px; border-radius: 7px; background: var(
 /* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
 .items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
+/* The inset of the tick circles from the card. The figures, pills and rules
+   end the same distance from the right, so the receipt is balanced. */
+.receipt { --edge: 13px; }
 .row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -216,7 +232,7 @@ button.payer-chip .name { padding: 2px 8px; border-radius: 7px; background: var(
   align-items: center;
   width: 100%;
   margin: 0;
-  padding: 8px 14px 8px 4px;
+  padding: 8px var(--edge) 8px 4px;
   border: 0;
   background: none;
   text-align: left;
@@ -233,10 +249,6 @@ button.row:active { background: var(--fill); }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
-/* One look for "tap to change": a value on a tint. Tax, tip, the printed
-   total, the payer and a guest's name wear it too. The negative margin keeps
-   the figures lined up with the plain ones above and below. */
-.has-picker .row .item-price { margin-right: -8px; padding: 1px 8px; border-radius: 7px; background: var(--tint); }
 .tick-btn {
   position: absolute;
   z-index: 1;
@@ -304,7 +316,8 @@ button.row:active { background: var(--fill); }
 .av.is-viewer { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--ink); }
 .av.is-guest { border: 1px dashed var(--av-ink); }
 
-.add-line { padding: 8px 14px 4px 58px; }
+/* Spans from the ticks to the brushes, the full width a line can take. */
+.add-line { padding: 8px var(--edge) 4px; }
 .add-row {
   display: flex;
   align-items: center;
@@ -319,27 +332,17 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-.totals { margin: 8px 0 0; padding: 0 14px 10px 58px; }
-.trow { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.totals { margin: 8px 0 0; padding: 0 var(--edge) 10px; }
+.trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
 .trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
 .trow dd { margin: 0; white-space: nowrap; }
-.trow .pct { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.amt {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  margin: -2px -8px;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-.amt > [data-total] { padding: 2px 8px; border-radius: 7px; background: var(--tint); }
+/* Subtotal plus tax, so it sits under them as their sum. */
+.receipt-row { margin-top: 4px; border-top: 1px solid var(--rule); }
 .receipt-row dt { align-items: center; }
 .receipt-row .mark { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
 .receipt-row.is-ok .mark { color: var(--ok); }
 .receipt-row.is-off .mark { color: var(--warn); font-weight: 600; }
-.receipt-row .ic { width: 18px; height: 18px; }
+.receipt-row .mark .ic { width: 18px; height: 18px; }
 /* A ledger's total: one rule above, a double rule below. */
 .grand {
   margin: 6px 0 2px;
@@ -352,9 +355,7 @@ button.row:active { background: var(--fill); }
 .grand dt { color: var(--ink); }
 .short dt, .short dd { color: var(--warn); font-weight: 600; }
 .dash-ring { width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed currentColor; flex: none; }
-/* The ring hangs in the tick column, where the unclaimed lines show the same
-   ring, so the word lines up with Subtotal, Tax and Tip. */
-.short .dash-ring { position: absolute; left: -41px; top: 50%; margin-top: -9px; }
+.short dt { align-items: center; }
 
 .edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0; }
 .edit-form .money-input { min-width: 88px; }
@@ -408,15 +409,13 @@ button.row:active { background: var(--fill); }
 .field-msg { flex-basis: 100%; color: var(--warn); font-size: 15px; }
 .field-msg:empty { display: none; }
 .field-msg.is-hint { color: var(--muted); }
-/* The tip editor needs the card's full width at 390px, so it reaches into
-   the gutter the figures leave for the ticks. */
-.trow.is-editing { flex-wrap: wrap; margin-left: -44px; }
+.trow.is-editing { flex-wrap: wrap; }
 
-.line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 10px 14px 12px 48px; border-bottom: 1px solid var(--rule); }
+/* Its fields keep the width of the box it opens from. */
+.line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
 .line-form .field-msg { grid-column: 1 / -1; }
-.sign { width: 44px; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
 .tile {
@@ -494,7 +493,10 @@ button.tile:active { background: var(--fill); }
   border-top: 1px solid var(--line);
   box-shadow: 0 -6px 20px rgba(60, 40, 10, 0.06);
 }
-.bar-in { display: flex; align-items: center; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
+/* Bottom-aligned so the arrow and face sit on the amount's line, under its
+   caption, not centred on the two together. Its width and gutters match the
+   page's, so the caption, amount and claim chips start on the card's edge. */
+.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
 /* Who a tap on a line claims for, one tap to switch. It shows only when there
    is more than one answer: you and the guests you brought. */
 /* The padding gives a focused chip's ring room inside the scroller, which
@@ -527,25 +529,30 @@ button.tile:active { background: var(--fill); }
 .claimer .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .claimer[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); font-weight: 600; }
 .claimer[aria-pressed="true"] .av { box-shadow: 0 0 0 1.5px var(--card); }
-.bar .stack .av { --s: 32px; }
-.bar .stack .av + .av { margin-left: -9px; }
-.bar .av.payer { --s: 32px; }
-.bar .arrow { width: 22px; height: 22px; color: var(--muted); }
-.bar .amount { font: 500 28px/1 var(--display); letter-spacing: -0.01em; }
+.bar .av.payer { --s: 32px; margin-bottom: -2px; }
+.bar .arrow { width: 22px; height: 22px; color: var(--muted); margin-bottom: 3px; }
+/* Reads as a sentence, the same way for whoever is looking: what moves, which
+   way, to whom. The caption says which side of it you are on. */
+.bar .owe { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.bar .owe-label { font-size: 14px; line-height: 1; color: var(--muted); }
+.bar .amount { font: 500 28px/1 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
 .bar .grow { flex: 1; }
+/* The same dashed ring as an unclaimed line, with the count spelled out. */
 .ring-btn {
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex: none;
-  width: 44px;
   height: 44px;
-  padding: 0;
-  border: 2px dashed var(--warn);
-  border-radius: 50%;
+  padding: 0 14px 0 11px;
+  border: 0;
+  border-radius: 22px;
   background: var(--warn-soft);
   color: var(--warn);
   font-weight: 700;
-  font-size: 17px;
+  font-size: 16px;
+  white-space: nowrap;
+  align-self: center;
   cursor: pointer;
 }
 
@@ -656,8 +663,9 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .sheet-guest { margin-top: 14px; padding-top: 10px; border-top: 3px double var(--rule); }
 .sheet-guest .sheet-head .av { --s: 34px; }
 .sheet-guest h3 { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
-.name-btn { display: inline-flex; align-items: center; max-width: 100%; min-height: 44px; margin: -4px 0 -4px -8px; padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
-.name-btn > span { padding: 2px 8px; border-radius: 7px; background: var(--tint); overflow-wrap: anywhere; }
+/* A long name wraps inside its pill instead of overflowing the sheet. */
+.name-btn { height: auto; min-height: 30px; max-width: 100%; padding-block: 4px; font: inherit; text-align: left; }
+.name-btn > span { overflow-wrap: anywhere; }
 .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .chip-btn {
   display: inline-flex;
@@ -686,7 +694,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .pick[aria-pressed="true"] .tick { background: var(--ink); border-color: var(--ink); }
 .pick[aria-pressed="true"] .tick .ic { opacity: 1; }
 .pick .tile-name { font-size: 14px; }
-.sheet .line-form { padding: 6px 0 4px; border: 0; }
+.sheet .line-form { padding: 6px 0 4px; }
 
 .notice { margin-top: 18vh; padding: 22px 20px; text-align: center; }
 .notice h1 { font-size: 23px; line-height: 1.25; }
@@ -705,7 +713,6 @@ dialog.sheet::backdrop { background: var(--scrim); }
 const ICONS: Record<string, string> = {
   check: '<path d="M5 12.5l4.3 4.3L19 7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
-  minus: '<path d="M5 12h14"/>',
   arrow: '<path d="M4 12h15M14 6.5l5.5 5.5-5.5 5.5"/>',
   out: '<path d="M7 17L17 7M9 7h8v8"/>',
   chev: '<path d="M9.5 6l6 6-6 6"/>',
@@ -718,6 +725,8 @@ const ICONS: Record<string, string> = {
   bowl: '<path d="M3.5 11.5h17a8.5 8.5 0 0 1-17 0zM9 8c-.8-1.4.8-2.2 0-3.8M13 8c-.8-1.4.8-2.2 0-3.8"/>',
   trash: '<path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5"/>',
   warn: '<path d="M12 4.5l8.5 15h-17zM12 10.5v4M12 17.3v.2"/>',
+  // A calligraphy brush: handle, ferrule, and an inked tip that tapers to a point.
+  brush: '<path d="M19.6 4.4l-6.2 6.2M10.9 10.3l2.8 2.8"/><path fill="currentColor" stroke="none" d="M10 10.8c-2.2.3-4.5 4.6-5.6 8.8 4.2-1.1 8.5-3.4 8.8-5.6z"/>',
 };
 
 function sprite(): string {
@@ -727,9 +736,11 @@ function sprite(): string {
   return `<svg class="sprite" aria-hidden="true" focusable="false">${symbols}</svg>`;
 }
 
-function icon(name: string): string {
-  return `<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-${name}"/></svg>`;
+function icon(name: string, extra = ""): string {
+  return `<svg class="ic${extra ? ` ${extra}` : ""}" aria-hidden="true" focusable="false"><use href="#i-${name}"/></svg>`;
 }
+
+const BRUSH = icon("brush", "brush");
 
 function shell(title: string, body: string): string {
   return `<!doctype html>
@@ -887,7 +898,7 @@ function payerChip(v: View): string {
   const inner = `${icon("coin")}<span class="sr">Paid by </span><span class="name">${name}</span>`;
   // Only a member can be handed the bill, and only while nobody has paid it.
   return v.s.editable === "all" && !v.s.hasPayments
-    ? `<button type="button" class="payer-chip" data-open-payer aria-haspopup="dialog">${inner}</button>`
+    ? `<button type="button" class="payer-chip" data-open-payer aria-haspopup="dialog">${inner}${BRUSH}</button>`
     : `<span class="payer-chip">${inner}</span>`;
 }
 
@@ -930,8 +941,9 @@ function itemRow(v: View, item: LineItem): string {
   const mine = item.claimedBy.includes(v.s.viewer);
   const unclaimed = item.claimedBy.length === 0;
   const others = item.claimedBy.filter((id) => id !== v.s.viewer);
+  const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
-    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}</span>` +
+    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
   const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
@@ -952,8 +964,10 @@ function itemRow(v: View, item: LineItem): string {
   return `<li class="${classes.filter(Boolean).join(" ")}" data-item="${id}"><div class="row">${CHECK_TICK}${inner}</div></li>`;
 }
 
-function percentOf(tip: Cents, subtotal: Cents): string {
-  return subtotal > 0 ? `${Math.round((tip * 100) / subtotal)}%` : "";
+// "Tax (8.2%)": the share of the subtotal, to one decimal, read as part of
+// the label.
+function withPercent(label: string, part: Cents, subtotal: Cents): string {
+  return subtotal > 0 ? `${label} (${((part * 100) / subtotal).toFixed(1)}%)` : label;
 }
 
 function receiptMark(s: BillState): string {
@@ -968,19 +982,18 @@ function receiptMark(s: BillState): string {
 function amount(v: View, field: string, key: string, cents: Cents | null, label: string): string {
   const shown = `<span data-total="${key}">${cents === null ? "—" : formatCents(cents)}</span>`;
   if (v.s.editable !== "all") return shown;
-  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${shown}</button>`;
+  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${shown}${BRUSH}</button>`;
 }
 
 function totals(v: View): string {
   const s = v.s;
   const r = s.result;
-  const pct = percentOf(s.tipCents, r.billSubtotalCents);
   const rows = [
     `<div class="trow"><dt>Subtotal</dt><dd data-total="subtotal">${formatCents(r.billSubtotalCents)}</dd></div>`,
-    `<div class="trow" data-field-row="tax"><dt>Tax</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
+    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   ];
   // Between tax and tip, because the printed total is what the restaurant
-  // charged before anyone added a tip: where it sits says what it covers.
+  // charged before anyone added a tip: it reads as the sum of the two above.
   if (v.s.viewerIsPayer && v.bill.status === "draft") {
     rows.push(
       `<div class="trow receipt-row ${s.reconciles.ok ? "is-ok" : "is-off"}" data-reconcile data-field-row="printedTotal">` +
@@ -988,7 +1001,7 @@ function totals(v: View): string {
     );
   }
   rows.push(
-    `<div class="trow" data-field-row="tip"><dt>Tip${pct ? ` <span class="pct">${pct}</span>` : ""}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
+    `<div class="trow" data-field-row="tip"><dt>${withPercent("Tip", s.tipCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {
@@ -1005,7 +1018,7 @@ function receipt(v: View): string {
     v.s.editable === "all"
       ? `<div class="add-line needs-js" data-add-line><button type="button" class="add-row" data-add-open aria-label="Add a line">${icon("plus")}</button></div>`
       : "";
-  return `<section class="card receipt" data-items aria-label="Receipt">
+  return `<section class="card receipt${v.s.editable === "all" ? " is-editable" : ""}" data-items aria-label="Receipt">
 ${list}
 ${add}
 ${totals(v)}
@@ -1062,22 +1075,17 @@ function people(v: View): string {
 </section>`;
 }
 
-// The chips already show whose share the amount is, so the faces beside it
-// go while they are up.
-function choosing(v: View): boolean {
-  return v.s.editable !== "none" && guestsOf(v, v.s.viewer).length > 0;
-}
-
 // You first, then the guests you brought. Nobody else's: the payer settles
-// other people's lines from the line itself.
+// other people's lines from the line itself. Each chip carries a name, your
+// own too, so the pressed one says whose lines a tap claims.
 function claimers(v: View): string {
   const ids = [v.s.viewer, ...guestsOf(v, v.s.viewer).map((g) => g.id)];
   const chips = ids.map(
     (id) =>
       `<button type="button" class="claimer" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">` +
-      `${av(v, id)}<span class="label">${id === v.s.viewer ? "You" : escapeHtml(nameOf(v, id))}</span></button>`,
+      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span></button>`,
   );
-  const hidden = choosing(v) ? "" : " hidden";
+  const hidden = v.s.editable !== "none" && ids.length > 1 ? "" : " hidden";
   return `<div class="claimers" data-claimers role="group" aria-label="Claim for"${hidden}>${hidden ? "" : chips.join("")}</div>`;
 }
 
@@ -1085,13 +1093,14 @@ function bar(v: View): string {
   if (!v.onBill) return "";
   const s = v.s;
   const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-  const ring = open > 0 ? `<button type="button" class="ring-btn" data-jump-unclaimed aria-label="${open} unclaimed">${open}</button>` : "";
-  const arrow = icon("arrow").replace('class="ic"', 'class="ic arrow"');
-  const content = s.viewerIsPayer
-    ? `${stack(v, s.participants.filter((p) => p.kind === "member" && p.id !== s.viewer).map((p) => p.id), 4)}${arrow}${av(v, s.viewer, "payer")}` +
-      `<span class="amount money" data-you-owed>${formatCents(s.payerCollectsCents)}</span>`
-    : `${choosing(v) ? "" : stack(v, [s.viewer, ...guestsOf(v, s.viewer).map((g) => g.id)], 3)}<span class="amount money" data-you-owed>${formatCents(owedOf(v, s.viewer))}</span>` +
-      `${arrow}${av(v, s.payerId, "payer")}`;
+  const ring =
+    open > 0
+      ? `<button type="button" class="ring-btn" data-jump-unclaimed aria-label="${open} left to claim"><span class="dash-ring" aria-hidden="true"></span>${open} left</button>`
+      : "";
+  const [label, cents] = s.viewerIsPayer ? ["to collect", s.payerCollectsCents] : ["you owe", owedOf(v, s.viewer)];
+  const content =
+    `<span class="owe"><span class="owe-label">${label}</span> <span class="amount money" data-you-owed>${formatCents(cents)}</span></span>` +
+    `${icon("arrow", "arrow")}${av(v, s.payerId, "payer")}`;
   return `<div class="bar" data-bar>${claimers(v)}<div class="bar-in">${content}<span class="grow"></span>${ring}</div></div>`;
 }
 
@@ -1138,7 +1147,7 @@ function payRow(s: BillState): string {
 
 function hero(v: View): string {
   const s = v.s;
-  const arrow = icon("arrow").replace('class="ic"', 'class="ic arrow"');
+  const arrow = icon("arrow", "arrow");
   if (s.viewerIsPayer) {
     const debtors = Object.keys(s.owing).filter((id) => id !== s.viewer && owedOf(v, id) > 0);
     const total = debtors.reduce((n, id) => n + owedOf(v, id), 0);

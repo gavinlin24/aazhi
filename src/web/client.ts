@@ -82,6 +82,16 @@ export const CLIENT_SCRIPT = String.raw`
     return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   }
 
+  // A line's price, where a leading minus (a hyphen or a true minus sign)
+  // means money off. Zero stays unsigned, since the server has no "-0".
+  function linePrice(text) {
+    const trimmed = text.trim();
+    const off = /^[-−]/.test(trimmed);
+    const value = decimal(off ? trimmed.slice(1) : trimmed);
+    if (value === null) return null;
+    return off && hundredths(value) !== 0 ? "-" + value : value;
+  }
+
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
     for (const name in attrs || {}) {
@@ -330,7 +340,7 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(slot, JSON.stringify([nameOf(v, v.s.payerId), canHand]), () => {
       const inner = [icon("coin"), sr("Paid by "), el("span", { class: "name" }, nameOf(v, v.s.payerId))];
       return canHand
-        ? el("button", { type: "button", class: "payer-chip", "data-open-payer": true, "aria-haspopup": "dialog" }, inner)
+        ? el("button", { type: "button", class: "payer-chip", "data-open-payer": true, "aria-haspopup": "dialog" }, inner.concat(icon("brush", "brush")))
         : el("span", { class: "payer-chip" }, inner);
     });
   }
@@ -362,7 +372,7 @@ export const CLIENT_SCRIPT = String.raw`
     const others = item.claimedBy.filter((id) => id !== actor);
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
-      el("span", { class: "item-price" }, money(item.cents)),
+      el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
@@ -387,6 +397,7 @@ export const CLIENT_SCRIPT = String.raw`
     const mode = editable(v.s);
     const actor = claimFor || v.s.viewer;
     for (const section of root.querySelectorAll("[data-items]")) {
+      section.classList.toggle("is-editable", mode === "all");
       let list = section.querySelector(":scope > ul.items");
       if (v.s.items.length === 0) {
         if (list) list.remove();
@@ -417,8 +428,10 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
-  function percentOf(tip, subtotal) {
-    return subtotal > 0 ? Math.round((tip * 100) / subtotal) + "%" : "";
+  // "Tax (8.2%)": the share of the subtotal, to one decimal, read as part of
+  // the label.
+  function withPercent(label, part, subtotal) {
+    return subtotal > 0 ? label + " (" + ((part * 100) / subtotal).toFixed(1) + "%)" : label;
   }
 
   function receiptMark(s) {
@@ -431,7 +444,7 @@ export const CLIENT_SCRIPT = String.raw`
   function amount(mode, field, key, cents, label) {
     const shown = el("span", { "data-total": key }, cents === null ? "—" : money(cents));
     if (mode !== "all") return shown;
-    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, shown);
+    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [shown, icon("brush", "brush")]);
   }
 
   const FIELD_LABEL = { tax: "Tax", tip: "Tip", printedTotal: "Receipt" };
@@ -471,29 +484,29 @@ export const CLIENT_SCRIPT = String.raw`
     if (!dl) return;
     const s = v.s;
     const r = s.result;
-    const pct = percentOf(s.tipCents, r.billSubtotalCents);
     const entries = [];
     const row = (id, key, cls, build) => entries.push({ id, key: JSON.stringify(key), build: () => el("div", { class: "trow" + (cls ? " " + cls : "") }, build()) });
-    const field = (name, key, cents, label, extra, cls) => {
+    const field = (name, key, cents, label, opts) => {
+      const { extra, cls, shown } = opts || {};
       if (editing && editing.kind === "field" && editing.field === name) {
         entries.push({ id: name, key: "editing:" + tipMode, build: () => el("div", { class: "trow is-editing", "data-field-row": name }, fieldForm(s, name)) });
         return;
       }
       entries.push({
         id: name,
-        key: JSON.stringify([cents, mode, extra ? extra.key : null, cls || ""]),
+        key: JSON.stringify([cents, mode, shown || "", extra ? extra.key : null, cls || ""]),
         build: () => el("div", { class: "trow" + (cls ? " " + cls : ""), "data-field-row": name }, [
-          el("dt", null, [label].concat(extra ? extra.nodes() : [])),
+          el("dt", null, [shown || label].concat(extra ? extra.nodes() : [])),
           el("dd", null, amount(mode, name, key, cents, name === "printedTotal" ? "Printed total" : label)),
         ]),
       });
     };
     row("subtotal", [r.billSubtotalCents], "", () => [el("dt", null, "Subtotal"), el("dd", { "data-total": "subtotal" }, money(r.billSubtotalCents))]);
-    field("tax", "tax", s.taxCents, "Tax");
+    field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents) });
     if (s.viewerIsPayer && s.status === "draft") {
       const cls = "receipt-row " + (s.reconciles.ok ? "is-ok" : "is-off");
       field("printedTotal", "printed", s.printedTotalCents, "Receipt",
-        { key: JSON.stringify(s.reconciles), nodes: () => [" ", receiptMark(s)] }, cls);
+        { extra: { key: JSON.stringify(s.reconciles), nodes: () => [" ", receiptMark(s)] }, cls });
       const node = entries[entries.length - 1];
       const build = node.build;
       node.build = () => {
@@ -502,7 +515,7 @@ export const CLIENT_SCRIPT = String.raw`
         return built;
       };
     }
-    field("tip", "tip", s.tipCents, "Tip", pct ? { key: pct, nodes: () => [" ", el("span", { class: "pct" }, pct)] } : null);
+    field("tip", "tip", s.tipCents, "Tip", { shown: withPercent("Tip", s.tipCents, r.billSubtotalCents) });
     row("total", [r.distributableCents], "grand", () => [el("dt", null, "Total"), el("dd", { "data-total": "total" }, money(r.distributableCents))]);
     if (r.unclaimedCents !== 0) {
       row("unclaimed", [r.unclaimedCents], "short", () => [
@@ -616,48 +629,40 @@ export const CLIENT_SCRIPT = String.raw`
     return ids;
   }
 
-  // Answers whether the chips are up, which the rest of the bar needs.
   function renderClaimers(v) {
     const row = root.querySelector("[data-bar] > [data-claimers]");
-    if (!row) return false;
+    if (!row) return;
     const ids = editable(v.s) === "none" ? [] : claimerIds(v);
     const actor = claimFor || v.s.viewer;
     row.hidden = ids.length < 2;
     keyedInto(row, JSON.stringify([ids.length < 2 ? [] : ids.map((id) => [id, nameOf(v, id)]), actor]), () => row.hidden ? [] : ids.map((id) =>
       el("button", { type: "button", class: "claimer", "data-claim-as": id, "aria-pressed": String(id === actor) }, [
         av(v, id),
-        el("span", { class: "label" }, id === v.s.viewer ? "You" : nameOf(v, id)),
+        el("span", { class: "label" }, nameOf(v, id)),
       ])));
-    return !row.hidden;
   }
 
   function renderBar(v) {
-    const choosing = renderClaimers(v);
+    renderClaimers(v);
     const bar = root.querySelector("[data-bar] > .bar-in");
     if (!bar) return;
     const s = v.s;
     const open = s.items.filter((i) => i.claimedBy.length === 0).length;
-    keyedInto(bar, JSON.stringify([s.owing, s.payerCollectsCents, s.participants, s.viewer, s.payerId, open, choosing]), () => {
-      const ring = open > 0 ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " unclaimed" }, String(open)) : null;
-      if (s.viewerIsPayer) {
-        return [
-          stack(v, s.participants.filter((p) => p.kind === "member" && p.id !== s.viewer).map((p) => p.id), 4),
-          icon("arrow", "arrow"),
-          av(v, s.viewer, "payer"),
-          el("span", { class: "amount money", "data-you-owed": true }, money(s.payerCollectsCents)),
-          el("span", { class: "grow" }),
-          ring,
-        ];
-      }
-      return [
-        choosing ? null : stack(v, [s.viewer].concat(guestsOf(v, s.viewer).map((g) => g.id)), 3),
-        el("span", { class: "amount money", "data-you-owed": true }, money(owedOf(v, s.viewer))),
-        icon("arrow", "arrow"),
-        av(v, s.payerId, "payer"),
-        el("span", { class: "grow" }),
-        ring,
-      ];
-    });
+    const cents = s.viewerIsPayer ? s.payerCollectsCents : owedOf(v, s.viewer);
+    keyedInto(bar, JSON.stringify([cents, s.viewerIsPayer, s.participants, s.payerId, open]), () => [
+      el("span", { class: "owe" }, [
+        el("span", { class: "owe-label" }, s.viewerIsPayer ? "to collect" : "you owe"),
+        " ",
+        el("span", { class: "amount money", "data-you-owed": true }, money(cents)),
+      ]),
+      icon("arrow", "arrow"),
+      av(v, s.payerId, "payer"),
+      el("span", { class: "grow" }),
+      open > 0
+        ? el("button", { type: "button", class: "ring-btn", "data-jump-unclaimed": true, "aria-label": open + " left to claim" },
+          [el("span", { class: "dash-ring", "aria-hidden": "true" }), open + " left"])
+        : null,
+    ]);
   }
 
   // ---- the confirmed bill -------------------------------------------------
@@ -908,7 +913,7 @@ export const CLIENT_SCRIPT = String.raw`
       : el("div", { class: "sheet-head" }, [
           av(v, g.id),
           el("h3", null, draft && manage
-            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, el("span", null, g.displayName))
+            ? el("button", { type: "button", class: "name-btn", "data-rename-guest": g.id, "aria-label": "Rename " + g.displayName }, [el("span", null, g.displayName), icon("brush", "brush")])
             : g.displayName),
           guestPaid(v, g) ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
           share ? el("span", { class: "money" + (share.pardoned ? " was" : "") }, money(share.owedCents)) : null,
@@ -980,25 +985,22 @@ export const CLIENT_SCRIPT = String.raw`
 
   function lineForm(item) {
     const n = Date.now();
-    const off = item ? item.cents < 0 : false;
     const label = el("input", { id: "line-name-" + n, class: "text-input", name: "label", maxlength: MAX_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Name", placeholder: item ? null : "Name" });
     const price = el("input", { id: "line-price-" + n, name: "price", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Price", placeholder: "0.00" });
     if (item) {
       label.value = item.label;
-      price.value = plain(Math.abs(item.cents));
+      price.value = plain(item.cents);
     }
     const form = el("form", { class: "line-form", novalidate: true }, [
       label,
-      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, off ? "−$" : "$"), price]),
+      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
-        el("button", { type: "button", class: "icon-btn sign", "data-sign": true, "aria-pressed": String(off), "aria-label": "Money off" }, icon("minus")),
         item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete line" }, icon("trash")) : null,
         item ? null : el("button", { type: "button", class: "icon-btn", "data-cancel": true, "aria-label": "Cancel" }, icon("close")),
         el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
       ]),
     ]);
-    form._off = off;
     if (item) form.dataset.editLine = item.id;
     else form.dataset.addLine = "";
     return form;
@@ -1221,13 +1223,13 @@ export const CLIENT_SCRIPT = String.raw`
       form.elements.label.focus();
       return null;
     }
-    const price = decimal(form.elements.price.value);
+    const price = linePrice(form.elements.price.value);
     if (price === null) {
-      msg.textContent = "Enter the price like 12.50.";
+      msg.textContent = "Enter the price like 12.50, or -5.00 for money off.";
       form.elements.price.focus();
       return null;
     }
-    return { label, price: form._off && hundredths(price) !== 0 ? "-" + price : price };
+    return { label, price };
   }
 
   function setBusy(form, value) {
@@ -1272,13 +1274,6 @@ export const CLIENT_SCRIPT = String.raw`
     setBusy(form, false);
     if (failure) form.querySelector(".field-msg").textContent = failure.message;
     else closeSheet();
-  }
-
-  function toggleSign(button) {
-    const form = button.closest("form");
-    form._off = !form._off;
-    button.setAttribute("aria-pressed", String(form._off));
-    form.querySelector(".money-input span").textContent = form._off ? "−$" : "$";
   }
 
   function startEdit(field) {
@@ -1492,7 +1487,6 @@ export const CLIENT_SCRIPT = String.raw`
     if (field) return startEdit(field.dataset.editField);
     const mode = target.closest("[data-tip-mode]");
     if (mode) return setTipMode(mode.dataset.tipMode);
-    if (target.closest("[data-sign]")) return toggleSign(target.closest("[data-sign]"));
     const del = target.closest("[data-delete-line]");
     if (del) return deleteLine(del);
     if (target.closest("[data-add-open]")) {
