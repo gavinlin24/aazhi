@@ -46,10 +46,10 @@ function participantsOf(input: BillInput): Participant[] {
   }));
 }
 
-// Tea and water unclaimed: the spec's mid-dinner draft.
+// Tea and water unclaimed: the spec's half-claimed draft.
 const draft = withUnclaimed(SAIGON, ["tea", "water"]);
 
-// The day after the dinner, so the header's date drops the year it shares.
+// The day after the bill, so the header's date drops the year it shares.
 const NOW = Date.parse("2026-10-29T12:00:00.000Z");
 
 function page(viewer: string, b: BillRow = bill, input: BillInput = draft, people: Participant[] = participantsOf(input)) {

@@ -20,7 +20,7 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     ...guildOnly,
     name: "split",
     type: ApplicationCommandType.ChatInput,
-    description: "Split a restaurant bill from a photo of the receipt",
+    description: "Split a bill from a photo of the receipt",
     options: [
       {
         type: ApplicationCommandOptionType.Attachment,

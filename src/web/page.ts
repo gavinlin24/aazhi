@@ -1352,7 +1352,7 @@ function notOnBill(v: View): string {
   const draft = v.bill.status === "draft";
   return `<section class="card notice-card" data-you>
 <h2>You're not on this bill</h2>
-<p>${draft ? "If you were at dinner, tap <strong>Open the split</strong> on the bill in Discord to join it." : "Nothing here is yours to pay."}</p>
+<p>${draft ? "If you were there, tap <strong>Open the split</strong> on the bill in Discord to join it." : "Nothing here is yours to pay."}</p>
 </section>`;
 }
 

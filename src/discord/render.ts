@@ -148,7 +148,7 @@ function components(bill: BillRow): APIActionRowComponent<APIComponentInMessageA
         {
           type: ComponentType.UserSelect,
           custom_id: `roster:${bill.id}`,
-          placeholder: "Add people who were at dinner",
+          placeholder: "Add people who were there",
           min_values: 1,
           max_values: 25,
         },

@@ -70,7 +70,7 @@ Rejected:
 - **AWS Lambda.** The free allowance genuinely is permanent and generous,
   but it needs API Gateway in front of it, has cold starts, and brings an
   AWS account's worth of surface area to maintain for a bot that splits
-  dinner.
+  bills.
 - **A small VPS.** Not free, and now you patch a server.
 
 ## Storage: Cloudflare D1
@@ -87,7 +87,7 @@ key-value store would mean maintaining those indexes by hand.
 Free limits and what they mean at this size: 5 GB across the account and
 500 MB per database, 5 million row reads and 100,000 row writes a day. A
 confirmed eight-person bill with thirteen items is roughly 25 rows, so the
-write budget is thousands of dinners a day.
+write budget is thousands of bills a day.
 
 One free-plan limit does constrain the design: **50 queries per Worker
 invocation.** Rendering a bill must be a handful of queries with joins, not
@@ -128,7 +128,7 @@ high-resolution tier, so a phone photo is scaled to the 4,784-token cap:
 | JSON for 13 items | ~600 | $0.000300 |
 | **per receipt** | | **$0.00083** |
 
-A tenth of a cent. A single dollar buys about 1,200 receipts. Ten dinners
+A tenth of a cent. A single dollar buys about 1,200 receipts. Ten bills
 a month costs under a cent a month, so about a dime a year.
 
 High resolution is worth keeping rather than downsampling to cut the image

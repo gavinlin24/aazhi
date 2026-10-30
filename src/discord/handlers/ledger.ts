@@ -27,7 +27,7 @@ function ledgerLine(row: LedgerRow): string {
   const name = escapeMarkdown(clip(row.displayName, MAX_NAME));
   const where =
     row.kind === "guest"
-      ? `your guest at ${escapeMarkdown(clip(row.place?.trim() || "dinner", MAX_NAME))}`
+      ? `your guest at ${escapeMarkdown(clip(row.place?.trim() || "the bill", MAX_NAME))}`
       : `${n} ${n === 1 ? "bill" : "bills"}`;
   return `- ${name}: ${formatCents(row.owedCents - row.settledCents)} (${where})`;
 }

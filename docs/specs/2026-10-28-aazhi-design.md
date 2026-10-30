@@ -24,7 +24,7 @@ Two further intents shape the design and should not be traded away:
 - **It has to be good enough to still be in use in a year.** This is not a
   demo. Friction anywhere in the common path is a defect.
 - **It has to be free to host, permanently.** No subscription, no server to
-  keep alive, no component whose death is discovered at dinner. Reading a
+  keep alive, no component whose death is discovered at the table. Reading a
   receipt is the one paid call, at about $0.00083 each.
 
 A third, secondary intent: the author wants to be able to explain this
@@ -79,7 +79,7 @@ Things that would make this a failure even if it technically worked:
   One unresponsive friend must never be able to stall a bill.
 - **Anything to maintain.** A component that needs babysitting, restarting,
   or paying for will eventually be left to rot, and the project dies.
-- **A chat full of bot noise.** One message per dinner.
+- **A chat full of bot noise.** One message per bill.
 
 ## Constraints
 
@@ -194,10 +194,10 @@ No diner ever creates an account or enters a password.
 The whole bill on one screen. Each line item is a row; each row carries a
 chip per diner.
 
-**Who the chips are.** The bot has no roster of who went to dinner and must
+**Who the chips are.** The bot has no roster of who was there and must
 not ask the payer to build one as a gate. So: the chips are everyone who
 has opened the split, seeded optionally by the payer. `/split` carries an
-optional member picker for "who was at dinner", which lets the payer do
+optional member picker for "who was there", which lets the payer do
 the whole bill themselves at the table; leaving it empty is fine, because
 anyone who opens the split is added to the roster by that act, and the
 payer can add a server member from the page at any time. A server with
@@ -464,7 +464,7 @@ a daily row budget orders of magnitude above friend-group traffic. One
 platform, one deploy, one place for things to go wrong.
 
 **Claude Haiku 5.5 on the Anthropic API** for receipt extraction, at
-roughly $0.00083 per receipt, so a dollar covers about 1,200 dinners.
+roughly $0.00083 per receipt, so a dollar covers about 1,200 bills.
 Gemini's free tier was considered and rejected: Google no longer
 publishes its free-tier request limits in its documentation, and
 free-tier content is used to improve Google's products, with human
