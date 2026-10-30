@@ -89,20 +89,22 @@ export const CLIENT_SCRIPT = String.raw`
     return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   }
 
-  // A line's price, where a leading minus (a hyphen or a true minus sign)
-  // means money off. Zero stays unsigned, since the server has no "-0".
-  function linePrice(text) {
-    const trimmed = text.trim();
-    const off = /^[-−]/.test(trimmed);
-    const value = decimal(off ? trimmed.slice(1) : trimmed);
-    if (value === null) return null;
-    return off && hundredths(value) !== 0 ? "-" + value : value;
+  // A price the receipt read as money off (a comp, or "No cheese -0.50"
+  // under a dish) keeps its sign while the payer retypes the amount, since a
+  // phone's number pad has no minus key. Anything the payer adds is a charge.
+  function amountOf(input) {
+    const value = decimal(input.value);
+    return value !== null && input.dataset.off !== undefined && hundredths(value) !== 0 ? "-" + value : value;
   }
 
-  // An add-on can take money off ("No cheese -0.50"), so it may carry a sign.
-  // Left empty, it is unpriced.
-  function addonPrice(text) {
-    return text.trim() === "" ? "0.00" : linePrice(text);
+  // Left empty, an add-on is unpriced.
+  function addonPrice(input) {
+    return input.value.trim() === "" ? "0.00" : amountOf(input);
+  }
+
+  function moneyInput(input, cents) {
+    if (cents < 0) input.dataset.off = "";
+    return el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, cents < 0 ? "-$" : "$"), input]);
   }
 
   function signedHundredths(value) {
@@ -1183,13 +1185,13 @@ export const CLIENT_SCRIPT = String.raw`
     const form = el("form", { class: "line-form" + (item ? " dish-form" : ""), novalidate: true }, [
       label,
       item ? el("label", { class: "field-label", for: price.id, "data-base-label": true }) : null,
-      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
+      moneyInput(price, base),
       item ? el("p", { class: "addons-head", "data-addons-head": true }, "Add-ons") : null,
       ...addons.map((a) => addonRow(a)),
       item ? el("button", { type: "button", class: "add-row", "data-add-addon": true }, [icon("plus"), "Add-on"]) : null,
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
-        item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete line" }, icon("trash")) : null,
+        item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete " + item.label }, icon("trash")) : null,
         item ? null : el("button", { type: "button", class: "icon-btn", "data-cancel": true, "aria-label": "Cancel" }, icon("close")),
         el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
       ]),
@@ -1204,12 +1206,12 @@ export const CLIENT_SCRIPT = String.raw`
 
   function addonRow(addon) {
     const name = el("input", { class: "text-input", "data-addon-label": true, maxlength: MAX_ADDON_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Add-on", placeholder: "Add-on" });
-    const price = el("input", { "data-addon-price": true, inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Add-on price", placeholder: "0.00" });
+    const price = el("input", { "data-addon-price": true, inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": addon.cents < 0 ? "Add-on money off" : "Add-on price", placeholder: "0.00" });
     name.value = addon.label;
-    price.value = addon.cents === 0 ? "" : plain(addon.cents);
+    price.value = addon.cents === 0 ? "" : plain(Math.abs(addon.cents));
     return el("div", { class: "addon", "data-addon": true }, [
       name,
-      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
+      moneyInput(price, addon.cents),
       el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
     ]);
   }
@@ -1217,10 +1219,10 @@ export const CLIENT_SCRIPT = String.raw`
   // The dish as it would save. A price that doesn't read as money yet counts
   // as nothing until it does.
   function dishCents(form) {
-    const base = linePrice(form.elements.price.value);
+    const base = amountOf(form.elements.price);
     let cents = base === null ? 0 : signedHundredths(base);
     for (const input of form.querySelectorAll("[data-addon-price]")) {
-      const value = addonPrice(input.value);
+      const value = addonPrice(input);
       if (value !== null) cents += signedHundredths(value);
     }
     return cents;
@@ -1233,7 +1235,7 @@ export const CLIENT_SCRIPT = String.raw`
       const name = row.querySelector("[data-addon-label]").value.trim();
       row.querySelector("[data-remove-addon]").setAttribute("aria-label", "Remove " + (name || "add-on"));
     }
-    form.querySelector("[data-base-label]").textContent = rows > 0 ? "Base price" : "Price";
+    form.querySelector("[data-base-label]").textContent = form.elements.price.dataset.off !== undefined ? "Money off" : rows > 0 ? "Base price" : "Price";
     form.querySelector("[data-addons-head]").hidden = rows === 0;
     form.querySelector("[data-add-addon]").hidden = rows >= MAX_ADDONS;
     const dialog = form.closest("dialog");
@@ -1525,9 +1527,9 @@ export const CLIENT_SCRIPT = String.raw`
       form.elements.label.focus();
       return null;
     }
-    const price = linePrice(form.elements.price.value);
+    const price = amountOf(form.elements.price);
     if (price === null) {
-      msg.textContent = "Enter the price like 12.50, or -5.00 for money off.";
+      msg.textContent = "Enter the price like 12.50.";
       form.elements.price.focus();
       return null;
     }
@@ -1538,7 +1540,7 @@ export const CLIENT_SCRIPT = String.raw`
       const name = row.querySelector("[data-addon-label]");
       const amount = row.querySelector("[data-addon-price]");
       const addonLabel = name.value.replace(/\s+/g, " ").trim();
-      const addonValue = addonPrice(amount.value);
+      const addonValue = addonPrice(amount);
       if (addonLabel === "" && addonValue !== null && hundredths(addonValue.replace("-", "")) === 0) continue;
       if (addonLabel === "") {
         msg.textContent = "Name the add-on.";
@@ -1585,16 +1587,6 @@ export const CLIENT_SCRIPT = String.raw`
 
   async function deleteLine(button) {
     const form = button.closest("form");
-    // A second tap confirms, so one stray tap never drops a line.
-    if (!button.classList.contains("is-armed")) {
-      button.classList.add("is-armed");
-      button.setAttribute("aria-label", "Tap again to delete");
-      setTimeout(() => {
-        button.classList.remove("is-armed");
-        button.setAttribute("aria-label", "Delete line");
-      }, ARM_MS);
-      return;
-    }
     setBusy(form, true);
     const failure = await write("POST", "/item", { op: "delete", itemId: button.dataset.deleteLine });
     setBusy(form, false);
