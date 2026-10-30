@@ -488,15 +488,28 @@ describe("removeMember", () => {
     expect((await getParticipants(db, "b-roster")).map((p) => p.id)).toEqual(["gavin", "marcus"]);
   });
 
-  it("refuses someone with claims, and leaves the bill alone", async () => {
+  it("clears their claims with them, leaving anyone else on the line", async () => {
+    await insertItems(db, "b-roster", [{ id: "roster-tea", label: "Tea", cents: 100, source: "ocr" }]);
+    await setClaim(db, "b-roster", "roster-tea", "marcus", true);
+    await setClaim(db, "b-roster", "roster-tea", "gavin", true);
+
+    await removeMember(db, "b-roster", "marcus");
+
+    const claimedBy = Object.fromEntries((await getBillItems(db, "b-roster")).map((i) => [i.id, i.claimedBy]));
+    expect(claimedBy).toEqual({ "roster-pho": [], "roster-tea": ["gavin"] });
+    expect((await getParticipants(db, "b-roster")).map((p) => p.id)).toEqual(["gavin", "bystander"]);
+  });
+
+  it("leaves the claims alone when it refuses", async () => {
+    await setClaim(db, "b-roster", "roster-pho", "bystander", true);
+    await addGuest(db, "b-roster", { id: "guest-kim", displayName: "Kim", addedBy: "bystander" });
     const before = (await getBill(db, "b-roster"))!.revision;
 
-    const error = await refusal("marcus");
+    const error = await refusal("bystander");
 
     expect(error).toBeInstanceOf(MemberRefusedError);
-    expect(error.reason).toBe("claims");
     expect((await getBill(db, "b-roster"))!.revision).toBe(before);
-    expect(await getParticipants(db, "b-roster")).toHaveLength(3);
+    expect((await getBillItems(db, "b-roster"))[0]!.claimedBy).toEqual(["bystander", "marcus"]);
   });
 
   it("refuses the payer, a guest, a stranger and anyone with a guest of their own", async () => {

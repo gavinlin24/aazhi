@@ -6,11 +6,13 @@ import {
   addGuest,
   addParticipant,
   confirmBill,
+  createBill,
   editItem,
   getBill,
   getBillItems,
   getParticipants,
   getShares,
+  insertItems,
   setBillAmounts,
   setClaim,
   toSplitInput,
@@ -558,12 +560,54 @@ describe("taking someone off a draft", () => {
     expect((await getParticipants(db, BILL)).map((p) => p.id)).toContain("bystander");
   });
 
+  it("clears a person's lines with them, and what's left adds up", async () => {
+    await createBill(db, {
+      id: BILL,
+      guildId: "guild-1",
+      channelId: "chan-1",
+      messageId: "msg-1",
+      payerId: "gavin",
+      place: "Saigon Kitchen",
+      billDate: "2026-10-28",
+      discountCents: 0,
+      taxCents: 300,
+      tipCents: 300,
+      printedTotalCents: 3300,
+      status: "draft",
+    });
+    await insertItems(db, BILL, [
+      { id: "solo", label: "Pho", cents: 1200, source: "ocr" },
+      { id: "shared", label: "Rolls", cents: 900, source: "ocr" },
+      { id: "mine", label: "Tea", cents: 900, source: "ocr" },
+    ]);
+    for (const [id, name] of [["gavin", "Gavin"], ["theo", "Theo"], ["sam", "Sam"]] as const) {
+      await addParticipant(db, { billId: BILL, id, kind: "member", displayName: name, addedBy: null });
+    }
+    for (const [line, who] of [["solo", "sam"], ["shared", "sam"], ["shared", "theo"], ["shared", "gavin"], ["mine", "gavin"]] as const) {
+      await setClaim(db, BILL, line, who, true);
+    }
+    const owed = (body: any) => Object.fromEntries(body.result.shares.map((s: any) => [s.participant, s.owedCents]));
+    const before = await send("GET", "/state", "gavin");
+    expect(owed(before.body)).toEqual({ gavin: 1440, theo: 360, sam: 1800 });
+
+    const reply = await remove("gavin", "sam");
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.items.map((i: any) => i.claimedBy.toSorted())).toEqual([[], ["gavin", "theo"], ["gavin"]]);
+    expect(owed(reply.body)).toEqual({ gavin: 1620, theo: 540 });
+    expect(reply.body.result.unclaimedCents).toBe(1440);
+    expect(1620 + 540 + 1440).toBe(reply.body.result.distributableCents);
+
+    expect((await send("POST", "/confirm", "gavin", { revision: await revision(), splitUnclaimed: true })).status).toBe(200);
+    const shares = await getShares(db, BILL);
+    expect(Object.fromEntries(shares.map((s) => [s.participant, s.owedCents]))).toEqual({ gavin: 2340, theo: 1260 });
+  });
+
   it("says why it can't take someone off", async () => {
     await seedSaigon(db, BILL);
     await bystander();
     await addGuest(db, BILL, { id: "guest-kim", displayName: "Kim", addedBy: "bystander" });
 
-    expect(await remove("gavin", "theo")).toEqual({ status: 409, body: { error: "Theo has lines on this bill. Take them off those lines first." } });
     expect(await remove("gavin")).toEqual({ status: 409, body: { error: "Sam brought a guest. Take the guest off first." } });
     expect(await remove("gavin", "gavin")).toEqual({ status: 400, body: { error: "You paid the bill, so you stay on it." } });
     expect((await remove("gavin", "nobody")).status).toBe(404);
@@ -607,7 +651,6 @@ describe("saving a Venmo username", () => {
 
     expect(await revision()).toBe(before);
     const theo = await send("GET", "/state", "theo");
-    expect(theo.body.pay.username).toBe("gavin-l2");
     expect(theo.body.pay.appUrl).toContain("venmo://paycharge?txn=pay&recipients=gavin-l2&amount=");
     expect(theo.body.viewerVenmo).toBeNull();
   });

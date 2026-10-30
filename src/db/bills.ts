@@ -1082,9 +1082,9 @@ export async function removeGuest(db: D1Database, billId: string, guestId: Parti
 }
 
 // "no-member": there is no member by that id on the bill (any more). The rest
-// are what keeps someone on it: the person who paid, lines they claimed, guests
-// they answer for, or a payment of theirs on a reopened bill.
-export type MemberRefusal = "no-member" | "payer" | "claims" | "guests" | "paid";
+// are what keeps someone on it: the person who paid, guests they answer for, or
+// a payment of theirs on a reopened bill.
+export type MemberRefusal = "no-member" | "payer" | "guests" | "paid";
 
 export class MemberRefusedError extends Error {
   constructor(readonly reason: MemberRefusal) {
@@ -1094,21 +1094,23 @@ export class MemberRefusedError extends Error {
 }
 
 // Opening a draft joins it, so anyone curious ends up on the roster. This takes
-// such a bystander back off, and only a bystander: someone with claims has a
-// number that means something. Every rule sits in the write, so a claim landing
-// first keeps them on. They can rejoin by tapping Open the split again. A
-// reopened bill kept a share row for them, which goes with them.
+// someone back off with their claims: a line only they were on goes back to
+// nobody, and a shared one stays with whoever else is on it. Every rule sits in
+// the write, so a guest or payment landing first keeps them on. They can rejoin
+// by tapping Open the split again. A reopened bill kept a share row for them,
+// which goes with them.
 export async function removeMember(db: D1Database, billId: string, memberId: ParticipantId): Promise<number> {
-  const claimed = `EXISTS (SELECT 1 FROM item_claims c JOIN bill_items i ON i.id = c.bill_item_id
-    WHERE i.bill_id = ?1 AND c.participant_id = ?2)`;
   const hosting = "EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND added_by = ?2)";
   const paying = "EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND participant_id = ?2)";
   const present = "EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?2 AND kind = 'member')";
   const payer = "EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND payer_id = ?2)";
-  const allowed = `${WHILE_DRAFT} AND ${present} AND NOT ${payer} AND NOT ${claimed} AND NOT ${hosting} AND NOT ${paying}`;
+  const allowed = `${WHILE_DRAFT} AND ${present} AND NOT ${payer} AND NOT ${hosting} AND NOT ${paying}`;
   // Children first: a share row points at its participant.
   const [bump] = await db.batch<{ revision: number }>([
     db.prepare(`UPDATE bills SET revision = revision + 1 WHERE id = ?1 AND ${allowed} RETURNING revision`).bind(billId, memberId),
+    db
+      .prepare(`DELETE FROM item_claims WHERE participant_id = ?2 AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?1) AND ${allowed}`)
+      .bind(billId, memberId),
     db.prepare(`DELETE FROM shares WHERE bill_id = ?1 AND participant_id = ?2 AND ${allowed}`).bind(billId, memberId),
     db.prepare(`DELETE FROM participants WHERE bill_id = ?1 AND id = ?2 AND ${allowed}`).bind(billId, memberId),
   ]);
@@ -1118,12 +1120,11 @@ export async function removeMember(db: D1Database, billId: string, memberId: Par
   const bill = await getBill(db, billId);
   if (bill?.status !== "draft") throw new BillNotDraftError(billId);
   const why = await db
-    .prepare(`SELECT ${present} AS present, ${payer} AS payer, ${claimed} AS claimed, ${hosting} AS hosting`)
+    .prepare(`SELECT ${present} AS present, ${payer} AS payer, ${hosting} AS hosting`)
     .bind(billId, memberId)
-    .first<{ present: number; payer: number; claimed: number; hosting: number }>();
+    .first<{ present: number; payer: number; hosting: number }>();
   if (!why?.present) throw new MemberRefusedError("no-member");
   if (why.payer) throw new MemberRefusedError("payer");
-  if (why.claimed) throw new MemberRefusedError("claims");
   throw new MemberRefusedError(why.hosting ? "guests" : "paid");
 }
 

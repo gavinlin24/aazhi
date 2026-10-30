@@ -502,7 +502,6 @@ api.delete(
 );
 
 const MEMBER_REFUSED: Record<Exclude<MemberRefusedError["reason"], "no-member" | "payer">, (name: string) => string> = {
-  claims: (name) => `${name} has lines on this bill. Take them off those lines first.`,
   guests: (name) => `${name} brought a guest. Take the guest off first.`,
   paid: (name) => `${name} has already paid on this bill, so they stay on it.`,
 };

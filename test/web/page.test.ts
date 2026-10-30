@@ -812,13 +812,16 @@ describe("renderPage", () => {
       const html = view("theo", { settled: [{ participant: "theo", cents: 100 }], payerVenmo });
       const left = share("theo").owedCents - 100;
 
-      const link = await one(html, "[data-pay] a.pay");
-      expect(link.attrs.href).toBe(
-        `venmo://paycharge?txn=pay&amp;recipients=gavin-l&amp;amount=${(left / 100).toFixed(2)}&amp;note=Saigon%20Kitchen%2010%2F28`,
-      );
-      // A new window for a custom scheme is more likely to be blocked.
-      expect(link.attrs).not.toHaveProperty("target");
-      expect(link.text).toBe(`Pay @gavin-l ${money(left)}`);
+      const app = await one(html, "[data-pay] a.pay.is-app");
+      const web = await one(html, "[data-pay] a.pay.is-web");
+      const amount = (left / 100).toFixed(2);
+      expect(app.attrs.href).toBe(`venmo://paycharge?txn=pay&amp;recipients=gavin-l&amp;amount=${amount}&amp;note=Saigon%20Kitchen%2010%2F28`);
+      expect(web.attrs.href).toBe(`https://venmo.com/gavin-l?txn=pay&amp;amount=${amount}&amp;note=Saigon%20Kitchen%2010%2F28`);
+      for (const link of [app, web]) {
+        // A new window for a custom scheme is more likely to be blocked.
+        expect(link.attrs).not.toHaveProperty("target");
+        expect(link.text).toBe("Venmo");
+      }
       expect(await select(view("gavin", { payerVenmo }), "[data-pay]")).toEqual([]);
       expect(await select(view("marcus", { payerVenmo }), "[data-pay]")).toEqual([]);
     });

@@ -69,7 +69,7 @@ export interface GuestsPaid {
   paidToHost?: ParticipantId[];
 }
 
-export type PayOption = { username: string; appUrl: string; webUrl: string };
+export type PayOption = { appUrl: string; webUrl: string };
 
 // What the page needs beyond the server's state. For a confirmed bill: the
 // payments, for what is left. For the payer: the payments one by one. For
@@ -110,7 +110,7 @@ function owingOf(shares: Share[], participants: Participant[], payer: Participan
 // partial payment would ask the person to pay twice.
 function payOption(bill: BillRow, username: string | null | undefined, leftCents: Cents): PayOption | null {
   if (!username || leftCents <= 0) return null;
-  return { username, ...payLinks(username, leftCents, payNote(bill.place, bill.billDate)) };
+  return payLinks(username, leftCents, payNote(bill.place, bill.billDate));
 }
 
 export function billState(

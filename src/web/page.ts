@@ -832,7 +832,6 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .part-name { display: inline-flex; align-items: center; gap: 5px; height: 18px; font-size: 14px; }
 .legend.parts .money { color: var(--ink); }
 .pay-row { display: flex; gap: 8px; margin-top: 16px; }
-/* Basis 0 splits the row equally among however many apps the payer has. */
 .pay {
   display: flex;
   flex: 1 1 0;
@@ -850,6 +849,13 @@ button.owe[aria-pressed="false"] .mark { display: none; }
   white-space: nowrap;
 }
 .pay .ic { width: 18px; height: 18px; }
+/* The device picks the link. A custom scheme goes nowhere on a computer, and
+   this works where a user agent wouldn't: an iPad reports itself as a Mac. */
+.pay.is-app { display: none; }
+@media (pointer: coarse) {
+  .pay.is-app { display: flex; }
+  .pay.is-web { display: none; }
+}
 /* Whose shares one amount covers, when it covers guests too. */
 .whose { list-style: none; margin: 12px 0 0; padding: 0; }
 .whose li { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid var(--rule); }
@@ -1601,8 +1607,8 @@ function pie(done: Cents, total: Cents): string {
 function payRow(v: View): string {
   const pay = v.s.pay;
   if (!pay) return "";
-  const label = `Pay @${escapeHtml(pay.username)} ${formatCents(leftOf(v, v.s.viewer))}`;
-  return `<div class="pay-row" data-pay><a class="pay" href="${escapeHtml(pay.appUrl)}">${label}${icon("out")}</a></div>`;
+  const link = (kind: string, url: string) => `<a class="pay ${kind}" href="${escapeHtml(url)}">Venmo${icon("out")}</a>`;
+  return `<div class="pay-row" data-pay>${link("is-app", pay.appUrl)}${link("is-web", pay.webUrl)}</div>`;
 }
 
 // Only someone with something left to pay has anything to record. Paid is
