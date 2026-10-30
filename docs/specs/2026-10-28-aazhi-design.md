@@ -305,9 +305,9 @@ covers, with the payer named as the person to pay.
 
 Per-person controls:
 
-- **Pay my share.** Opens the payer's preferred payment app with amount and
-  note prefilled where the app supports a deep link (Venmo and Cash App
-  do), or shows the amount and the payer's details for a Zelle transfer.
+- **Pay my share.** Opens Venmo with the amount and note prefilled when the
+  payer has linked a Venmo username. Venmo is the only pay app. Without one,
+  the person pays however they normally would and taps "I paid".
 - **Show my math.** The person's items, their slice of tax, their slice of
   tip, and the arithmetic that produced the number. People can only judge
   whether a bill is right if they can see why.
