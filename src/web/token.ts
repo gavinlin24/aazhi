@@ -25,8 +25,8 @@ function hmacKey(key: string, usage: "sign" | "verify"): Promise<CryptoKey> {
 
 // The signature covers the encoded payload text, not re-serialised JSON, so
 // what is verified is byte for byte what arrived.
-export async function mintToken(billId: string, participantId: ParticipantId, key: string, nowMs: number): Promise<string> {
-  const payload = toBase64url(encoder.encode(JSON.stringify({ b: billId, p: participantId, exp: nowMs + TOKEN_TTL_MS })));
+async function sign(fields: Record<string, unknown>, key: string): Promise<string> {
+  const payload = toBase64url(encoder.encode(JSON.stringify(fields)));
   const signature = await crypto.subtle.sign("HMAC", await hmacKey(key, "sign"), encoder.encode(payload));
   return `${payload}.${toBase64url(new Uint8Array(signature))}`;
 }
@@ -35,11 +35,7 @@ export async function mintToken(billId: string, participantId: ParticipantId, ke
 // whether a token failed on its signature, its shape or its age. The signature
 // is checked with crypto.subtle.verify, which compares in constant time,
 // before the payload is even decoded.
-export async function readToken(
-  token: string,
-  key: string,
-  nowMs: number,
-): Promise<{ billId: string; participantId: ParticipantId } | null> {
+async function verified(token: string, key: string, nowMs: number): Promise<Record<string, unknown> | null> {
   try {
     const parts = token.split(".");
     if (parts.length !== 2) return null;
@@ -53,11 +49,52 @@ export async function readToken(
 
     const grant: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(payloadBytes));
     if (typeof grant !== "object" || grant === null) return null;
-    const { b, p, exp } = grant as Record<string, unknown>;
-    if (typeof b !== "string" || typeof p !== "string" || typeof exp !== "number" || !Number.isFinite(exp)) return null;
-    if (nowMs >= exp) return null;
-    return { billId: b, participantId: p };
+    const { exp } = grant as Record<string, unknown>;
+    if (typeof exp !== "number" || !Number.isFinite(exp) || nowMs >= exp) return null;
+    return grant as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+export async function mintToken(billId: string, participantId: ParticipantId, key: string, nowMs: number): Promise<string> {
+  return sign({ b: billId, p: participantId, exp: nowMs + TOKEN_TTL_MS }, key);
+}
+
+export async function readToken(
+  token: string,
+  key: string,
+  nowMs: number,
+): Promise<{ billId: string; participantId: ParticipantId } | null> {
+  const grant = await verified(token, key, nowMs);
+  if (!grant) return null;
+  const { b, p } = grant;
+  return typeof b === "string" && typeof p === "string" ? { billId: b, participantId: p } : null;
+}
+
+// A pass to one server's profile pages, walking from person to person, so it
+// names the viewer and never the person viewed. Bill tokens and these share a
+// key but no field names, so neither reader accepts the other's. The server's
+// name rides along because Discord only sends it through a separate call, and
+// the page has no reason to make that call on every view.
+export async function mintViewerToken(
+  guildId: string,
+  viewerId: ParticipantId,
+  guildName: string | null,
+  key: string,
+  nowMs: number,
+): Promise<string> {
+  return sign({ g: guildId, v: viewerId, ...(guildName ? { n: guildName } : {}), exp: nowMs + TOKEN_TTL_MS }, key);
+}
+
+export async function readViewerToken(
+  token: string,
+  key: string,
+  nowMs: number,
+): Promise<{ guildId: string; viewerId: ParticipantId; guildName: string | null } | null> {
+  const grant = await verified(token, key, nowMs);
+  if (!grant) return null;
+  const { g, v, n } = grant;
+  if (typeof g !== "string" || typeof v !== "string") return null;
+  return { guildId: g, viewerId: v, guildName: typeof n === "string" ? n : null };
 }
