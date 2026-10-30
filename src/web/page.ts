@@ -92,7 +92,7 @@ const STYLES = `${FONT_FACES}
   --cjk-serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "Noto Serif SC";
   --serif: "Iowan Old Style", "New York", ui-serif, "Noto Serif", "Source Serif Pro", Georgia, var(--cjk-serif), serif;
   --display: "Noto Serif Display", "Iowan Old Style", "New York", ui-serif, Georgia, serif;
-  --brush: "Ma Shan Zheng", "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", var(--cjk-serif), serif;
+  --brush: "Ma Shan Zheng", "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", serif;
   --radius: 4px;
 }
 .hue-0 { --av-bg: #dce3ea; --av-ink: #2d4b66; }
@@ -146,15 +146,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3, p { margin: 0; }
-/* Names and headings are written with the brush; amounts and dishes stay in
-   the book face, so a figure never has to be deciphered. The brush comes in
-   one weight, so any bold here would be smeared on by the browser. Avatar
-   initials stay in the book face: a lone brush capital reads as a scribble. */
-h1, h2, h3, .tile-name, .owe-label, .mine-guest, .whose .name, .payments .name {
-  font-family: var(--brush);
-  font-weight: 400;
-  font-synthesis: none;
-}
 button, input, select { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; }
@@ -163,9 +154,8 @@ a { color: inherit; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 /* One look for "tap to change": the value sits in a tinted pill with a small
-   brush inside, so the pill's edge, not a brush hanging past it, lines up
-   with the plain values. Read-only values stay plain. The negative margin
-   keeps a pill from making its line taller. */
+   brush inside. Read-only values stay plain. The negative margin keeps a pill
+   from making its line taller. */
 .ic.brush { width: 16px; height: 16px; color: var(--muted); stroke-width: 1.6; }
 .amt, .is-editable .item-price, button.payer-chip, .name-btn {
   display: inline-flex;
@@ -179,6 +169,13 @@ a { color: inherit; }
   background: var(--fill);
   color: var(--ink);
 }
+/* On a figure the brush leads, so the digits end the pill. Plain figures
+   beside pills step in by the pill's end padding and the hanging pill steps
+   back out by it, so every figure on the receipt ends on one edge. */
+.amt, .is-editable .item-price { padding: 0 12px 0 9px; }
+.is-editable { --pill-end: 12px; }
+.is-editable .addon-price, .is-editable .piece, .is-editable .trow dd { padding-right: var(--pill-end); }
+.is-editable .trow dd > .amt { margin-right: calc(-1 * var(--pill-end)); }
 .amt:active, .is-editable button.row:active .item-price, button.payer-chip:active, .name-btn:active { background: var(--line); }
 @media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
 /* A 30px pill is easier to see than to hit, so the buttons reach 44px. */
@@ -205,7 +202,7 @@ html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bott
 }
 
 .head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: start; padding: 0 2px 14px; }
-.head h1 { font-size: 30px; line-height: 1.15; overflow-wrap: anywhere; }
+.head h1 { font-size: 25px; line-height: 1.2; font-weight: 600; overflow-wrap: anywhere; }
 .status { display: inline-flex; align-items: center; gap: 7px; height: 30px; font-size: 15px; color: var(--muted); white-space: nowrap; }
 .seal-slot { width: 20px; height: 20px; border: 1.5px dashed var(--ring); border-radius: 3px; }
 .seal {
@@ -430,6 +427,7 @@ button.row:active { background: var(--fill); }
 .money-input:focus-within { border-color: var(--focus); }
 .money-input span { color: var(--muted); }
 .money-input.is-percent span { order: 2; }
+.money-input input { text-align: right; }
 .money-input input, .text-input {
   flex: 1;
   min-width: 0;
@@ -473,16 +471,20 @@ button.row:active { background: var(--fill); }
 .line-form .actions .chip-btn { min-width: 0; }
 .line-form .field-msg { grid-column: 1 / -1; }
 /* Editing a dish lays it out like the receipt: its own price, then one row
-   per add-on, every price in one column so the sum reads down. */
-.dish-form { grid-template-columns: minmax(0, 1fr) 112px 44px; }
+   per add-on, every price in one column flush with the name field's edge so
+   the sum reads down to the total. An add-on's remove sits inside its name
+   field, so it never pushes the prices off that edge. */
 .dish-form > [name="label"] { grid-column: 1 / -1; }
 .dish-form .money-input { grid-column: 2; }
 .dish-form .field-label { grid-column: 1; align-self: center; color: var(--muted); }
 .dish-form .addons-head { grid-column: 1 / -1; margin-top: 6px; color: var(--muted); font-size: 15px; }
 .addon { display: contents; }
-.addon .text-input { grid-column: 1; }
-.addon .icon-btn { border-color: transparent; background: none; color: var(--muted); }
-.dish-form .add-row { grid-column: 1 / 3; gap: 6px; font-size: 16px; }
+.addon-field { grid-column: 1; position: relative; display: flex; min-width: 0; }
+.addon-field .text-input { padding-right: 44px; }
+.addon-field .icon-btn { position: absolute; top: 0; right: 0; border-color: transparent; background: none; color: var(--muted); }
+.dish-form .add-row { grid-column: 1 / -1; gap: 6px; font-size: 16px; }
+/* The money's right edge is the price boxes' text edge: their border and padding. */
+.dish-sum { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; margin-top: 2px; padding: 8px 11.5px 2px 0; border-top: 1px solid var(--rule-strong); font-weight: 600; }
 .dish-form [hidden] { display: none; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
@@ -501,9 +503,11 @@ button.row:active { background: var(--fill); }
 }
 button.tile { cursor: pointer; }
 button.tile:active { background: var(--fill); }
-.avw { position: relative; display: inline-block; margin-bottom: 3px; }
+/* Room under the face for the badges that hang off its foot, clear of the name. */
+.avw { position: relative; display: inline-block; margin-bottom: 8px; }
 .tile .av { --s: 46px; }
-.tile-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; line-height: 1.15; }
+.tile-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.tile.is-viewer .tile-name { font-weight: 700; }
 .tile-amt { font-size: 15px; color: var(--muted); }
 .tile-amt.is-forgiven, .was { text-decoration: line-through; }
 .badge {
@@ -652,9 +656,11 @@ button.tile:active { background: var(--fill); }
 button.owe { border-color: var(--line); cursor: pointer; }
 button.owe[aria-pressed="true"] { border-color: var(--ink); background: var(--fill); }
 .owe .av { --s: 36px; }
-.owe-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.owe-label { font-size: 17px; line-height: 1.1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.owe .amount { font: 500 26px/1 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
+/* The amount ends on the card's right edge like every other figure: beside
+   the label when the card is wide enough, under it when not. */
+.owe-text { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; min-width: 0; }
+.owe-label { font-size: 15px; line-height: 1.2; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owe .amount { margin-left: auto; font: 500 26px/1 var(--display); letter-spacing: -0.01em; white-space: nowrap; }
 
 .view + .view { margin-top: 18px; }
 .is-live[data-layout="share"] .view:not(.is-active) { display: none; }
@@ -859,20 +865,16 @@ dialog.sheet {
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.2);
 }
 dialog.sheet::backdrop { background: var(--scrim); }
-.sheet-in { padding: 6px 18px 20px; }
-.sheet-head { display: flex; align-items: center; gap: 12px; min-height: 60px; }
+/* Close sits in the sheet's corner, above the head, so a head's amount can
+   end on the right edge like every other figure in the sheet. */
+.sheet-in { padding: 40px 18px 20px; }
+.sheet .close { position: absolute; top: 4px; right: 6px; border: 0; background: none; }
+.sheet-head { display: flex; align-items: center; gap: 12px; min-height: 52px; }
 .sheet-head .av { --s: 44px; }
-.sheet-head h2 { flex: 1; min-width: 0; font-size: 24px; line-height: 1.15; overflow-wrap: anywhere; }
+.sheet-head h2 { flex: 1; min-width: 0; font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
 /* A dish is item text, not a name, so its title stays in the book face. */
-.sheet-head h2.dish-title { font: 600 20px/1.25 var(--serif); font-synthesis: weight; word-break: keep-all; }
-/* A dish's name is the longest heading a sheet gets, so its price drops under
-   it rather than squeezing it into three lines beside the close button. */
-.sheet-head.dish-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title close" "total close"; align-items: start; gap: 2px 12px; padding-block: 8px; }
-.dish-head h2 { grid-area: title; }
-.sheet-head.dish-head .money { grid-area: total; font-size: 20px; }
-.dish-head .close { grid-area: close; }
+.sheet-head h2.dish-title { line-height: 1.25; word-break: keep-all; }
 .sheet-head .money { font: 500 24px/1 var(--display); }
-.sheet .close { border: 0; background: none; margin-right: -4px; }
 .sheet .legend { margin: 0 0 6px; }
 /* No bar in the sheet for a key to point at. */
 .sheet .legend .key { display: none; }
@@ -883,7 +885,7 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .sheet-lines .empty { color: var(--muted); }
 .sheet-guest { margin-top: 14px; padding-top: 10px; border-top: 3px double var(--rule); }
 .sheet-guest .sheet-head .av { --s: 34px; }
-.sheet-guest h3 { flex: 1; min-width: 0; font-size: 21px; line-height: 1.15; overflow-wrap: anywhere; }
+.sheet-guest h3 { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 /* A long name wraps inside its pill instead of overflowing the sheet. */
 .name-btn { height: auto; min-height: 30px; max-width: 100%; padding-block: 4px; font: inherit; text-align: left; }
 .name-btn > span { overflow-wrap: anywhere; }
@@ -925,7 +927,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; margin: 4px 0 8px; }
 /* No amount under a name here, so no room kept for one. */
 .pick { position: relative; min-height: 0; }
-.pick .tick { position: absolute; right: -6px; bottom: -4px; width: 22px; height: 22px; background: var(--card); }
+/* Up by the shoulder, clear of the name under the face. */
+.pick .tick { position: absolute; right: -6px; top: -4px; width: 22px; height: 22px; background: var(--card); }
 .pick .tick .ic { width: 14px; height: 14px; }
 .pick[aria-pressed="true"] .tick { background: var(--ink); border-color: var(--ink); }
 .pick[aria-pressed="true"] .tick .ic { opacity: 1; }
@@ -1203,7 +1206,7 @@ function itemRow(v: View, item: LineItem): string {
   const others = item.claimedBy.filter((id) => id !== v.s.viewer);
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
-    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
+    `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${brush}${formatCents(item.cents)}</span>` +
     (item.addons ? `<span class="item-addons">${addonLines(item.addons)}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
@@ -1236,7 +1239,7 @@ function withPercent(label: string, part: Cents, subtotal: Cents): string {
 function amount(v: View, field: string, key: string, cents: Cents | null, label: string): string {
   const shown = `<span data-total="${key}">${cents === null ? "—" : formatCents(cents)}</span>`;
   if (v.s.editable !== "all") return shown;
-  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${shown}${BRUSH}</button>`;
+  return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${BRUSH}${shown}</button>`;
 }
 
 function totals(v: View): string {

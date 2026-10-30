@@ -472,6 +472,9 @@ describe("renderPage", () => {
     // Read-only figures on the payer's own receipt stay plain.
     expect(await select(payer, '[data-total="subtotal"] .brush, [data-total="total"] .brush, .piece .brush')).toEqual([]);
     expect(payer).toContain('<symbol id="i-brush"');
+    // The brush leads the figure, so a pill's digits end on the receipt's edge with the plain ones.
+    expect(payer.match(/class="item-price"><svg class="ic brush"/g)).toHaveLength(SAIGON.items.length);
+    expect(payer.match(/class="amt" data-edit-field="[a-zA-Z]+" aria-label="[^"]*"><svg class="ic brush"/g)).toHaveLength(3);
 
     for (const html of [page("marcus"), page("gavin", confirmedBill, SAIGON)]) {
       expect(await select(html, ".brush")).toEqual([]);
@@ -872,15 +875,15 @@ describe("renderPage", () => {
     expect(CLIENT_SCRIPT).not.toMatch(/<\/script/i);
   });
 
-  it("spends its font budget on the numerals and the brush, for Latin names and the three seal characters only", () => {
+  it("spends its font budget on the numerals and the three seal characters only", () => {
     const html = page("marcus");
     const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? [];
     expect(faces).toHaveLength(2);
     expect(faces.join("")).toContain("unicode-range: U+2C-2E, U+30-39");
-    expect(faces.join("")).toContain("unicode-range: U+20-7E, U+4ED8, U+5B9A, U+8BAB");
+    expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+8BAB");
     // Inline on every page load, so a subset that grows past this is a regression.
     const bytes = faces.join("").length;
-    expect(bytes).toBeLessThan(24_000);
+    expect(bytes).toBeLessThan(8_000);
   });
 });
 

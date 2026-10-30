@@ -403,7 +403,7 @@ export const CLIENT_SCRIPT = String.raw`
     const others = item.claimedBy.filter((id) => id !== actor);
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
-      el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
+      el("span", { class: "item-price" }, [mode === "all" ? icon("brush", "brush") : null, money(item.cents)]),
       item.addons ? el("span", { class: "item-addons" }, addonLines(item.addons)) : null,
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
@@ -470,7 +470,7 @@ export const CLIENT_SCRIPT = String.raw`
   function amount(mode, field, key, cents, label) {
     const shown = el("span", { "data-total": key }, cents === null ? "—" : money(cents));
     if (mode !== "all") return shown;
-    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [shown, icon("brush", "brush")]);
+    return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [icon("brush", "brush"), shown]);
   }
 
   const FIELD_LABEL = { discount: "Discount", tax: "Tax", tip: "Tip", printedTotal: "Receipt total" };
@@ -1184,6 +1184,7 @@ export const CLIENT_SCRIPT = String.raw`
       item ? el("p", { class: "addons-head", "data-addons-head": true }, "Add-ons") : null,
       ...addons.map((a) => addonRow(a)),
       item ? el("button", { type: "button", class: "add-row", "data-add-addon": true }, [icon("plus"), "Add-on"]) : null,
+      item ? el("p", { class: "dish-sum", "data-dish-sum": true }, [el("span", null, "Total"), el("span", { class: "money", "data-dish-total": true })]) : null,
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
         item ? deleteLineButton(item, false) : null,
@@ -1212,9 +1213,11 @@ export const CLIENT_SCRIPT = String.raw`
     name.value = addon.label;
     price.value = addon.cents === 0 ? "" : plain(Math.abs(addon.cents));
     return el("div", { class: "addon", "data-addon": true }, [
-      name,
+      el("span", { class: "addon-field" }, [
+        name,
+        el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
+      ]),
       moneyInput(price, addon.cents),
-      el("button", { type: "button", class: "icon-btn", "data-remove-addon": true, "aria-label": "Remove add-on" }, icon("close")),
     ]);
   }
 
@@ -1240,9 +1243,8 @@ export const CLIENT_SCRIPT = String.raw`
     form.querySelector("[data-base-label]").textContent = form.elements.price.dataset.off !== undefined ? "Money off" : rows > 0 ? "Base price" : "Price";
     form.querySelector("[data-addons-head]").hidden = rows === 0;
     form.querySelector("[data-add-addon]").hidden = rows >= MAX_ADDONS;
-    const dialog = form.closest("dialog");
-    const total = dialog ? dialog.querySelector("[data-dish-total]") : null;
-    if (total) total.textContent = money(dishCents(form));
+    form.querySelector("[data-dish-sum]").hidden = rows === 0;
+    form.querySelector("[data-dish-total]").textContent = money(dishCents(form));
   }
 
   function lineSheet(v, itemId) {
@@ -1250,9 +1252,8 @@ export const CLIENT_SCRIPT = String.raw`
     if (!item) return null;
     const people = membersFirst(v).reduce((all, p) => all.concat([p], guestsOf(v, p.id)), []);
     return [
-      el("div", { class: "sheet-head dish-head" + (armed.has("line:" + item.id) ? " is-doomed" : "") }, [
+      el("div", { class: "sheet-head" + (armed.has("line:" + item.id) ? " is-doomed" : "") }, [
         el("h2", { id: "sheet-title", class: "dish-title" }, item.label),
-        el("span", { class: "money", "data-dish-total": true }, money(sheet.form ? dishCents(sheet.form) : item.cents)),
         el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
       ]),
       el("div", { class: "picker", role: "group", "aria-label": "Who had " + item.label }, people.map((p) => pickNode(v, item, p))),
