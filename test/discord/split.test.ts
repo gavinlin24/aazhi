@@ -662,7 +662,7 @@ describe("editOriginal and ephemeral", () => {
 
 describe("a receipt already on a confirmed bill", () => {
   const REFUSED = "This receipt was already split.";
-  const timed = (overrides: Record<string, unknown> = {}) => () => toolUse(saigonToolInput({ bill_time: "19:42", ...overrides }));
+  const timed = (overrides: Record<string, unknown> = {}) => () => toolUse(saigonToolInput({ printed_time: "7:42 PM", ...overrides }));
   const inOtherServer = (member: unknown = MEMBER) => ({ ...slashSplit(undefined, member), guild_id: "guild-2", channel_id: "chan-2" });
   const lastReply = () => originalEdits().at(-1)!.body;
   const billsNow = async () => (await db.prepare("SELECT id, guild_id, status FROM bills ORDER BY rowid").all<{ id: string; guild_id: string; status: string }>()).results;
@@ -743,7 +743,7 @@ describe("a receipt already on a confirmed bill", () => {
   });
 
   it.each([
-    ["time", { bill_time: null }],
+    ["time", { printed_time: null }],
     ["date", { bill_date: null }],
     ["total", { printed_total: null }],
   ])("lets a receipt with no printed %s through, rather than refuse a real one", async (_, missing) => {
@@ -757,7 +757,7 @@ describe("a receipt already on a confirmed bill", () => {
 
   it("lets a receipt printed a minute later through", async () => {
     await confirmedHere();
-    anthropic = timed({ bill_time: "19:43" });
+    anthropic = timed({ printed_time: "7:43 PM" });
     await run(inOtherServer());
 
     expect(await billsNow()).toHaveLength(2);
@@ -859,7 +859,7 @@ describe("the receipt read limit", () => {
   });
 
   it("still counts a read refused as an already split receipt", async () => {
-    anthropic = () => toolUse(saigonToolInput({ bill_time: "19:42" }));
+    anthropic = () => toolUse(saigonToolInput({ printed_time: "7:42 PM" }));
     await run(slashSplit());
     await db.prepare("UPDATE bills SET status = 'confirmed'").run();
 
@@ -969,7 +969,7 @@ describe("a bill with one person", () => {
     const { revision } = (await getBill(db, id))!;
     const confirmed = await page(`/b/${id}/confirm`, token, { method: "POST", body: JSON.stringify({ revision }) });
     expect(confirmed.status).toBe(409);
-    expect(await confirmed.json()).toMatchObject({ error: "Add someone to split with." });
+    expect(await confirmed.json()).toMatchObject({ error: "Add someone, or use /log." });
 
     expect((await getBill(db, id))!.status).toBe("draft");
     expect(await personSummary(db, "guild-1", "gavin")).toBeNull();

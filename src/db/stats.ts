@@ -11,7 +11,10 @@ const MAX_MONTHS = 12;
 // added a guest. The monthly recap is the per-server view, and it isn't here.
 
 // One person on one confirmed bill: the row every number here is counted from.
-const OUTING_COLUMNS = `b.id AS bill_id, b.guild_id, b.place, b.bill_date, b.created_at, b.payer_id,
+// A log has a payer only because every bill does. Logging your own meal isn't
+// hosting anyone, so it has none here and Hosted and Fronted leave it out.
+const OUTING_COLUMNS = `b.id AS bill_id, b.guild_id, b.place, b.bill_date, b.created_at,
+  CASE WHEN b.kind = 'log' THEN NULL ELSE b.payer_id END AS payer_id,
   p.id AS person, p.display_name, s.owed_cents, s.pardoned`;
 const OUTINGS_FROM = `participants p JOIN bills b ON b.id = p.bill_id
   JOIN shares s ON s.bill_id = b.id AND s.participant_id = p.id`;
@@ -31,7 +34,7 @@ function sharedWithSomeone(person: string, bill: string): string {
 }
 
 function confirmedMember(person: string, bill: string): string {
-  return `${person}.kind = 'member' AND ${bill}.status = 'confirmed' AND ${hasShare(person, bill)} AND (${sharedWithSomeone(person, bill)})`;
+  return `${person}.kind = 'member' AND ${bill}.status = 'confirmed' AND ${hasShare(person, bill)} AND (${sharedWithSomeone(person, bill)} OR ${bill}.kind = 'log')`;
 }
 
 const CONFIRMED_MEMBER = confirmedMember("p", "b");
@@ -44,7 +47,7 @@ interface OutingDbRow {
   place: string | null;
   bill_date: string | null;
   created_at: string;
-  payer_id: string;
+  payer_id: string | null;
   person: string;
   display_name: string;
   owed_cents: number;

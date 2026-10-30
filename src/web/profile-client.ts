@@ -1,6 +1,7 @@
 // Plain browser JavaScript shipped inline, like the bill page's script, so the
 // same rules apply: no template literals, and never a closing script tag.
-// Everything here is already in the page, so it only chooses what shows.
+// The stats are already in the page, so for those it only chooses what shows.
+// Your logs are the one thing here that writes.
 export const PROFILE_SCRIPT = String.raw`
 (() => {
   "use strict";
@@ -16,10 +17,85 @@ export const PROFILE_SCRIPT = String.raw`
     card.querySelector(".hero-sub").textContent = peak.dataset.line;
   }
 
+  const token = new URLSearchParams(location.search).get("t") || "";
+
+  async function changeLog(row, method, body) {
+    const logs = row.closest("[data-logs]");
+    let response = null;
+    try {
+      response = await fetch("/g/" + encodeURIComponent(logs.dataset.logs) + "/logs/" + encodeURIComponent(row.dataset.log), {
+        method,
+        cache: "no-store",
+        headers: Object.assign({ authorization: "Bearer " + token }, body ? { "content-type": "application/json" } : {}),
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (error) {
+      response = null;
+    }
+    const data = response ? await response.json().catch(() => null) : null;
+    const failed = !response || !response.ok;
+    if (!failed) return data;
+    let msg = row.querySelector(".log-msg");
+    if (!msg) {
+      msg = document.createElement("p");
+      msg.className = "log-msg";
+      msg.setAttribute("role", "status");
+      row.append(msg);
+    }
+    msg.textContent = (data && data.error) || "That didn't go through. Try again in a minute.";
+    return null;
+  }
+
+  async function removeLog(button) {
+    if (!button.classList.contains("is-armed")) {
+      button.classList.add("is-armed");
+      button.textContent = "Tap again";
+      setTimeout(() => {
+        button.classList.remove("is-armed");
+        button.textContent = "Remove";
+      }, 4000);
+      return;
+    }
+    const row = button.closest("[data-log]");
+    const done = await changeLog(row, "DELETE");
+    if (!done) return;
+    const card = row.closest("[data-logs]");
+    if (done.postLeft) {
+      row.replaceChildren(Object.assign(document.createElement("p"), { className: "log-msg", textContent: "Removed, but I couldn't remove the post." }));
+      return;
+    }
+    row.remove();
+    if (!card.querySelector("[data-log]")) card.remove();
+  }
+
+  function renameLog(button) {
+    const row = button.closest("[data-log]");
+    if (row.querySelector("form")) return;
+    const name = row.querySelector(".log-place");
+    const input = Object.assign(document.createElement("input"), { name: "place", value: name.textContent, maxLength: 80, autocomplete: "off" });
+    input.setAttribute("aria-label", "New name");
+    const save = Object.assign(document.createElement("button"), { type: "submit", className: "log-btn", textContent: "Save" });
+    const form = Object.assign(document.createElement("form"), { className: "log-form" });
+    form.append(input, save);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const done = await changeLog(row, "PATCH", { place: input.value });
+      if (!done) return;
+      name.textContent = done.place;
+      form.remove();
+    });
+    row.append(form);
+    input.select();
+  }
+
   page.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
     const peak = event.target.closest("[data-peak]");
     if (peak) return pick(peak);
+    const remove = event.target.closest("[data-log-remove]");
+    if (remove) return removeLog(remove);
+    const rename = event.target.closest("[data-log-rename]");
+    if (rename) return renameLog(rename);
     const link = event.target.closest("[data-tab], [data-to]");
     if (!link) return;
     event.preventDefault();

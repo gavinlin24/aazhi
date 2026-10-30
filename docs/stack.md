@@ -131,6 +131,12 @@ high-resolution tier, so a phone photo is scaled to the 4,784-token cap:
 A tenth of a cent. A single dollar buys about 1,200 receipts. Ten bills
 a month costs under a cent a month, so about a dime a year.
 
+`/log` also asks Claude Sonnet 5.5 whether the photo was edited or generated,
+since a log has no second person to check it. That costs about $0.004 more per
+log, measured over 25 photos, and $0.007 at most. Haiku is the wrong model for
+this: on five fakes it caught one inside the read and two on its own, where
+Sonnet caught all five with no real receipt flagged in twenty.
+
 High resolution is worth keeping rather than downsampling to cut the image
 cost by two thirds: a crumpled thermal receipt is a dense document, which
 is precisely the case the extra fidelity exists for.

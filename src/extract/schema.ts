@@ -3,7 +3,7 @@ import type { Addon, Cents } from "../money/types";
 export interface Extraction {
   place: string | null;
   billDate: string | null;
-  // 24-hour HH:MM. Only ever used to tell one receipt from another.
+  // 24-hour HH:MM, worked out from what the model copied off the receipt.
   billTime: string | null;
   // `cents` is the dish with its add-ons, so whoever claims it pays for both.
   items: { label: string; cents: Cents; confidence: number; addons?: Addon[] }[];
@@ -35,9 +35,9 @@ export const EXTRACT_TOOL = {
       readable: { type: "boolean", description: "false if it is a receipt but too blurry, cropped, or dark to read the amounts." },
       place: { type: ["string", "null"], description: "Restaurant name, or null." },
       bill_date: { type: ["string", "null"], description: "Date on the receipt as YYYY-MM-DD, or null." },
-      bill_time: {
+      printed_time: {
         type: ["string", "null"],
-        description: "Time printed on the receipt as 24-hour HH:MM, or null. If several are printed, use the latest.",
+        description: 'The latest time printed on the receipt, copied exactly as printed, e.g. "7:42 PM" or "19:42". null if none is legible.',
       },
       items: {
         type: "array",
@@ -78,7 +78,7 @@ export const EXTRACT_TOOL = {
       tax: NULLABLE_PRICE,
       printed_total: { ...NULLABLE_PRICE, description: "The grand total printed on the receipt before any tip is added. " + NULLABLE_PRICE.description },
     },
-    required: ["is_receipt", "readable", "place", "bill_date", "bill_time", "items", "discount", "tax", "printed_total"],
+    required: ["is_receipt", "readable", "place", "bill_date", "printed_time", "items", "discount", "tax", "printed_total"],
   },
 } as const;
 
@@ -93,6 +93,9 @@ export const EXTRACT_PROMPT = [
   "Give a modifier a price only when it has its own charge in the price column. Use null when it has no price, or when its amount is printed beside its name (for example \"Soft egg ($2.00)\") rather than in the price column, because the item's price already includes it.",
   "Drop a leading + from a modifier, and write one marked only with - as No (\"- Rice\" becomes \"No rice\").",
   "Report the printed tax and the printed total before any tip, or null if absent or illegible.",
+  "Give the date as YYYY-MM-DD.",
+  "Take the date and the time from the same printed stamp. If several are printed, use the latest.",
+  "Copy the time exactly as printed. Never guess a time. Use null if you can't read one.",
   "Give each item a confidence from 0 to 1 for how sure you are of its label and price.",
   "If the image is not a receipt set is_receipt to false. If it is one but you cannot read the amounts set readable to false.",
 ].join("\n");
@@ -131,12 +134,22 @@ function parseNullableString(value: unknown): string | null | undefined {
   return undefined;
 }
 
-// Anything but a clean time is no time. A bill doesn't need one, so a bad read
-// here shouldn't fail the whole receipt.
-function parseTime(value: unknown): string | null {
-  const match = typeof value === "string" ? /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(value.trim()) : null;
-  if (!match || Number(match[1]) > 23) return null;
-  return `${match[1]!.padStart(2, "0")}:${match[2]}`;
+// The model copies and this reads, as with prices. Anything but a clean time is
+// no time: a bill doesn't need one, so a bad read here shouldn't fail the whole
+// receipt. A bare 7:42 is taken as evening, since a wrong guess only makes a
+// receipt look newer, while 07:42 has the leading zero of a 24-hour clock.
+export function parsePrintedTime(value: unknown): string | null {
+  const match = typeof value === "string" ? /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?\s*(?:([ap])\.?(?:m\.?)?)?$/i.exec(value.trim()) : null;
+  if (!match) return null;
+  const [, written, minutes, half] = match;
+  let hour = Number(written);
+  if (half) {
+    if (hour < 1 || hour > 12) return null;
+    hour = (hour % 12) + (half.toLowerCase() === "p" ? 12 : 0);
+  } else if (written!.length === 1 && hour >= 1) {
+    hour += 12;
+  }
+  return hour > 23 ? null : `${String(hour).padStart(2, "0")}:${minutes}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -193,7 +206,7 @@ export function parseToolInput(input: unknown): ParsedToolInput {
 
   const place = parseNullableString(input.place);
   const billDate = parseNullableString(input.bill_date);
-  const billTime = parseTime(input.bill_time);
+  const billTime = parsePrintedTime(input.printed_time);
   const discount = parseNullablePrice(input.discount ?? null);
   const taxCents = parseNullablePrice(input.tax);
   const printedTotalCents = parseNullablePrice(input.printed_total);

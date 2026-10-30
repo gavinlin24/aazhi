@@ -57,6 +57,9 @@ export const CLIENT_SCRIPT = String.raw`
   const busy = new Set();
   const armed = new Set();
   let noteTimer = null;
+  // A log: the name being typed over, and what happened if it was taken back.
+  let fixingName = false;
+  let logGone = null;
 
   // Same rules as formatCents on the server, in integers only.
   function money(cents) {
@@ -348,7 +351,29 @@ export const CLIENT_SCRIPT = String.raw`
 
   // ---- header -------------------------------------------------------------
 
+  function logWord(s) {
+    if (logGone) return logGone === "discarded" ? "Discarded" : "Undone";
+    if (s.status === "confirmed") return "Logged";
+    return s.vote === "open" ? "Up for a vote" : "Your items";
+  }
+
+  // Mirrors logHeader in page.ts.
+  function renderLogHeader(v) {
+    const s = v.s;
+    const word = logWord(s);
+    keyedInto(root.querySelector("[data-status-label]"), word, () => [
+      el("span", { class: "seal" + (word === "Logged" ? "" : " is-draft"), "aria-hidden": "true" }, "记"),
+      el("span", { class: "word" }, word),
+    ]);
+    const name = (s.place || "").trim();
+    const canFix = editable(s) === "self" && name !== "";
+    keyedInto(root.querySelector("[data-log-name]"), JSON.stringify([name, canFix]), () => canFix
+      ? el("button", { type: "button", class: "l-name", "data-fix-name": true }, [name, icon("brush", "brush")])
+      : name || "Receipt");
+  }
+
   function renderHeader(v) {
+    if (v.s.kind === "log") return renderLogHeader(v);
     const label = root.querySelector("[data-status-label]");
     if (label) {
       keyedInto(label, v.s.status, () => [
@@ -412,7 +437,7 @@ export const CLIENT_SCRIPT = String.raw`
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
-    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : "", target ? "is-target" : ""];
+    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 && v.s.kind !== "log" ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : "", target ? "is-target" : ""];
     const claim = { "data-claim": true, "data-item": item.id, "data-participant": actor, "aria-pressed": String(mine) };
     if (mode === "all") {
       classes.push("has-picker");
@@ -515,6 +540,8 @@ export const CLIENT_SCRIPT = String.raw`
   function renderTotals(v, dl, mode) {
     if (!dl) return;
     const s = v.s;
+    // A log's totals are the receipt as printed, and page.ts has them right.
+    if (s.kind === "log") return;
     const r = s.result;
     const entries = [];
     const row = (id, key, cls, build) => entries.push({ id, key: JSON.stringify(key), build: () => el("div", { class: "trow" + (cls ? " " + cls : "") }, build()) });
@@ -879,9 +906,31 @@ export const CLIENT_SCRIPT = String.raw`
     if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
     if (!s.hasSplitPartner) {
       const joined = s.participants.some((p) => p.kind === "member" && p.id !== s.payerId);
-      return joined ? "Someone else needs to claim an item." : "Add someone to split with.";
+      return joined ? "Someone else needs to claim an item." : "Add someone, or use /log.";
     }
     return null;
+  }
+
+  function logSpent(s) {
+    const mine = s.result.shares.find((x) => x.participant === s.viewer);
+    return mine ? mine.owedCents : 0;
+  }
+
+  // Mirrors logBlock on the server.
+  function logBlock(s) {
+    if (s.receiptSplit) return "This receipt was already split.";
+    if (s.receiptTaken) return "This receipt was already logged.";
+    if (!(s.place || "").trim()) return "Add the name of this place.";
+    const spent = logSpent(s);
+    if (spent <= 0) return "Pick what you had.";
+    return s.printedTotalCents !== null && spent > s.printedTotalCents ? "Your items add up to more than the receipt's total." : null;
+  }
+
+  // Mirrors logGap on the server.
+  function logGap(s) {
+    const r = s.reconciles;
+    if (r.ok || r.discrepancyCents === null || s.printedTotalCents === null) return null;
+    return "These lines add up to " + money(s.printedTotalCents + r.discrepancyCents) + ". The receipt says " + money(s.printedTotalCents) + ".";
   }
 
   function openLines(s) {
@@ -947,8 +996,54 @@ export const CLIENT_SCRIPT = String.raw`
       saved ? "@" + saved : "Add it so friends can pay you back.", "", true);
   }
 
+  function logRemoveNode(label) {
+    const doomed = armed.has("remove-log");
+    const draft = state.status === "draft";
+    return el("button", {
+      type: "button",
+      class: "l-act dan" + (draft ? " l-discard" : "") + (doomed ? " is-armed" : ""),
+      "data-remove-log": true,
+      "aria-busy": busy.has("remove-log") ? "true" : null,
+    }, draft ? (doomed ? "Tap again to discard" : label) : [doomed ? "Tap again to undo" : label, icon("chev")]);
+  }
+
+  // Mirrors logConfirm and logBody in page.ts.
+  function logNodes(v) {
+    const s = v.s;
+    if (logGone) {
+      return el("p", { class: "l-done-line" }, logGone === "discarded"
+        ? [el("b", null, "Discarded."), " ", el("span", null, "Nothing was saved. Run /log to log this receipt again inside the 8 hours.")]
+        : [el("b", null, "Undone."), " ", el("span", null, "It no longer counts, and the post is gone. Run /log to log this receipt again inside the 8 hours.")]);
+    }
+    if (s.status === "confirmed") {
+      return [
+        el("button", { type: "button", class: "l-act", "data-fix-name": true }, ["Fix name", icon("chev")]),
+        logRemoveNode("Undo"),
+      ];
+    }
+    const blocked = logBlock(s);
+    const gap = logGap(s);
+    return [
+      gap ? el("p", { class: "l-why warn" }, gap) : null,
+      el("button", {
+        type: "button",
+        class: "confirm-btn l-confirm",
+        "data-confirm": true,
+        disabled: Boolean(blocked) || stopped,
+        "aria-busy": busy.has("confirm") ? "true" : null,
+        "aria-describedby": blocked ? "confirm-why" : null,
+      }, [
+        el("span", { class: "seal", "aria-hidden": "true" }, "记"),
+        el("span", { class: "confirm-word" }, "Log it"),
+        blocked ? el("span", { class: "l-why", id: "confirm-why", "aria-hidden": "true" }, blocked) : null,
+      ]),
+      logRemoveNode("Discard"),
+    ];
+  }
+
   function actionNodes(v) {
     const s = v.s;
+    if (s.kind === "log") return logNodes(v);
     if (s.viewerIsPayer) {
       return [
         venmoAct(v),
@@ -972,7 +1067,7 @@ export const CLIENT_SCRIPT = String.raw`
     const card = root.querySelector("[data-actions]");
     if (!card) return;
     const s = v.s;
-    keyedInto(card, JSON.stringify([s.status, confirmBlock(s), s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, s.viewerVenmo, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
+    keyedInto(card, JSON.stringify([s.status, logGone, s.place, s.receiptSplit, confirmBlock(s), s.kind === "log" ? logBlock(s) : null, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, s.viewerVenmo, Array.from(busy), Array.from(armed), editingPrinted(), stopped]), () => actionNodes(v));
   }
 
   // Mirrors paidBy on the server.
@@ -1490,6 +1585,52 @@ export const CLIENT_SCRIPT = String.raw`
 
   // ---- drawing ------------------------------------------------------------
 
+  function placeForm(s) {
+    const name = (s.place || "").trim();
+    const input = el("input", { id: "log-place", name: "place", maxlength: "80", autocomplete: "off", enterkeyhint: "done", placeholder: "Type the name" });
+    input.value = name;
+    return el("form", { class: "card l-ask", "data-place-form": true, novalidate: true }, [
+      el("label", { for: "log-place" }, name ? "What's this place called?" : "I couldn't read the name of this place."),
+      el("div", { class: "l-entry" }, [
+        input,
+        name ? el("button", { type: "button", class: "icon-btn", "data-cancel": true, "aria-label": "Cancel" }, icon("close")) : null,
+        el("button", { type: "submit", class: "icon-btn go", "aria-label": "Save" }, icon("check")),
+      ]),
+      el("p", { class: "field-msg", role: "status" }),
+    ]);
+  }
+
+  // What a log's page needs beyond the rows. The form is kept across redraws so
+  // a poll never wipes what is being typed.
+  function renderLog(v) {
+    const s = v.s;
+    if (s.kind !== "log") return;
+    root.classList.toggle("is-log-gone", Boolean(logGone));
+    if (logGone) {
+      root.classList.remove("has-bar");
+      root.querySelector("[data-actions]").classList.add("card");
+    }
+    const ask = root.querySelector("[data-log-ask]");
+    if (ask) {
+      const showing = !stopped && (fixingName || (s.status === "draft" && !(s.place || "").trim()));
+      keyedInto(ask, JSON.stringify([showing, fixingName]), () => (showing ? placeForm(s) : []));
+    }
+    const chip = root.querySelector("[data-everything]");
+    if (chip) {
+      const everything = s.items.every((i) => i.claimedBy.includes(s.viewer));
+      chip.classList.toggle("is-on", everything);
+      chip.setAttribute("aria-pressed", String(everything));
+    }
+    const bar = root.querySelector("[data-log-bar]");
+    if (bar) {
+      const spent = logSpent(s);
+      keyedInto(bar, String(spent), () => [
+        el("span", null, "Your total"),
+        spent > 0 ? el("span", { class: "money" }, money(spent)) : el("span", { class: "l-none" }, "Nothing picked"),
+      ]);
+    }
+  }
+
   function render() {
     const s = view();
     const v = model(s);
@@ -1508,6 +1649,7 @@ export const CLIENT_SCRIPT = String.raw`
     renderDrill(v);
     renderPayments(v);
     renderActions(v);
+    renderLog(v);
     renderSheet(v);
   }
 
@@ -1543,10 +1685,11 @@ export const CLIENT_SCRIPT = String.raw`
     if (state.status === "confirmed") {
       // The big 定 comes down on the page first, then the small one is left
       // in the header where it landed.
-      slam(el("span", { class: "seal" }, "定"));
+      const log = state.kind === "log";
+      slam(el("span", { class: "seal" }, log ? "记" : "定"));
       const seal = root.querySelector("[data-status-label] .seal");
       if (seal) seal.classList.add("is-pressed", "is-after-slam");
-      showNote("定 Confirmed", false);
+      showNote(log ? "记 Logged" : "定 Confirmed", false);
     } else if (state.status === "draft") {
       showNote("Reopened", false);
     }
@@ -1556,6 +1699,12 @@ export const CLIENT_SCRIPT = String.raw`
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
+    // Nothing is left to read on a log that's gone, and the server's page says
+    // why, where a note here would sit on top of a vote that's over.
+    if (state.kind === "log") {
+      location.reload();
+      return;
+    }
     claimFor = null;
     editing = null;
     addingGuest = false;
@@ -1918,6 +2067,48 @@ export const CLIENT_SCRIPT = String.raw`
     return !failure;
   }
 
+  // Waits for any claim still on its way, so the page's next answer can't
+  // arrive after this one and bring the log back.
+  async function removeLog() {
+    if (!secondTap("remove-log")) return;
+    busy.add("remove-log");
+    render();
+    await queue;
+    const was = state.status;
+    const response = await send("DELETE", "", { paid: "0.00" });
+    busy.delete("remove-log");
+    if (!response.ok) {
+      showNote(messageOf(response), true);
+      if (response.status === 403 || response.status === 410) stop(messageOf(response));
+      return render();
+    }
+    logGone = was === "draft" ? "discarded" : "undone";
+    fixingName = false;
+    stopped = true;
+    clearInterval(timer);
+    render();
+    if (response.data && response.data.postLeft) showNote("Undone, but I couldn't remove the post.", true);
+  }
+
+  async function savePlace(form) {
+    const input = form.querySelector("input");
+    const place = input.value.replace(/\s+/g, " ").trim();
+    const msg = form.querySelector(".field-msg");
+    if (!place) {
+      msg.textContent = "Type the name of this place.";
+      return input.focus();
+    }
+    form._busy = true;
+    const failure = await write("PATCH", "", { place });
+    form._busy = false;
+    if (failure) {
+      msg.textContent = failure.message;
+      return;
+    }
+    fixingName = false;
+    render();
+  }
+
   async function deleteBill() {
     if (!armed.has("delete-bill")) {
       armed.add("delete-bill");
@@ -2008,6 +2199,8 @@ export const CLIENT_SCRIPT = String.raw`
   // Each sheet hands to the next in place. Closing first would land its close
   // event on the sheet that follows.
   function confirmBill(skipVenmo) {
+    // After the queue, so a tick still on its way is in the revision this names.
+    if (state.kind === "log") return queue.then(() => toggle("confirm", "POST", "/confirm", { revision: state.revision }));
     const from = root.querySelector("[data-confirm]");
     if (!skipVenmo && !state.viewerVenmo) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
     if (openLines(state).length > 0) return openSheet({ kind: "split" }, from);
@@ -2086,6 +2279,22 @@ export const CLIENT_SCRIPT = String.raw`
     }
     if (target.closest("[data-do]")) return runAsk();
     if (target.closest("[data-delete-bill]")) return deleteBill();
+    if (target.closest("[data-remove-log]")) return removeLog();
+    if (target.closest("[data-fix-name]")) {
+      fixingName = true;
+      render();
+      const input = root.querySelector("form[data-place-form] input");
+      if (input) input.select();
+      return;
+    }
+    if (target.closest("[data-place-form] [data-cancel]")) {
+      fixingName = false;
+      return render();
+    }
+    if (target.closest("[data-everything]")) {
+      const all = state.items.every((i) => i.claimedBy.includes(state.viewer));
+      return toggle("everything", "POST", "/everything", { claimed: !all });
+    }
     if (target.closest("[data-pay-all]")) return payAll();
     const undo = target.closest("[data-undo-paid]");
     if (undo) return undoPaid(undo);
@@ -2193,6 +2402,7 @@ export const CLIENT_SCRIPT = String.raw`
     else if (form.dataset.guestForm !== undefined) addGuest(form);
     else if (form.dataset.rename) renameGuest(form);
     else if (form.dataset.venmoForm !== undefined) saveVenmo(form);
+    else if (form.dataset.placeForm !== undefined) savePlace(form);
   });
 
   root.addEventListener("input", (event) => {

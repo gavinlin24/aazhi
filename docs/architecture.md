@@ -12,6 +12,8 @@ credentials are in [setup.md](setup.md). Technology choices are in [stack.md](st
 - **Discord**: forwards every command and button tap to the Worker's
   *interaction endpoint* (`POST /interactions`) and needs a reply within 3 s.
 - **Claude Haiku** (Anthropic API): reads the receipt into structured data.
+- **Claude Sonnet** (Anthropic API): for `/log` only, judges whether the
+  receipt photo is real (`src/extract/fake-check.ts`).
 - **Split page**: HTML and a JSON API served by the same Worker at `/b/<bill id>`.
 - **Profile pages**: read-only HTML from the same Worker at `/g/<server id>`.
 
@@ -70,8 +72,10 @@ read that fails or gets refused stays counted, because it was still billed.
 The count happens before the reply, so a refusal can stay private, and one insert
 decides it, so simultaneous commands can't slip past. If the counter can't answer
 in two seconds, nothing is read and the person is told to try again.
-`extractReceipt` takes only the permit `grantRead` hands out, so a new command
-can't reach Claude around the limit. `receipt_reads` keeps two days of rows and
+`extractReceipt` and `looksFake` take only the permit `grantRead` hands out, so a
+new command can't reach Claude around the limit. A `/log` makes two Claude calls
+on one read, the Haiku read and the Sonnet check, so it costs more than the count
+shows. `receipt_reads` keeps two days of rows and
 clears older ones on each new read.
 
 **2. Reading the receipt.** `src/extract/claude.ts` sends the photo's Discord
@@ -187,6 +191,55 @@ sequenceDiagram
   W->>DB: insert settlement
   W->>D: payment announced
 ```
+
+## One log
+
+A log is a bill with one person on it, so it runs the same draft, claim and
+confirm code as `/split`. `kind` on `bills` tells them apart. It records what
+you spent on a meal nobody else in the server was at, with nothing owed.
+
+**1. `/log`.** `src/discord/handlers/log.ts` answers privately. It refuses at
+once in a channel where the bot can't post, because the post is the point.
+Haiku reads the receipt while Sonnet judges the photo, side by side. Nothing
+is saved if the receipt is more than 8 hours past its printed time, has no
+time and isn't from today, or has no date or total. Dates are compared in
+Pacific time (`src/extract/receipt-time.ts`), and the clock is the server's.
+
+**2. One receipt, one credit.** A log has its own key from
+`logReceiptKey` (`src/extract/receipt-key.ts`). It is the split key when the
+receipt prints a time. Without one, the key also holds the person, so two
+people's lunches with the same total can't collide. A unique index holds one
+counted log per key, so two people racing still get one. The refusals are
+"This receipt was already logged." and, for a receipt on a confirmed split,
+"This receipt was already split."
+
+**3. Picking items.** The private link opens the same page as a split, for the
+logger only: the token check returns 403 to anyone else. Prices, guests, tax
+and the roster are refused on a log (`splitRoute` in `src/web/api.ts`). The
+name of the place can be typed in if the read found none, and fixed later.
+
+**4. Log it.** `confirmBill` runs without the split's need for a second person
+and requires a place, at least one item, and items no higher than the printed
+total. The bot posts `@person spent $X at Place` to the channel, without
+pinging anyone. The log still stands if that post fails, and the page says so.
+
+**5. A receipt that looks fake.** The verdict never reaches the logger's page.
+At Log it, the bill stays a draft with `vote = 'open'`, and the photo is posted
+as sent, with Real and Fake buttons (`src/discord/handlers/log-vote.ts`). The
+photo URLs are cleared once posted, since Discord's attachment links expire.
+It counts for nothing until the vote ends, and it can't be withdrawn or
+changed. The logger can't vote. Two votes for one side end it, or one in a
+two-person server. Real confirms the log. Fake deletes it, and the key stays
+held so the same receipt can't be logged again.
+
+**6. A log and a split.** Confirming a split of the same receipt removes the
+logs of the people on that split and deletes their posts, because the split
+now holds their real share. Anyone not on the split keeps their log.
+
+Logs add to Spent, Unique visits and the favorite place, but not Hosted or
+Fronted, because nobody was hosted. **Your logs** on your own `/profile` lets
+you rename or remove them after the page's 30-minute link has run out
+(`src/web/logs.ts`).
 
 ## Profiles and boards
 

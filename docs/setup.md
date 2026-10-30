@@ -59,8 +59,11 @@ commands from step 2 yourself.
 1. Set the Interactions Endpoint URL to `<worker URL>/interactions`. Discord
    sends a signed test ping when you save, so this must come after the deploy.
 2. Install the bot via OAuth2 > URL Generator. Scopes: `bot`,
-   `applications.commands`. Permissions: View Channels, Send Messages, Embed
-   Links, Read Message History. No privileged intents are needed.
+   `applications.commands`. Permissions: View Channels, Send Messages, Attach
+   Files, Embed Links, Read Message History. No privileged intents are needed.
+   Attach Files is what lets `/log` put a suspicious receipt up for a vote. A
+   server that installed the bot before `/log` has to grant it, or `/log`
+   refuses to run there.
 3. `npm run register-commands`, which reads `.dev.vars`. Rerun it whenever
    `src/discord/commands.ts` changes: it replaces the whole command set.
 

@@ -6,6 +6,8 @@ import {
 } from "discord-api-types/v10";
 import type { Env } from "../env";
 import { debtsCommand } from "./handlers/debts";
+import { logCommand } from "./handlers/log";
+import { logVote } from "./handlers/log-vote";
 import { postProfile, profileCommand } from "./handlers/profile";
 import { retired } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
@@ -27,6 +29,7 @@ export type InteractionHandler = (
 export const commandHandlers: Record<string, InteractionHandler> = {
   split: splitCommand,
   "Split this receipt": splitMessageCommand,
+  log: logCommand,
   debts: debtsCommand,
   profile: profileCommand,
 };
@@ -52,6 +55,7 @@ export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
   "profile-post:": postProfile,
+  "logvote:": logVote,
   ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),
 };
 // A modal's submit is its own interaction type, keyed the same way by the

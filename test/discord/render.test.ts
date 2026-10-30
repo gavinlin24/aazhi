@@ -32,6 +32,9 @@ const bill: BillRow = {
   revision: 7,
   createdAt: "2026-10-28T20:00:00.000Z",
   confirmedAt: null,
+  billTime: null,
+  kind: "split",
+  vote: null,
 };
 
 function participantsOf(input: BillInput): Participant[] {

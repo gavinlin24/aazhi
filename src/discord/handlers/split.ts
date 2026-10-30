@@ -23,13 +23,26 @@ export interface Invoker {
 
 const PAGE_OPTIONS = ["receipt", "page_2", "page_3"];
 
+// One option per page because Discord takes one file per named option.
+export function attachedImages(body: APIInteraction): string[] {
+  if (body.type !== InteractionType.ApplicationCommand || body.data.type !== ApplicationCommandType.ChatInput) return [];
+  const options = body.data.options ?? [];
+  const attachments = body.data.resolved?.attachments ?? {};
+  return PAGE_OPTIONS.flatMap((name) => {
+    const option = options.find((o) => o.name === name);
+    if (option?.type !== ApplicationCommandOptionType.Attachment) return [];
+    const attachment = attachments[option.value];
+    return isImage(attachment) ? [attachment.url] : [];
+  });
+}
+
 const NO_PHOTO =
   "I need a photo of the receipt. Attach it to /split, or post the photos in one message, " +
   "then long-press that message (right-click on desktop) and pick Apps > Split this receipt.";
 
-const NOT_IN_SERVER = "Bills belong to a server channel, so run this in one.";
+export const NOT_IN_SERVER = "Bills belong to a server channel, so run this in one.";
 
-const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string> = {
+export const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string> = {
   "not-a-receipt": "I couldn't read a receipt in that photo. Try again with a photo of the itemised receipt.",
   unreadable:
     "I can see a receipt but couldn't make out the prices. Try a sharper photo, taken flat in good light " +
@@ -37,22 +50,22 @@ const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string
   "model-error": "I couldn't reach the receipt reader just now. Try again in a minute.",
 };
 
-const SAVE_FAILED = "Something went wrong saving this bill. Try again in a minute.";
+export const SAVE_FAILED = "Something went wrong saving this bill. Try again in a minute.";
 
-const ALREADY_SPLIT = "This receipt was already split.";
+export const ALREADY_SPLIT = "This receipt was already split.";
 
 // Cloudflare cancels background work 30 s after the response, silently, so a
 // hung read would leave "thinking..." forever. Reading gets 20 s across both
 // attempts; saving and posting the bill fit easily in the 10 s left, and the
 // one wait after that (the superseded message's edit window) comes after the
 // new bill is already on screen.
-const READ_DEADLINE_MS = 20_000;
+export const READ_DEADLINE_MS = 20_000;
 
 function isImage(attachment: APIAttachment | undefined): attachment is APIAttachment {
   return attachment?.content_type?.startsWith("image/") ?? false;
 }
 
-function context(body: APIInteraction): { guildId: string; channelId: string; invoker: Invoker } | null {
+export function context(body: APIInteraction): { guildId: string; channelId: string; invoker: Invoker } | null {
   const channelId = body.channel?.id ?? body.channel_id;
   const member = body.member;
   if (!body.guild_id || !channelId || !member) return null;
@@ -74,15 +87,7 @@ export const splitCommand: InteractionHandler = async (body, env, ctx) => {
   if (body.type !== InteractionType.ApplicationCommand || body.data.type !== ApplicationCommandType.ChatInput) {
     return Response.json(ephemeral(NO_PHOTO));
   }
-  const options = body.data.options ?? [];
-  const attachments = body.data.resolved?.attachments ?? {};
-  const imageUrls = PAGE_OPTIONS.flatMap((name) => {
-    const option = options.find((o) => o.name === name);
-    if (option?.type !== ApplicationCommandOptionType.Attachment) return [];
-    const attachment = attachments[option.value];
-    return isImage(attachment) ? [attachment.url] : [];
-  });
-  return begin(body, imageUrls, env, ctx);
+  return begin(body, attachedImages(body), env, ctx);
 };
 
 export const splitMessageCommand: InteractionHandler = async (body, env, ctx) => {
@@ -115,7 +120,15 @@ export async function startSplit(
   return Response.json({ type: InteractionResponseType.DeferredChannelMessageWithSource });
 }
 
-async function saveDraft(e: Extraction, guildId: string, channelId: string, payer: Invoker, db: D1Database) {
+// A log is this same draft with one person on it, so both go through here.
+export async function saveDraft(
+  e: Extraction,
+  guildId: string,
+  channelId: string,
+  payer: Invoker,
+  db: D1Database,
+  log: { receiptKey: string; photoUrls: string[] | null } | null = null,
+) {
   const bill = await createBill(db, {
     id: crypto.randomUUID(),
     guildId,
@@ -124,12 +137,13 @@ async function saveDraft(e: Extraction, guildId: string, channelId: string, paye
     payerId: payer.id,
     place: e.place,
     billDate: e.billDate,
+    billTime: e.billTime,
     discountCents: e.discountCents,
     taxCents: e.taxCents ?? 0,
     tipCents: 0,
     printedTotalCents: e.printedTotalCents,
     status: "draft",
-    receiptKey: await receiptKey(e),
+    ...(log ? { kind: "log" as const, receiptKey: log.receiptKey, photoUrls: log.photoUrls } : { receiptKey: await receiptKey(e) }),
   });
   await insertItems(
     db,

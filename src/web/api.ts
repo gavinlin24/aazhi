@@ -6,6 +6,7 @@ import {
   BillGoneError,
   BillNotConfirmedError,
   BillNotDraftError,
+  claimEverything,
   confirmBill,
   deleteBill,
   deleteItem,
@@ -28,6 +29,7 @@ import {
   reopenBill,
   setBillAmounts,
   setClaim,
+  setLogPlace,
   setPardon,
   splitOrphansEvenly,
   type AmountChange,
@@ -47,6 +49,7 @@ import {
   setGuestPaidToPayer,
   undoPaid,
 } from "../db/settlements";
+import { onePlace, postLog, postVote, removeLogPost } from "../discord/log-post";
 import { guestPaidNotice, markedPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
@@ -55,6 +58,7 @@ import { formatCents } from "../format";
 import { debtorOf } from "../money/debtors";
 import type { Addon, Cents, ParticipantId } from "../money/types";
 import { normalizeVenmo, VENMO_RULE } from "./paylink";
+import { MAX_PLACE, removeLog, renamePost } from "./logs";
 import { stateOf } from "./state";
 import { readToken } from "./token";
 
@@ -62,13 +66,17 @@ type Ctx = Context<{ Bindings: Env }>;
 type Grant = { billId: string; participantId: ParticipantId };
 
 const LINK_REFUSED =
-  "This link has expired or isn't yours. Go back to the bill in Discord and tap Open the split for a fresh one.";
+  "This link has expired or isn't yours. For a split, tap Open the split on the bill in Discord. For a log, run /log again, or use /profile for one you already logged.";
 const NOT_FOUND = "This bill doesn't exist any more.";
 const NOT_ON_BILL = "You're not on this bill. If you were there, tap Open the split on the bill in Discord to join it.";
 const GONE: Partial<Record<BillRow["status"], string>> = {
   superseded: "This split was replaced by a newer one. Open the newer bill message in Discord and tap Open the split there.",
   deleted: "This split was deleted, so there's nothing left to change on it.",
 };
+const NOT_ON_A_LOG = "A log is just you and your items, so that can't be changed here.";
+const VOTE_RUNNING = "This receipt is up for a vote in the channel, so it can't be changed now.";
+const VOTED_FAKE = "Voted fake. This receipt doesn't count.";
+const LOG_GONE = "This log was removed, so there's nothing left to change on it.";
 
 // $999,999.99. Far past any bill, and it keeps every sum of lines well
 // inside the range where integer arithmetic stays exact.
@@ -105,12 +113,27 @@ function payerName(snapshot: BillSnapshot): string {
   return snapshot.participants.find((p) => p.id === snapshot.bill.payerId)?.displayName ?? "the person who paid";
 }
 
+function goneReason(bill: BillRow): string | undefined {
+  if (bill.kind === "log" && bill.status === "deleted") return bill.vote === "fake" ? VOTED_FAKE : LOG_GONE;
+  return GONE[bill.status];
+}
+
 function notDraft(bill: BillRow | null): Response {
   if (!bill) return refuse(409, NOT_FOUND);
+  if (bill.kind === "log" && bill.status === "confirmed") return refuse(409, "This is already logged, so your items can't be changed now.");
   return refuse(
     409,
-    GONE[bill.status] ?? "This bill is confirmed, so it can't be changed now. Ask the person who paid to reopen it if something is wrong.",
+    goneReason(bill) ?? "This bill is confirmed, so it can't be changed now. Ask the person who paid to reopen it if something is wrong.",
   );
+}
+
+// Only the person logging ever opens a log, and nobody takes one back once the
+// channel is voting on it. Bill tokens are per bill, so this is what holds that
+// to one person even if a token for someone else ever turned up.
+function logRefusal(bill: BillRow, grant: Grant): Response | null {
+  if (bill.kind !== "log") return null;
+  if (grant.participantId !== bill.payerId) return refuse(403, LINK_REFUSED);
+  return bill.vote === "open" ? refuse(409, VOTE_RUNNING) : null;
 }
 
 async function readBody(c: Ctx): Promise<Record<string, unknown>> {
@@ -180,13 +203,14 @@ async function loadDraft(c: Ctx, grant: Grant): Promise<BillSnapshot | Response>
   const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
   if (!snapshot) return refuse(404, NOT_FOUND);
   if (snapshot.bill.status !== "draft") return notDraft(snapshot.bill);
-  return snapshot;
+  return logRefusal(snapshot.bill, grant) ?? snapshot;
 }
 
 async function currentState(c: Ctx, grant: Grant): Promise<Response> {
   const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
   if (!snapshot) return refuse(404, NOT_FOUND);
-  const gone = GONE[snapshot.bill.status];
+  if (snapshot.bill.kind === "log" && grant.participantId !== snapshot.bill.payerId) return refuse(403, LINK_REFUSED);
+  const gone = goneReason(snapshot.bill);
   if (gone) return refuse(410, gone);
   return reply(await stateOf(c.env.DB, snapshot, grant.participantId));
 }
@@ -225,9 +249,9 @@ async function commit(c: Ctx, grant: Grant, bill: BillRow, write: () => Promise<
 async function loadLive(c: Ctx, grant: Grant): Promise<BillSnapshot | Response> {
   const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
   if (!snapshot) return refuse(404, NOT_FOUND);
-  const gone = GONE[snapshot.bill.status];
+  const gone = goneReason(snapshot.bill);
   if (gone) return refuse(409, gone);
-  return snapshot;
+  return logRefusal(snapshot.bill, grant) ?? snapshot;
 }
 
 function route(handler: (c: Ctx, grant: Grant) => Promise<Response>) {
@@ -241,6 +265,15 @@ function route(handler: (c: Ctx, grant: Grant) => Promise<Response>) {
       throw error;
     }
   };
+}
+
+// Everything about other people and money owed. A log has neither, so no write
+// here should ever reach one, whatever the page offers.
+function splitRoute(handler: (c: Ctx, grant: Grant) => Promise<Response>) {
+  return route(async (c, grant) => {
+    const bill = await getBill(c.env.DB, grant.billId);
+    return bill?.kind === "log" ? refuse(409, NOT_ON_A_LOG) : handler(c, grant);
+  });
 }
 
 export const api = new Hono<{ Bindings: Env }>();
@@ -280,8 +313,23 @@ api.post(
 );
 
 api.post(
-  "/:billId/item",
+  "/:billId/everything",
   route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["claimed"]);
+    const claimed = body.claimed;
+    if (typeof claimed !== "boolean") bad('"claimed" must be true or false.');
+
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (snapshot.bill.kind !== "log") return refuse(409, "Tap the lines you had. Only a log takes everything at once.");
+    return commit(c, grant, snapshot.bill, () => claimEverything(c.env.DB, grant.billId, grant.participantId, claimed));
+  }),
+);
+
+api.post(
+  "/:billId/item",
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     let write: (db: D1Database) => Promise<number>;
     let itemId: string | null = null;
@@ -357,12 +405,30 @@ async function changePayer(c: Ctx, grant: Grant, body: Record<string, unknown>):
   }
 }
 
+// A log is the one kind of bill whose name its owner types in, since the read
+// can miss it and the post says it to the whole channel.
+async function changePlace(c: Ctx, grant: Grant, body: Record<string, unknown>): Promise<Response> {
+  if (Object.keys(body).length > 1) bad("Change the name on its own.");
+  const place = typeof body.place === "string" ? onePlace(body.place) : "";
+  if (place.length === 0) bad(`Give this place a name of 1 to ${MAX_PLACE} characters.`);
+
+  const snapshot = await loadLive(c, grant);
+  if (snapshot instanceof Response) return snapshot;
+  const { bill } = snapshot;
+  if (bill.kind !== "log") return refuse(409, "Only a log takes a new name.");
+  if (!(await setLogPlace(c.env.DB, grant.billId, place))) return refuse(409, VOTE_RUNNING);
+  if (bill.status === "confirmed") c.executionCtx.waitUntil(renamePost({ ...bill, place }, c.env));
+  return currentState(c, grant);
+}
+
 api.patch(
   "/:billId",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, [], ["discount", "tax", "tip", "tipPercent", "printedTotal", "payer"]);
+    expectKeys(body, [], ["discount", "tax", "tip", "tipPercent", "printedTotal", "payer", "place"]);
     if (Object.keys(body).length === 0) bad("Nothing to change.");
+    if ("place" in body) return changePlace(c, grant, body);
+    if ((await getBill(c.env.DB, grant.billId))?.kind === "log") return refuse(409, NOT_ON_A_LOG);
     if ("payer" in body) return changePayer(c, grant, body);
     if ("tip" in body && "tipPercent" in body) bad("Enter the tip as dollars or as a percentage, not both.");
 
@@ -413,7 +479,7 @@ const GUEST_GONE = "That guest isn't on this bill any more.";
 // them answers for what they had, so there is nobody to name but the viewer.
 api.post(
   "/:billId/guest",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["name"]);
     const name = guestName(body.name);
@@ -456,7 +522,7 @@ function guestFor(
 
 api.patch(
   "/:billId/guest/:guestId",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["name"]);
     const name = guestName(body.name);
@@ -479,7 +545,7 @@ api.patch(
 
 api.delete(
   "/:billId/guest/:guestId",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const snapshot = await loadDraft(c, grant);
     if (snapshot instanceof Response) return snapshot;
     const guest = guestFor(snapshot, grant, c.req.param("guestId") ?? "", "take them off");
@@ -510,7 +576,7 @@ const MEMBER_REFUSED: Record<Exclude<MemberRefusedError["reason"], "no-member" |
 // it is confirmed, everyone on it was told an amount.
 api.delete(
   "/:billId/member/:memberId",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const snapshot = await loadDraft(c, grant);
     if (snapshot instanceof Response) return snapshot;
     if (grant.participantId !== snapshot.bill.payerId) {
@@ -536,7 +602,7 @@ api.delete(
 // Venmo has no API for that.
 api.post(
   "/:billId/venmo",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["username"]);
     const username = typeof body.username === "string" ? normalizeVenmo(body.username) : null;
@@ -570,7 +636,7 @@ async function announceGuestPaid(env: Env, billId: string, guestId: ParticipantI
 // payer added the guest, both are the payer's, and so is the meaning.
 api.post(
   "/:billId/guest/:guestId/paid",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["paid"]);
     const paid = body.paid;
@@ -650,7 +716,7 @@ async function announcePardon(env: Env, billId: string, participantId: Participa
 // confirmed; the payer absorbs it and nobody else's share moves.
 api.post(
   "/:billId/pardon",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["participantId", "pardoned"]);
     const participantId = text(body.participantId, "participantId");
@@ -711,9 +777,24 @@ const CONFIRM_REFUSED = {
   stale: "The bill changed while you were looking. Check it and confirm again.",
   unreconciled: "Line items do not add up to total!",
   unclaimed: "Some lines have nobody on them yet.",
-  alone: "Add someone to split with.",
+  alone: "Add someone, or use /log.",
   "receipt-taken": "This receipt was already split.",
+  "receipt-logged": "This receipt was already logged.",
+  "no-place": "Add the name of this place.",
+  "nothing-picked": "Pick what you had.",
+  "over-total": "Your items add up to more than the receipt's total.",
 };
+
+// Save, then post, inside the tap, so the page can say if the post failed. A
+// flagged receipt looks just the same up to here: nothing warns the person, and
+// from here on nothing can be withdrawn.
+async function finishLog(c: Ctx, grant: Grant, vote: boolean): Promise<Response> {
+  const bill = await getBill(c.env.DB, grant.billId);
+  if (!bill) return refuse(404, NOT_FOUND);
+  if (!vote) await postLog(bill, c.env);
+  else if (!(await postVote(bill, c.env))) return refuse(409, "I couldn't post this one in the channel. Try Log it again.");
+  return currentState(c, grant);
+}
 
 // `revision` is the bill the payer looked at: anything that changed since
 // means they would be agreeing to numbers they never saw. `splitUnclaimed`
@@ -733,6 +814,7 @@ api.post(
     if (grant.participantId !== snapshot.bill.payerId) {
       return refuse(403, `Only ${payerName(snapshot)} can confirm the bill, because they paid.`);
     }
+    if (splitUnclaimed && snapshot.bill.kind === "log") return refuse(409, NOT_ON_A_LOG);
 
     let at = revision;
     if (splitUnclaimed) {
@@ -759,6 +841,8 @@ api.post(
           return refuse(409, CONFIRM_REFUSED[result.reason]);
       }
     }
+    if (snapshot.bill.kind === "log") return finishLog(c, grant, result.vote);
+    for (const log of result.removedLogs) c.executionCtx.waitUntil(removeLogPost(log, c.env));
     announce(c, snapshot.bill, reconfirmNotice(snapshot.bill, snapshot.participants, result.changes));
     return currentState(c, grant);
   }),
@@ -769,7 +853,7 @@ api.post(
 // somebody knows is wrong must not take payments.
 api.post(
   "/:billId/reopen",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const snapshot = await loadLive(c, grant);
     if (snapshot instanceof Response) return snapshot;
     const { bill, participants } = snapshot;
@@ -828,7 +912,7 @@ function paymentRefused(error: SettlementRefusedError, snapshot: BillSnapshot): 
 // own payment. A tap from someone already paid up changes nothing.
 api.post(
   "/:billId/payment",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["id", "amount"]);
     const id = text(body.id, "id");
@@ -881,7 +965,7 @@ function markRefused(error: SettlementRefusedError, snapshot: BillSnapshot, who:
 // the page sends them through the guest's own mark instead.
 api.post(
   "/:billId/paid/:participantId",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["id", "amount"]);
     const id = text(body.id, "id");
@@ -921,7 +1005,7 @@ const PAYMENT_GONE = "That payment isn't on this bill any more.";
 // one who knows it never arrived. It takes back the person's paid, whole.
 api.delete(
   "/:billId/paid/:participantId",
-  route(async (c, grant) => {
+  splitRoute(async (c, grant) => {
     const snapshot = await loadLive(c, grant);
     if (snapshot instanceof Response) return snapshot;
     const { bill, participants } = snapshot;
@@ -963,6 +1047,7 @@ api.delete(
     if (grant.participantId !== snapshot.bill.payerId) {
       return refuse(403, `Only ${payerName(snapshot)} can delete the bill, because they paid.`);
     }
+    if (snapshot.bill.kind === "log") return reply(await removeLog(c.env, snapshot.bill));
     try {
       await deleteBill(c.env.DB, grant.billId, paid);
     } catch (error) {

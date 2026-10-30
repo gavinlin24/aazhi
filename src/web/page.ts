@@ -257,7 +257,7 @@ button.payer-chip::after, .name-btn::after { content: ""; position: absolute; in
   margin: 0 auto;
   padding: var(--page-top) 16px calc(28px + env(safe-area-inset-bottom));
 }
-.page[data-layout="receipt"].has-bar { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
+.page[data-layout="receipt"].has-bar, .page[data-layout="log"].has-bar { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
 /* Keyboard focus and claim mode scroll rows into view; keep them clear of the bar. */
 html:has(.has-bar) { scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .needs-js { display: none; }
@@ -960,6 +960,43 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .confirm-btn:disabled .seal { background: var(--fill); color: var(--ring); box-shadow: inset 0 0 0 1.5px var(--ring); }
 .confirm-btn:disabled .confirm-word { color: var(--muted); }
 .confirm-btn[aria-busy="true"] { cursor: progress; opacity: 0.75; }
+.confirm-btn.l-confirm { display: flex; flex-direction: column; gap: 6px; padding: 16px 8px 4px; text-align: center; }
+.confirm-btn.l-confirm .seal { border-radius: 5px; box-shadow: inset 0 0 0 2px var(--seal), inset 0 0 0 3.5px rgba(251, 243, 234, 0.7); }
+.confirm-btn.l-confirm:disabled .seal { box-shadow: none; }
+.l-acts { padding: 0 6px; }
+.l-why { color: var(--muted); font-size: 15px; font-weight: 400; text-align: center; }
+.l-why.warn { color: var(--warn); font-weight: 600; }
+.l-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 9px 9px 13px; border-bottom: 1px solid var(--rule); color: var(--muted); font-size: 15px; font-weight: 600; }
+.l-chip { display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px; border: 1px solid var(--rule-strong); border-radius: 17px; background: var(--card); color: var(--ink); font-size: 15px; font-weight: 400; white-space: nowrap; cursor: pointer; }
+.l-chip.is-on { background: var(--ink); border-color: var(--ink); color: var(--card); }
+.l-ask { margin-bottom: 12px; padding: 12px 13px 13px; }
+.l-ask label { display: block; font-size: 16px; font-weight: 600; line-height: 1.35; }
+.l-entry { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.l-entry input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 1.5px solid var(--azurite); border-radius: var(--radius); background: var(--paper); color: var(--ink); font: inherit; font-size: 17px; }
+[data-layout="log"] .receipt { padding-bottom: 0; }
+[data-layout="log"] .totals { margin: 0; padding: 4px var(--edge) 8px; border-top: 1px solid var(--rule-strong); }
+[data-layout="log"] .trow { min-height: 34px; }
+[data-layout="log"] .grand { min-height: 40px; margin: 0; padding: 0; border-top: 0; font-size: 18px; }
+[data-layout="log"] .item:last-child { border-bottom: 0; }
+.l-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; font-size: 16px; }
+.l-bar .money { font-size: 20px; font-weight: 600; }
+.l-bar .l-none { color: var(--muted); }
+.l-name { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.l-act { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 50px; padding: 0 13px; border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; background: none; color: var(--ink); font: inherit; font-size: 16px; text-align: left; cursor: pointer; }
+.l-act:last-child { border-bottom: 0; }
+.l-act .ic { width: 16px; height: 16px; color: var(--muted); }
+.l-act.dan { color: var(--seal); }
+.l-act.is-armed { border-radius: 8px; background: var(--ink); color: var(--card); }
+.l-act[aria-busy="true"] { cursor: progress; opacity: 0.75; }
+.l-discard { justify-content: center; margin-top: 8px; border-bottom: 0; }
+.l-note { display: flex; gap: 9px; margin-top: 12px; padding: 10px 13px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--card) var(--grain); font-size: 15px; line-height: 1.35; }
+.l-done-line { padding: 12px 13px; font-size: 16px; line-height: 1.4; }
+.l-done-line b { display: block; font-size: 18px; font-weight: 600; }
+.l-done-line span { color: var(--muted); }
+.hero .l-sub { margin-top: 3px; color: var(--muted); font-size: 16px; }
+.mine .card-h { display: flex; align-items: center; gap: 7px; padding: 9px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
+.mine .card-h .ic { width: 17px; height: 17px; }
+.is-log-gone [data-log-part], .is-log-gone [data-log-ask] { display: none; }
 /* The receipt's own total, here only while it is what stops the bill being
    confirmed: missing, or not what the lines add up to. */
 .confirm-area .trow { margin: -4px 0 10px; padding: 0 2px; }
@@ -1207,20 +1244,27 @@ export function notice(heading: string, paragraph: string): string {
 export function renderLinkRefused(): string {
   return notice(
     "This link has expired",
-    "Split links last 30 minutes and only work for the person who tapped. " +
-      "Go back to the bill in Discord and tap <strong>Open the split</strong> for a fresh one.",
+    "Links last 30 minutes and only work for the person they were made for. " +
+      "For a split, tap <strong>Open the split</strong> on the bill in Discord. " +
+      "For a log, run <strong>/log</strong> again, or use <strong>/profile</strong> for one you already logged.",
   );
 }
 
 export function renderBillNotFound(): string {
   return notice(
     "There's no split here",
-    "This bill doesn't exist any more. Go back to Discord and tap <strong>Open the split</strong> on the latest bill message.",
+    "This bill doesn't exist any more. Go back to Discord and tap <strong>Open the split</strong> on the latest bill message, " +
+      "or run <strong>/log</strong> for a receipt of your own.",
   );
 }
 
-export function renderBillGone(status: "superseded" | "deleted"): string {
-  return status === "superseded"
+export function renderBillGone(bill: Pick<BillRow, "status" | "kind" | "vote">): string {
+  if (bill.kind === "log") {
+    return bill.vote === "fake"
+      ? notice("Voted fake", "The server voted, and this receipt doesn't count.")
+      : notice("This log was removed", "It no longer counts. If you undid it, you can run <strong>/log</strong> again inside the 8 hours.");
+  }
+  return bill.status === "superseded"
     ? notice(
         "This split was replaced",
         "A newer split was started in the same channel. Open the newer bill message in Discord and tap " +
@@ -1350,7 +1394,28 @@ function payerChip(v: View): string {
     : `<span class="payer-chip">${inner}</span>`;
 }
 
+function logWord(s: BillState): string {
+  if (s.status === "confirmed") return "Logged";
+  return s.vote === "open" ? "Up for a vote" : "Your items";
+}
+
+// Mirrors renderHeader in the client. The name can be fixed until a post has it
+// up for a vote, and a draft shows that right on the name.
+function logHeader(v: View): string {
+  const s = v.s;
+  const name = escapeHtml(s.place?.trim() || "Receipt");
+  const seal = `<span class="seal${s.status === "confirmed" ? "" : " is-draft"}" aria-hidden="true">记</span>`;
+  return `<header class="head">
+${hills(true)}
+<h1 data-log-name>${s.editable === "self" && s.place?.trim() ? `<button type="button" class="l-name" data-fix-name>${name}${BRUSH}</button>` : name}</h1>
+<p class="status" data-status-label>${seal}<span class="word">${logWord(s)}</span></p>
+<p class="meta">${s.stamp ? `<span>${escapeHtml(s.stamp)}</span>` : ""}</p>
+</header>
+<p class="toast" data-live-note role="status" hidden></p>`;
+}
+
 function header(v: View): string {
+  if (v.s.kind === "log") return logHeader(v);
   const date = shortDate(v.bill.billDate, v.year);
   return `<header class="head">
 ${hills(true)}
@@ -1400,7 +1465,8 @@ function addonLines(addons: Addon[]): string {
 // for their own claim; anyone else sees it locked.
 function itemRow(v: View, item: LineItem): string {
   const mine = item.claimedBy.includes(v.s.viewer);
-  const unclaimed = item.claimedBy.length === 0;
+  // On a log a line left unticked is just something you didn't have.
+  const unclaimed = item.claimedBy.length === 0 && v.s.kind !== "log";
   const others = item.claimedBy.filter((id) => id !== v.s.viewer);
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
@@ -1440,8 +1506,18 @@ function amount(v: View, field: string, key: string, cents: Cents | null, label:
   return `<button type="button" class="amt" data-edit-field="${field}" aria-label="${label}, ${cents === null ? "not entered" : formatCents(cents)}">${BRUSH}${shown}</button>`;
 }
 
+// The receipt as printed, with nothing here to change.
+function logTotals(s: BillState): string {
+  const r = s.result;
+  const row = (label: string, key: string, cents: Cents, cls = "") =>
+    `<div class="trow${cls}"><dt>${label}</dt><dd data-total="${key}">${formatCents(cents)}</dd></div>`;
+  return `<dl class="totals" data-totals>${row("Subtotal", "subtotal", r.billSubtotalCents)}${s.discountCents !== 0 ? row("Discount", "discount", -s.discountCents) : ""}` +
+    `${row("Tax", "tax", s.taxCents)}${row("Receipt total", "total", s.printedTotalCents ?? r.distributableCents, " grand")}</dl>`;
+}
+
 function totals(v: View): string {
   const s = v.s;
+  if (s.kind === "log") return logTotals(s);
   const r = s.result;
   const rows = [
     `<div class="trow"><dt>Subtotal</dt><dd data-total="subtotal">${formatCents(r.billSubtotalCents)}</dd></div>`,
@@ -1757,9 +1833,32 @@ function confirmBlock(s: BillState): string | null {
   if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
   if (!s.hasSplitPartner) {
     const joined = s.participants.some((p) => p.kind === "member" && p.id !== s.payerId);
-    return joined ? "Someone else needs to claim an item." : "Add someone to split with.";
+    return joined ? "Someone else needs to claim an item." : "Add someone, or use /log.";
   }
   return null;
+}
+
+function logSpent(s: BillState): Cents {
+  return s.result.shares.find((x) => x.participant === s.viewer)?.owedCents ?? 0;
+}
+
+// Why Log it won't go yet, or null. The server refuses the same cases. Mirrored
+// in the client.
+function logBlock(s: BillState): string | null {
+  if (s.receiptSplit) return "This receipt was already split.";
+  if (s.receiptTaken) return "This receipt was already logged.";
+  if (!s.place?.trim()) return "Add the name of this place.";
+  const spent = logSpent(s);
+  if (spent <= 0) return "Pick what you had.";
+  return s.printedTotalCents !== null && spent > s.printedTotalCents ? "Your items add up to more than the receipt's total." : null;
+}
+
+// A misread line stops nobody: it may not even be theirs, and the printed total
+// still caps what they can log.
+function logGap(s: BillState): string | null {
+  const { ok, discrepancyCents } = s.reconciles;
+  if (ok || discrepancyCents === null || s.printedTotalCents === null) return null;
+  return `These lines add up to ${formatCents(s.printedTotalCents + discrepancyCents)}. The receipt says ${formatCents(s.printedTotalCents)}.`;
 }
 
 function openLines(s: BillState): LineItem[] {
@@ -1875,11 +1974,71 @@ function payments(v: View): string {
   return `<section class="card payments needs-js" data-payments aria-label="Payments"${rows ? "" : " hidden"}>${rows}</section>`;
 }
 
+function logConfirm(s: BillState): string {
+  const blocked = logBlock(s);
+  const gap = logGap(s);
+  return `${gap ? `<p class="l-why warn">${escapeHtml(gap)}</p>` : ""}<button type="button" class="confirm-btn l-confirm" data-confirm${blocked ? " disabled" : ""}${blocked ? ' aria-describedby="confirm-why"' : ""}>` +
+    `<span class="seal" aria-hidden="true">记</span><span class="confirm-word">Log it</span>` +
+    `${blocked ? `<span class="l-why" id="confirm-why" aria-hidden="true">${escapeHtml(blocked)}</span>` : ""}</button>` +
+    `<button type="button" class="l-act dan l-discard" data-remove-log>Discard</button>`;
+}
+
+function logItems(v: View): string {
+  const everything = v.s.items.every((i) => i.claimedBy.includes(v.s.viewer));
+  return `<section class="card receipt" data-items data-log-part aria-label="Receipt">
+<div class="l-head"><span>What did you have?</span><button type="button" class="l-chip${everything ? " is-on" : ""}" data-everything aria-pressed="${everything}">I had everything</button></div>
+<ul class="items">${v.s.items.map((i) => itemRow(v, i)).join("\n")}</ul>
+${totals(v)}
+</section>`;
+}
+
+function logBar(s: BillState): string {
+  const spent = logSpent(s);
+  return `<div class="bar l-bar" data-bar data-log-bar data-log-part><span>Your total</span>${spent > 0 ? `<span class="money">${formatCents(spent)}</span>` : `<span class="l-none">Nothing picked</span>`}</div>`;
+}
+
+function logAsk(s: BillState): string {
+  if (s.place?.trim()) return "";
+  return `<form class="card l-ask" data-place-form novalidate><label for="log-place">I couldn't read the name of this place.</label>` +
+    `<div class="l-entry"><input id="log-place" name="place" maxlength="80" autocomplete="off" enterkeyhint="done" placeholder="Type the name">` +
+    `<button type="submit" class="icon-btn go" aria-label="Save">${icon("check")}</button></div><p class="field-msg" role="status"></p></form>`;
+}
+
+function logged(v: View): string {
+  const rows = v.s.items
+    .filter((i) => i.claimedBy.includes(v.s.viewer))
+    .map((i) => `<li><span class="item-label">${escapeHtml(i.label)}</span><span class="money">${formatCents(i.cents)}</span></li>`)
+    .join("");
+  return `<section class="card hero" data-log-part aria-label="What you spent">
+<p class="hero-cap">You spent</p><p class="hero-amt money">${formatCents(logSpent(v.s))}</p><p class="l-sub">Items, tax share included</p>
+<span class="stamp" aria-hidden="true">记</span>
+</section>
+${v.s.postMissing ? `<p class="l-note" data-log-part>Logged, but I couldn't post it in the channel.</p>` : ""}
+<section class="card mine" data-log-part aria-label="What you had"><p class="card-h">${icon("receipt")}What you had</p><ul>${rows}</ul></section>`;
+}
+
+// One person and no money owed, so none of a split's people, guests or payments
+// come along. Everything but the rows and the seal is its own, and the script
+// draws these same sections.
+function logBody(v: View): string {
+  const s = v.s;
+  const ask = `<div data-log-ask>${s.status === "draft" && !s.vote ? logAsk(s) : ""}</div>`;
+  if (s.status === "confirmed") {
+    const acts = `<button type="button" class="l-act" data-fix-name>Fix name${icon("chev")}</button><button type="button" class="l-act dan" data-remove-log>Undo${icon("chev")}</button>`;
+    return `${ask}${logged(v)}<section class="card acts needs-js" data-actions aria-label="Log actions">${acts}</section>`;
+  }
+  if (s.vote === "open") {
+    return `<section class="card" aria-label="Vote"><p class="l-done-line"><b>Posted for a vote.</b> <span>The server is voting on this receipt. It doesn't count unless they vote real.</span></p></section>`;
+  }
+  return `${ask}${logItems(v)}<section class="acts l-acts needs-js" data-actions aria-label="Log it">${logConfirm(s)}</section>${logBar(s)}`;
+}
+
 function back(): string {
   return `<a class="back needs-js" href="#" data-back>${icon("back")}<span class="sr">Back</span></a>`;
 }
 
 function body(v: View): string {
+  if (v.s.kind === "log") return logBody(v);
   if (layoutOf(v.bill.status) === "receipt") {
     return `${v.onBill ? "" : notOnBill(v)}
 ${receipt(v)}
@@ -1918,10 +2077,11 @@ export function renderPage(
     onBill: s.participants.some((p) => p.id === viewer),
     year: new Date(nowMs).getUTCFullYear(),
   };
-  const layout = layoutOf(bill.status);
+  const layout = s.kind === "log" ? "log" : layoutOf(bill.status);
+  const hasBar = s.kind === "log" ? s.editable === "self" : layout === "receipt" && v.onBill;
 
   const main = `${sprite()}
-<main class="page${layout === "receipt" && v.onBill ? " has-bar" : ""}" id="bill" data-bill-id="${escapeHtml(bill.id)}" data-viewer="${escapeHtml(viewer)}" data-payer="${escapeHtml(bill.payerId)}" data-viewer-is-payer="${s.viewerIsPayer}" data-editable="${s.editable}" data-status="${bill.status}" data-revision="${bill.revision}" data-layout="${layout}">
+<main class="page${hasBar ? " has-bar" : ""}" id="bill" data-bill-id="${escapeHtml(bill.id)}" data-viewer="${escapeHtml(viewer)}" data-payer="${escapeHtml(bill.payerId)}" data-viewer-is-payer="${s.viewerIsPayer}" data-editable="${s.editable}" data-status="${bill.status}" data-revision="${bill.revision}" data-layout="${layout}">
 ${header(v)}
 ${body(v)}
 </main>

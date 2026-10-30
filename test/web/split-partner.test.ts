@@ -12,7 +12,7 @@ const db = workerEnv.DB;
 const KEY = "split-partner-test-signing-key";
 const gavin: [string, string] = ["gavin", "Gavin"];
 const marcus: [string, string] = ["marcus", "Marcus"];
-const WAITING = "Add someone to split with.";
+const WAITING = "Add someone, or use /log.";
 const NEEDS_CLAIM = "Someone else needs to claim an item.";
 
 function env(): Env {
