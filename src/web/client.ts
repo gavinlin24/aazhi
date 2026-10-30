@@ -707,8 +707,13 @@ export const CLIENT_SCRIPT = String.raw`
     return svg;
   }
 
-  function payNodes(s) {
-    if (s.pay.length === 0) return null;
+  function payNodes(v) {
+    const s = v.s;
+    if (s.pay.length === 0) {
+      return leftOf(v, s.viewer) > 0
+        ? el("div", { class: "pay-row", "data-pay": true }, el("p", { class: "pay-note" }, "Pay " + nameOf(v, s.payerId) + " however you usually do."))
+        : null;
+    }
     return el("div", { class: "pay-row", "data-pay": true }, s.pay.map((o) => o.url
       ? el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])
       : el("p", { class: "pay-note" }, o.instructions)));
@@ -743,7 +748,14 @@ export const CLIENT_SCRIPT = String.raw`
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
     ].concat(forgiven ? [] : splitNodes(counted(v, s.viewer)))
       .concat(partial ? [fraction(o.paidCents, o.owedCents)] : [])
-      .concat(paid ? [] : [payNodes(s)]);
+      .concat(paid ? [] : [payNodes(v)])
+      .concat([sentNodes(v)]);
+  }
+
+  function sentNodes(v) {
+    if (leftOf(v, v.s.viewer) <= 0) return null;
+    return el("div", { class: "sent-row needs-js", "data-sent": true },
+      el("button", { type: "button", class: "sent", "data-ask": "sent", "aria-haspopup": "dialog" }, [icon("check"), "I sent it"]));
   }
 
   let wasPaid = null;
@@ -799,6 +811,93 @@ export const CLIENT_SCRIPT = String.raw`
     ]);
     const total = root.querySelector('[data-go="receipt"] .money');
     if (total) total.textContent = money(v.s.result.distributableCents);
+  }
+
+  // ---- what can be done to the bill ----------------------------------------
+
+  function confirmBlock(s) {
+    if (s.printedTotalCents === null) return "Enter the receipt total first.";
+    if (!s.reconciles.ok) return "Line items do not add up to total!";
+    if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+    return null;
+  }
+
+  function openLines(s) {
+    return s.items.filter((i) => i.claimedBy.length === 0);
+  }
+
+  function confirmNodes(v) {
+    const blocked = confirmBlock(v.s);
+    const open = openLines(v.s).length;
+    const why = blocked || (open === 0 ? "" : open === 1 ? "1 line has nobody on it." : open + " lines have nobody on them.");
+    return el("div", { class: "confirm-area" }, [
+      el("button", {
+        type: "button",
+        class: "confirm-btn",
+        "data-confirm": true,
+        disabled: Boolean(blocked) || stopped,
+        "aria-busy": busy.has("confirm") ? "true" : null,
+        "aria-describedby": why ? "confirm-why" : null,
+      }, [el("span", { class: "brush", "aria-hidden": "true" }, "定"), "Confirm"]),
+      why ? el("p", { class: "why" + (blocked ? "" : " is-hint"), id: "confirm-why" }, why) : null,
+    ]);
+  }
+
+  function act(attrs, iconName, title, sub, cls) {
+    return el("button", Object.assign({ type: "button", class: "act" + (cls ? " " + cls : "") }, attrs), [
+      icon(iconName),
+      el("span", { class: "grow" }, [el("span", null, title), sub ? el("span", { class: "act-sub" }, sub) : null]),
+    ]);
+  }
+
+  function actionNodes(v) {
+    const s = v.s;
+    if (s.viewerIsPayer) {
+      return [
+        s.status === "draft" ? confirmNodes(v) : null,
+        s.status === "confirmed"
+          ? act({ "data-reopen": true, "aria-busy": busy.has("reopen") ? "true" : null }, "receipt", "Edit the bill", "Paying pauses until you confirm again.")
+          : null,
+        act({ "data-delete-bill": true, "aria-busy": busy.has("delete") ? "true" : null }, "trash", "Delete this bill", null, "danger"),
+      ];
+    }
+    return [act({ "data-ask": "wrong", "aria-haspopup": "dialog" }, "warn", "Something's wrong", "Paying pauses until " + nameOf(v, s.payerId) + " fixes it.", "is-warn")];
+  }
+
+  function renderActions(v) {
+    const card = root.querySelector("[data-actions]");
+    if (!card) return;
+    const s = v.s;
+    keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), stopped]), () => actionNodes(v));
+  }
+
+  function paymentNodes(v) {
+    if (v.s.payments.length === 0) return [];
+    return [
+      el("h2", null, "Payments"),
+      el("ul", null, v.s.payments.map((p) => {
+        const name = nameOf(v, p.participant);
+        return el("li", null, [
+          av(v, p.participant),
+          el("span", { class: "name" }, name),
+          el("span", { class: "money" }, money(p.cents)),
+          el("button", {
+            type: "button",
+            class: "chip-btn",
+            "data-undo": p.id,
+            "aria-busy": busy.has("undo:" + p.id) ? "true" : null,
+            "aria-label": "Undo " + name + "'s " + money(p.cents) + " payment",
+          }, "Undo"),
+        ]);
+      })),
+    ];
+  }
+
+  function renderPayments(v) {
+    const card = root.querySelector("[data-payments]");
+    if (!card) return;
+    card.hidden = v.s.payments.length === 0;
+    keyedInto(card, JSON.stringify([v.s.payments, v.s.participants, Array.from(busy)]), () => paymentNodes(v));
   }
 
   // A confirmed bill has three views on one page: your share, the receipt
@@ -1042,9 +1141,87 @@ export const CLIENT_SCRIPT = String.raw`
     ];
   }
 
+  function askHead(title) {
+    return el("div", { class: "sheet-head" }, [
+      el("h2", { id: "sheet-title" }, title),
+      el("button", { type: "button", class: "icon-btn close", "data-close-sheet": true, "aria-label": "Close" }, icon("close")),
+    ]);
+  }
+
+  function goButton(label, tone) {
+    return el("button", {
+      type: "button",
+      class: "chip-btn sheet-go is-" + tone,
+      "data-do": sheet.kind,
+      disabled: stopped,
+      "aria-busy": busy.has(sheet.kind) ? "true" : null,
+    }, label);
+  }
+
+  function cancelButton(label) {
+    // Focus lands on the way out, so a stray Enter never reopens or confirms.
+    return el("button", { type: "button", class: "chip-btn sheet-go", "data-close-sheet": true, "data-autofocus": true }, label || "Cancel");
+  }
+
+  function sentSheet(v) {
+    const left = leftOf(v, v.s.viewer);
+    const input = el("input", { id: "sent-amount", name: "amount", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-describedby": "sent-left" });
+    input.value = sheet.amount === undefined ? plain(left) : sheet.amount;
+    return [
+      askHead("How much did you send?"),
+      el("p", { class: "sheet-body", id: "sent-left" }, "You have " + money(left) + " left to pay " + nameOf(v, v.s.payerId) + ". Sent part of it? Change the amount."),
+      el("form", { class: "sent-form", "data-sent-form": true, novalidate: true }, [
+        el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), input]),
+        el("p", { class: "field-msg", role: "status" }, sheet.msg || ""),
+        el("div", { class: "sheet-actions", style: "width: 100%" }, [
+          cancelButton(),
+          el("button", { type: "submit", class: "chip-btn sheet-go is-ink", disabled: stopped, "aria-busy": busy.has("sent") ? "true" : null }, [icon("check"), "I sent it"]),
+        ]),
+      ]),
+    ];
+  }
+
+  // Each ask says what happens in a plain sentence, then does it on a
+  // second, deliberate tap. Delete and undo skip this: they act on one tap.
+  function askSheet(v) {
+    const s = v.s;
+    const payer = nameOf(v, s.payerId);
+    let title;
+    let body;
+    let go;
+    if (sheet.kind === "wrong") {
+      title = "Something's wrong?";
+      body = "Paying pauses for everyone until " + payer + " fixes the bill and confirms it again. The channel is told.";
+      go = goButton("Tell " + payer, "ink");
+    } else {
+      const n = openLines(s).length;
+      title = n === 1 ? "1 line has nobody on it" : n + " lines have nobody on them";
+      body = "Split " + (n === 1 ? "it" : "them") + " evenly between everyone who claimed something, or go back and claim " + (n === 1 ? "it" : "them") + " first.";
+      go = goButton("Split and confirm", "seal");
+    }
+    return [
+      askHead(title),
+      el("p", { class: "sheet-body" }, body),
+      el("div", { class: "sheet-actions" }, [sheet.kind === "split" ? cancelButton("Back") : cancelButton(), go]),
+      el("p", { class: "sheet-msg", role: "status" }, sheet.msg || ""),
+    ];
+  }
+
+  // An ask is only good for the bill it was asked about: once that moves
+  // under it, the sheet closes rather than offer something no longer true.
+  function askStale(v) {
+    const s = v.s;
+    if (sheet.kind === "wrong") return s.status !== "confirmed";
+    if (sheet.kind === "sent") return s.status !== "confirmed" || leftOf(v, s.viewer) <= 0;
+    return s.status !== "draft" || openLines(s).length === 0;
+  }
+
+  const ASKS = ["wrong", "sent", "split"];
+
   function renderSheet(v) {
     const dialog = root.querySelector("dialog[data-sheet]");
     if (!dialog || !sheet) return;
+    if (ASKS.includes(sheet.kind) && askStale(v)) return closeSheet();
     if (sheet.kind === "line" && (editable(v.s) !== "all" || !v.s.items.some((i) => i.id === sheet.id))) return closeSheet();
     if (sheet.kind === "payer" && (editable(v.s) !== "all" || v.s.hasPayments)) return closeSheet();
     if (sheet.kind === "person" && !v.people.has(sheet.id)) return closeSheet();
@@ -1052,8 +1229,16 @@ export const CLIENT_SCRIPT = String.raw`
       sheet.form = lineForm(v.s.items.find((i) => i.id === sheet.id));
     }
     const key = JSON.stringify([sheet.kind, sheet.id, sheet.renaming || null, sheet.picked || null, sheet.msg || "", Array.from(armed), Array.from(busy),
-      v.s.items, v.s.participants, v.s.owing, v.s.result.shares, v.s.paid, v.s.status, editable(v.s)]);
-    const build = sheet.kind === "line" ? () => lineSheet(v, sheet.id) : sheet.kind === "payer" ? () => payerSheet(v) : () => personSheet(v, sheet.id);
+      v.s.items, v.s.participants, v.s.owing, v.s.result.shares, v.s.paid, v.s.status, editable(v.s), v.s.payments, stopped]);
+    const build = sheet.kind === "line"
+      ? () => lineSheet(v, sheet.id)
+      : sheet.kind === "payer"
+        ? () => payerSheet(v)
+        : sheet.kind === "sent"
+          ? () => sentSheet(v)
+          : ASKS.includes(sheet.kind)
+            ? () => askSheet(v)
+            : () => personSheet(v, sheet.id);
     keyedInto(dialog, key, () => el("div", { class: "sheet-in" }, build()));
   }
 
@@ -1075,6 +1260,8 @@ export const CLIENT_SCRIPT = String.raw`
     renderHero(v);
     renderMine(v);
     renderDrill(v);
+    renderPayments(v);
+    renderActions(v);
     renderSheet(v);
   }
 
@@ -1421,8 +1608,9 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
+  // True once the server took it.
   async function toggle(key, method, path, body) {
-    if (busy.has(key)) return;
+    if (busy.has(key)) return false;
     busy.add(key);
     render();
     const failure = await write(method, path, body);
@@ -1434,6 +1622,81 @@ export const CLIENT_SCRIPT = String.raw`
       else showNote(failure.message, true);
     }
     render();
+    return !failure;
+  }
+
+  async function deleteBill() {
+    const paid = state.payments.reduce((n, p) => n + p.cents, 0);
+    // The answer is not a bill to draw, so the page asks for itself again
+    // and the server says it is gone.
+    if (!(await toggle("delete", "DELETE", "", { paid: plain(paid) }))) return;
+    stopped = true;
+    clearInterval(timer);
+    location.reload();
+  }
+
+  async function undoPayment(button) {
+    const id = button.dataset.undo;
+    if (!(await toggle("undo:" + id, "DELETE", "/payment/" + encodeURIComponent(id)))) return;
+    showNote("Payment undone", false);
+    // The row went with the payment, the button included.
+    const next = root.querySelector("[data-payments] [data-undo]");
+    if (next) next.focus();
+  }
+
+  // Busy while the ask's answer is out, so a second tap never sends twice.
+  async function doAsk(path, method, body) {
+    const kind = sheet.kind;
+    if (busy.has(kind)) return null;
+    busy.add(kind);
+    sheet.msg = "";
+    render();
+    const failure = await write(method, path, body);
+    busy.delete(kind);
+    if (failure && sheet && sheet.kind === kind && !stopped) sheet.msg = failure.message;
+    render();
+    return failure;
+  }
+
+  async function runAsk() {
+    if (!sheet) return;
+    const kind = sheet.kind;
+    if (kind === "wrong") return doAsk("/reopen", "POST");
+    if (kind === "split") return doAsk("/confirm", "POST", { revision: state.revision, splitUnclaimed: true });
+  }
+
+  async function sendPayment(form) {
+    const msg = form.querySelector(".field-msg");
+    const amount = decimal(form.elements.amount.value);
+    if (amount === null || hundredths(amount) === 0) {
+      msg.textContent = "Enter the amount you sent, like 12.50.";
+      form.elements.amount.focus();
+      return;
+    }
+    if (busy.has("sent")) return;
+    busy.add("sent");
+    setBusy(form, true);
+    const left = leftOf(model(view()), state.viewer);
+    // One id per sheet, so a retry after a dropped answer finds the payment
+    // it already made instead of making a second.
+    const failure = await write("POST", "/payment", { id: sheet.id, amount, left: plain(left) });
+    busy.delete("sent");
+    if (failure) {
+      if (sheet && sheet.kind === "sent") sheet.msg = failure.message;
+      render();
+      return;
+    }
+    closeSheet();
+    showNote(money(hundredths(amount)) + " recorded", false);
+  }
+
+  function confirmBill() {
+    if (openLines(state).length > 0) return openSheet({ kind: "split" }, root.querySelector("[data-confirm]"));
+    return toggle("confirm", "POST", "/confirm", { revision: state.revision });
+  }
+
+  function newId() {
+    return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
   }
 
   async function savePayer() {
@@ -1483,6 +1746,18 @@ export const CLIENT_SCRIPT = String.raw`
       return render();
     }
     if (target.closest("[data-save-payer]")) return savePayer();
+    const ask = target.closest("[data-ask]");
+    if (ask) {
+      const kind = ask.dataset.ask;
+      return openSheet(kind === "sent" ? { kind, id: newId() } : { kind }, ask);
+    }
+    if (target.closest("[data-do]")) return runAsk();
+    if (target.closest("[data-delete-bill]")) return deleteBill();
+    const undo = target.closest("[data-undo]");
+    if (undo) return undoPayment(undo);
+    const confirm = target.closest("[data-confirm]");
+    if (confirm) return confirm.disabled ? null : confirmBill();
+    if (target.closest("[data-reopen]")) return toggle("reopen", "POST", "/reopen");
     const field = target.closest("[data-edit-field]");
     if (field) return startEdit(field.dataset.editField);
     const mode = target.closest("[data-tip-mode]");
@@ -1569,6 +1844,7 @@ export const CLIENT_SCRIPT = String.raw`
     else if (form.dataset.editLine || form.dataset.addLine !== undefined) submitLine(form);
     else if (form.dataset.guestForm !== undefined) addGuest(form);
     else if (form.dataset.rename) renameGuest(form);
+    else if (form.dataset.sentForm !== undefined) sendPayment(form);
   });
 
   root.addEventListener("input", (event) => {
@@ -1580,6 +1856,10 @@ export const CLIENT_SCRIPT = String.raw`
       msg.textContent = "";
     }
     if (form.dataset.field === "tip") tipPreview(view());
+    if (form.dataset.sentForm !== undefined && sheet) {
+      sheet.amount = form.elements.amount.value;
+      sheet.msg = "";
+    }
   });
 
   root.addEventListener("keydown", (event) => {

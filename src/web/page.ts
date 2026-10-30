@@ -594,6 +594,26 @@ button.tile:active { background: var(--fill); }
 }
 .pay .ic { width: 18px; height: 18px; }
 .pay-note { flex-basis: 100%; color: var(--muted); font-size: 15px; }
+/* Recording a payment is the person's own word, not a link out, so it is
+   inked rather than sealed and sits under the ways to pay. */
+.sent-row { margin-top: 10px; }
+.sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1.5px solid var(--ink);
+  border-radius: 23px;
+  background: var(--ink);
+  color: var(--card);
+  font-weight: 600;
+  cursor: pointer;
+}
+.sent .ic { width: 18px; height: 18px; stroke-width: 2.2; }
+.sent-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.sent-form .money-input { flex: 1; }
+.sent-form .money-input input, .sent-form .money-input span { font: 500 24px/1 var(--display); }
 .collect { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pie { width: 54px; height: 54px; margin-top: 12px; transform: rotate(-90deg); }
 .pie circle { fill: none; stroke-width: 6; }
@@ -629,6 +649,64 @@ button.tile:active { background: var(--fill); }
 .drill-row .ic { color: var(--muted); }
 .drill-row .stack .av { --s: 26px; }
 .drill-row .count { color: var(--muted); font-size: 15px; }
+/* What can be done to the bill as a whole. Plain rows like the drill card's,
+   so they read as quieter than paying, with Confirm the one loud thing. */
+.acts { margin-top: 14px; padding: 0 6px; }
+.view .acts { margin-top: 12px; }
+.confirm-area { padding: 14px 10px; border-bottom: 1px solid var(--rule); }
+.confirm-area:last-child { border-bottom: 0; }
+.confirm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 26px;
+  background: var(--seal);
+  color: var(--seal-ink);
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.confirm-btn .brush { font: 23px/1 var(--brush); }
+.confirm-btn:disabled { background: var(--fill); color: var(--muted); cursor: default; }
+.confirm-btn[aria-busy="true"] { cursor: progress; opacity: 0.75; }
+.why { margin-top: 10px; text-align: center; color: var(--warn); font-size: 15px; font-weight: 600; }
+.why.is-hint { color: var(--muted); font-weight: 400; }
+.act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.act:last-child { border-bottom: 0; }
+.act:active { background: var(--fill); }
+.act .ic { color: var(--muted); }
+.act .grow { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.act-sub { color: var(--muted); font-size: 15px; }
+.act.is-warn .ic { color: var(--warn); }
+.act.danger, .act.danger .ic { color: var(--seal); }
+.act[aria-busy="true"] { cursor: progress; opacity: 0.6; }
+
+.payments { margin-top: 12px; padding: 0 16px 4px; }
+.payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
+.payments ul { list-style: none; margin: 0; padding: 0; }
+.payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
+.payments li:last-child { border-bottom: 0; }
+.payments .av { --s: 30px; }
+.payments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payments .chip-btn { padding: 0 14px; font-size: 15px; }
+
 .back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -6px 0 6px -8px; padding: 0 8px; color: var(--muted); text-decoration: none; }
 
 dialog.sheet {
@@ -685,6 +763,10 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .chip-btn.danger.is-armed { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
 .chip-btn:disabled { opacity: 0.45; cursor: default; }
 .chip-btn[aria-busy="true"] { cursor: progress; }
+.sheet-body { margin: 0 0 10px; color: var(--muted); }
+.sheet-go { flex: 1; justify-content: center; min-height: 50px; border-radius: 25px; }
+.sheet-go.is-seal { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
+.sheet-go.is-ink { background: var(--ink); border-color: var(--ink); color: var(--card); }
 .sheet-msg { margin-top: 8px; color: var(--warn); font-size: 15px; }
 .sheet-msg:empty { display: none; }
 .picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 4px 0 8px; }
@@ -1135,14 +1217,28 @@ function pie(done: Cents, total: Cents): string {
     `${f > 0 ? `<circle class="done" cx="27" cy="27" r="22" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}"/>` : ""}</svg>`;
 }
 
-function payRow(s: BillState): string {
-  if (s.pay.length === 0) return "";
+// With no handle on file there is no link to offer, so the person is told to
+// pay the way they usually would and record it here after.
+function payRow(v: View): string {
+  const s = v.s;
+  if (s.pay.length === 0) {
+    return leftOf(v, s.viewer) > 0
+      ? `<div class="pay-row" data-pay><p class="pay-note">Pay ${escapeHtml(nameOf(v, s.payerId))} however you usually do.</p></div>`
+      : "";
+  }
   const links = s.pay.map((o) =>
     "url" in o
       ? `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`
       : `<p class="pay-note">${escapeHtml(o.instructions)}</p>`,
   );
   return `<div class="pay-row" data-pay>${links.join("")}</div>`;
+}
+
+// Only someone with something left to pay has anything to record. The
+// sheet it opens starts at all of it, and takes a smaller amount for part.
+function sentRow(v: View): string {
+  if (leftOf(v, v.s.viewer) <= 0) return "";
+  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I sent it</button></div>`;
 }
 
 function hero(v: View): string {
@@ -1178,7 +1274,8 @@ function hero(v: View): string {
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${forgiven ? "" : splitBar(parts)}
 ${partial ? `<p class="legend"><span>${icon("check")}<span class="money">${formatCents(o.paidCents)}</span> / <span class="money">${formatCents(o.owedCents)}</span></span></p>` : ""}
-${paid ? "" : payRow(s)}
+${paid ? "" : payRow(v)}
+${sentRow(v)}
 </section>`;
 }
 
@@ -1218,6 +1315,70 @@ function drill(v: View): string {
 </nav>`;
 }
 
+// Why the payer can't confirm yet, in their words, or null when they can.
+// The server refuses the same cases; this says so before the tap.
+function confirmBlock(s: BillState): string | null {
+  if (s.printedTotalCents === null) return "Enter the receipt total first.";
+  if (!s.reconciles.ok) return "Line items do not add up to total!";
+  if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+  return null;
+}
+
+function openLines(s: BillState): LineItem[] {
+  return s.items.filter((i) => i.claimedBy.length === 0);
+}
+
+function confirmArea(v: View): string {
+  const blocked = confirmBlock(v.s);
+  const open = openLines(v.s).length;
+  const why = blocked ?? (open === 0 ? "" : open === 1 ? "1 line has nobody on it." : `${open} lines have nobody on them.`);
+  return `<div class="confirm-area"><button type="button" class="confirm-btn" data-confirm${blocked ? " disabled" : ""}${why ? ' aria-describedby="confirm-why"' : ""}>` +
+    `<span class="brush" aria-hidden="true">定</span>Confirm</button>` +
+    `${why ? `<p class="why${blocked ? "" : " is-hint"}" id="confirm-why">${escapeHtml(why)}</p>` : ""}</div>`;
+}
+
+function act(attrs: string, iconName: string, title: string, sub: string | null, cls = ""): string {
+  return `<button type="button" class="act${cls ? ` ${cls}` : ""}" ${attrs}>${icon(iconName)}<span class="grow"><span>${escapeHtml(title)}</span>` +
+    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span></button>`;
+}
+
+// The payer confirms, reopens to fix, and deletes. Anyone else on a
+// confirmed bill can say something is wrong, which reopens it for the payer
+// to fix. Nothing here for someone who is only claiming on a draft.
+function actions(v: View): string {
+  const s = v.s;
+  const parts: string[] = [];
+  if (s.viewerIsPayer) {
+    if (v.bill.status === "draft") parts.push(confirmArea(v));
+    if (v.bill.status === "confirmed") parts.push(act("data-reopen", "receipt", "Edit the bill", "Paying pauses until you confirm again."));
+    parts.push(act("data-delete-bill", "trash", "Delete this bill", null, "danger"));
+  } else if (v.bill.status === "confirmed" && v.onBill) {
+    parts.push(
+      act('data-ask="wrong" aria-haspopup="dialog"', "warn", "Something's wrong", `Paying pauses until ${nameOf(v, s.payerId)} fixes it.`, "is-warn"),
+    );
+  }
+  if (parts.length === 0) return "";
+  return `<section class="card acts needs-js" data-actions aria-label="Bill actions">${parts.join("")}</section>`;
+}
+
+function paymentRows(v: View): string {
+  if (v.s.payments.length === 0) return "";
+  const rows = v.s.payments.map((p) => {
+    const name = escapeHtml(nameOf(v, p.participant));
+    return `<li>${av(v, p.participant)}<span class="name">${name}</span><span class="money">${formatCents(p.cents)}</span>` +
+      `<button type="button" class="chip-btn" data-undo="${escapeHtml(p.id)}" ` +
+      `aria-label="Undo ${name}'s ${formatCents(p.cents)} payment">Undo</button></li>`;
+  });
+  return `<h2>Payments</h2><ul>${rows.join("")}</ul>`;
+}
+
+// Always drawn for the payer of a confirmed bill, hidden while empty, so the
+// first payment has somewhere to appear without a reload.
+function payments(v: View): string {
+  if (!v.s.viewerIsPayer || v.bill.status !== "confirmed") return "";
+  return `<section class="card payments needs-js" data-payments aria-label="Payments"${v.s.payments.length === 0 ? " hidden" : ""}>${paymentRows(v)}</section>`;
+}
+
 function back(): string {
   return `<a class="back needs-js" href="#" data-back>${icon("back")}<span class="sr">Back</span></a>`;
 }
@@ -1227,11 +1388,13 @@ function body(v: View): string {
     return `${v.onBill ? "" : notOnBill(v)}
 ${receipt(v)}
 ${people(v)}
+${actions(v)}
 ${bar(v)}`;
   }
   return `<div class="view is-active" data-view="home">
-${v.onBill ? `${hero(v)}\n${mine(v)}` : notOnBill(v)}
+${v.onBill ? `${hero(v)}\n${payments(v)}\n${mine(v)}` : notOnBill(v)}
 ${drill(v)}
+${actions(v)}
 </div>
 <div class="view" data-view="receipt" id="receipt">${back()}
 ${receipt(v)}

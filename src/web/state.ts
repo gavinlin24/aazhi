@@ -1,6 +1,7 @@
 import { getSettled, getShares, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
 import { getPaymentHandles, type PaymentHandle } from "../db/handles";
-import { billName, clip, MAX_NOTE } from "../discord/handlers/owe";
+import { listSettlements, type Settlement } from "../db/settlements";
+import { billName, clip, MAX_NOTE } from "../discord/notices";
 import { reconciles } from "../extract/claude";
 import { groupByDebtor, paidByDebtor } from "../money/debtors";
 import { splitBill } from "../money/split";
@@ -41,10 +42,16 @@ export interface BillState {
   // payer directly), and what they have paid towards it themselves. Worked
   // out here so the page and its script never redo the debtor rule.
   owing: Record<ParticipantId, { owedCents: Cents; paidCents: Cents }>;
-  // The viewer's ways to pay what they have left, the same links Pay my share
-  // offers in Discord. Empty unless the bill is confirmed and they owe.
+  // The viewer's ways to pay what they have left. Empty unless the bill is
+  // confirmed and they owe.
   pay: PayOption[];
+  // Every payment recorded on the bill, newest first, so the payer can take
+  // one back or see what deleting the bill would throw away. Only the payer's
+  // view carries them: they were paid to the payer.
+  payments: Payment[];
 }
+
+export type Payment = Pick<Settlement, "id" | "participant" | "cents" | "recordedAt">;
 
 // A guest also carries the two paid marks. paidToPayer: the guest paid the
 // payer directly, so their share is off the adder's total. paidToHost: the
@@ -61,11 +68,13 @@ export interface GuestsPaid {
 
 export type PayOption = { method: PayMethod; name: string } & ({ url: string } | { instructions: string });
 
-// What the page needs beyond the server's state, read only for a confirmed
-// bill: the payments, for what is left, and the payer's handles, for links.
+// What the page needs beyond the server's state. For a confirmed bill: the
+// payments, for what is left, and the payer's handles, for links. For the
+// payer: the payments one by one.
 export interface PayExtras {
   settled?: Settled[];
   handles?: PaymentHandle[];
+  payments?: Settlement[];
 }
 
 // Everything renderPage takes besides the bill, in one bag.
@@ -80,7 +89,7 @@ export function editableFor(bill: BillRow, participants: Pick<Participant, "id">
   return participants.some((p) => p.id === viewer) ? "self" : "none";
 }
 
-// The same sums the Discord math and the settle check use: a guest's payment
+// The same sums the payment check uses: a guest's payment
 // to the payer comes off what their debtor is asked for instead of counting
 // as the debtor's own payment.
 function owingOf(shares: Share[], participants: Participant[], payer: ParticipantId, settled: Settled[]): BillState["owing"] {
@@ -93,8 +102,8 @@ function owingOf(shares: Share[], participants: Participant[], payer: Participan
   return owing;
 }
 
-// What is left, not the frozen amount, as Pay my share does: a link for the
-// full share after a partial payment would ask the person to pay twice.
+// What is left, not the frozen amount: a link for the full share after a
+// partial payment would ask the person to pay twice.
 function payOptions(bill: BillRow, handles: PaymentHandle[], leftCents: Cents): PayOption[] {
   if (leftCents <= 0) return [];
   const note = clip(billName(bill), MAX_NOTE);
@@ -143,6 +152,10 @@ export function billState(
     result,
     owing,
     pay,
+    payments:
+      viewer === bill.payerId
+        ? (payExtras.payments ?? []).map(({ id, participant, cents, recordedAt }) => ({ id, participant, cents, recordedAt }))
+        : [],
   };
 }
 
@@ -166,23 +179,32 @@ export async function pageResult(db: D1Database, snapshot: BillSnapshot): Promis
   return frozenResult(split, await getShares(db, snapshot.bill.id), snapshot.bill.payerId);
 }
 
-// Payments and handles are reads of their own for the same reason, and only
-// matter once the bill is confirmed: nobody pays a draft.
-export async function payExtrasOf(db: D1Database, bill: BillRow): Promise<PayExtras> {
-  if (bill.status !== "confirmed") return {};
-  const [settled, handles] = await Promise.all([getSettled(db, bill.id), getPaymentHandles(db, bill.payerId)]);
-  return { settled, handles };
+// Payments and handles are reads of their own for the same reason. Totals and
+// handles only matter once the bill is confirmed: nobody pays a draft. The
+// payer's list of payments matters on a reopened draft too, since deleting
+// it would throw them away.
+async function payExtrasOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<PayExtras> {
+  const { bill, hasPayments } = snapshot;
+  const [payments, confirmed] = await Promise.all([
+    viewer === bill.payerId && hasPayments ? listSettlements(db, bill.id) : undefined,
+    bill.status === "confirmed" ? Promise.all([getSettled(db, bill.id), getPaymentHandles(db, bill.payerId)]) : undefined,
+  ]);
+  return { ...(confirmed ? { settled: confirmed[0], handles: confirmed[1] } : {}), ...(payments ? { payments } : {}) };
 }
 
 // Everything the page is rendered from besides the bill's own rows.
-export async function pageData(db: D1Database, snapshot: BillSnapshot): Promise<{ result: SplitResult; extras: StateExtras }> {
-  const { bill, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
-  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, bill)]);
+export async function pageData(
+  db: D1Database,
+  snapshot: BillSnapshot,
+  viewer: ParticipantId,
+): Promise<{ result: SplitResult; extras: StateExtras }> {
+  const { hasPayments, paid, paidToPayer, paidToHost } = snapshot;
+  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
   return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, ...pay } };
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
   const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost } = snapshot;
-  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, bill)]);
+  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
   return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay);
 }

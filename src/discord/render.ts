@@ -127,29 +127,16 @@ export function groupName(group: DebtorGroup, names: Map<string, string>): strin
   return group.guests.length === 0 ? own : `${own}, including ${and(group.guests.map((g) => names.get(g.participant)!))}`;
 }
 
-function openButton(bill: BillRow, style: ButtonStyle.Primary | ButtonStyle.Secondary = ButtonStyle.Primary): APIButtonComponent {
-  return { type: ComponentType.Button, style, label: "Open the split", custom_id: `open:${bill.id}` };
+// The bill message is a notice: everything a bill needs is done on the page,
+// so this is its one way in.
+function openButton(bill: BillRow): APIButtonComponent {
+  return { type: ComponentType.Button, style: ButtonStyle.Primary, label: "Open the split", custom_id: `open:${bill.id}` };
 }
 
-// Like Confirm and Reopen, everyone sees it and the handler refuses anyone
-// but the payer. It only asks first; nothing is deleted from this tap.
-function deleteButton(bill: BillRow): APIButtonComponent {
-  return { type: ComponentType.Button, style: ButtonStyle.Danger, label: "Delete", custom_id: `delete:${bill.id}` };
-}
-
-function components(bill: BillRow, canConfirm: boolean): APIActionRowComponent<APIComponentInMessageActionRow>[] {
-  const row: APIButtonComponent[] = [openButton(bill)];
-  // The revision rides along so a Confirm tapped on a stale render is refused.
-  if (canConfirm) {
-    row.push({
-      type: ComponentType.Button,
-      style: ButtonStyle.Success,
-      label: "Confirm",
-      custom_id: `confirm:${bill.id}:${bill.revision}`,
-    });
-  }
-  row.push(deleteButton(bill));
-  const rows: APIActionRowComponent<APIComponentInMessageActionRow>[] = [{ type: ComponentType.ActionRow, components: row }];
+function components(bill: BillRow): APIActionRowComponent<APIComponentInMessageActionRow>[] {
+  const rows: APIActionRowComponent<APIComponentInMessageActionRow>[] = [
+    { type: ComponentType.ActionRow, components: [openButton(bill)] },
+  ];
   // Lets the payer put people on the roster who have not tapped, so one person
   // can assign the whole bill at the table. Everyone sees it (a message cannot
   // hide a component from some viewers), so the handler refuses non-payers.
@@ -231,9 +218,8 @@ function groupAmount(group: DebtorGroup, names: Map<string, string>): string {
 // The owe card. Amounts are the rows frozen at confirm, never a recomputation
 // from the lines. One row per person who owes the payer, so the list is
 // exactly what the payer is collecting: the payer's own share is owed to
-// nobody. What each amount covers is in Show my math and on the page. Its
-// buttons are shared by everyone who can see the message, so each one answers
-// the tapper privately about their own share.
+// nobody. What each amount covers, paying it, and saying something is wrong
+// are all on the page.
 function oweCard(
   bill: BillRow,
   result: SplitResult,
@@ -263,40 +249,10 @@ function oweCard(
   const budget = Math.min(LIMITS.description, LIMITS.embed - embedLength(embed)) - head.length;
   embed.description = head + fitLines(rows, budget, (n) => `and ${n} more in Open the split`);
 
-  const button = (
-    style: ButtonStyle.Success | ButtonStyle.Primary | ButtonStyle.Secondary,
-    label: string,
-    prefix: string,
-  ): APIButtonComponent => ({
-    type: ComponentType.Button,
-    style,
-    label,
-    custom_id: `${prefix}:${bill.id}`,
-  });
   return {
     content: "",
     embeds: [embed],
-    components: [
-      {
-        type: ComponentType.ActionRow,
-        components: [
-          button(ButtonStyle.Success, "Pay my share", "pay"),
-          button(ButtonStyle.Primary, "I paid", "paid"),
-          button(ButtonStyle.Secondary, "Show my math", "math"),
-          button(ButtonStyle.Secondary, "That's not mine", "notmine"),
-        ],
-      },
-      // Undo, Reopen and Delete are the payer's, refused for anyone else like Confirm.
-      {
-        type: ComponentType.ActionRow,
-        components: [
-          openButton(bill, ButtonStyle.Secondary),
-          button(ButtonStyle.Secondary, "Undo a payment", "undo"),
-          button(ButtonStyle.Secondary, "Reopen", "reopen"),
-          deleteButton(bill),
-        ],
-      },
-    ],
+    components: components(bill),
     allowed_mentions: { parse: [] },
   };
 }
@@ -329,7 +285,7 @@ export function renderBill(
         footer: { text: "Draft" },
       },
     ],
-    components: components(bill, summary.ok),
+    components: components(bill),
     allowed_mentions: { parse: [] },
   };
 }
@@ -338,9 +294,6 @@ export async function loadBillMessage(
   db: D1Database,
   billId: string,
 ): Promise<{ bill: BillRow; data: APIInteractionResponseCallbackData } | null> {
-  // The bill (and so the revision on Confirm) is read before the items, so a
-  // render can only ever pair newer items with an older revision, which the
-  // confirm check refuses, never the other way round.
   const bill = await getBill(db, billId);
   if (!bill) return null;
   const [input, participants, frozen] = await Promise.all([

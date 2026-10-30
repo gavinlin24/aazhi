@@ -324,12 +324,7 @@ describe("/split", () => {
     expect(text).toMatch(/Total \$273\.82/);
     expect(text).toMatch(/Gavin paid · 1 person/);
     expect(text).toMatch(/\$273\.82 unclaimed/);
-    expect(customIds(post!.body)).toEqual([
-      `open:${bill!.id}`,
-      `confirm:${bill!.id}:${bill!.revision}`,
-      `delete:${bill!.id}`,
-      `roster:${bill!.id}`,
-    ]);
+    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `roster:${bill!.id}`]);
     expect(JSON.stringify(post!.body.components)).not.toMatch(/pay|settle/i);
     expect(post!.body.allowed_mentions).toEqual({ parse: [] });
     // Nothing else to edit: there was no older draft here.
@@ -410,7 +405,7 @@ describe("/split", () => {
     expect(await openDraftInChannel(db, "chan-1")).toBeNull();
   });
 
-  it("tells the payer what it misread instead of offering Confirm", async () => {
+  it("tells the payer what it misread", async () => {
     anthropic = () =>
       toolUse(
         saigonToolInput({
@@ -428,7 +423,7 @@ describe("/split", () => {
     expect(bill!.status).toBe("draft");
     const [post] = originalEdits();
     const text = shown(post!.body);
-    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
+    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `roster:${bill!.id}`]);
     expect(text).toContain("Receipt total $273.82");
     expect(text).toContain("Line items do not add up to total!");
   });
@@ -440,7 +435,7 @@ describe("/split", () => {
 
     const bill = await openDraftInChannel(db, "chan-1");
     const [post] = originalEdits();
-    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `delete:${bill!.id}`, `roster:${bill!.id}`]);
+    expect(customIds(post!.body)).toEqual([`open:${bill!.id}`, `roster:${bill!.id}`]);
     expect(shown(post!.body)).toMatch(/Couldn't read the receipt total!/);
   });
 
