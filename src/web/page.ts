@@ -308,7 +308,8 @@ button.row:active { background: var(--fill); }
 .av.is-viewer { box-shadow: 0 0 0 1.5px var(--card), 0 0 0 3px var(--ink); }
 .av.is-guest { border: 1px dashed var(--av-ink); }
 
-.add-line { padding: 8px var(--end) 4px 58px; }
+/* Spans from the ticks to the brushes, the full width a line can take. */
+.add-line { padding: 8px 14px 4px 13px; }
 .add-row {
   display: flex;
   align-items: center;
@@ -416,8 +417,7 @@ button.row:active { background: var(--fill); }
    the gutters the figures leave for the ticks and the brushes. */
 .trow.is-editing { flex-wrap: wrap; margin-left: -44px; margin-right: calc(14px - var(--end)); }
 
-/* Its fields start on the line names and end on the figures, like the box it
-   opens from. */
+/* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
