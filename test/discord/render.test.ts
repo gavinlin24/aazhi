@@ -44,7 +44,7 @@ function participantsOf(input: BillInput): Participant[] {
   }));
 }
 
-// Tea and water unclaimed: the spec's mid-dinner draft.
+// Tea and water unclaimed: the spec's half-claimed draft.
 const draftState = withUnclaimed(SAIGON, ["tea", "water"]);
 const items = draftState.items;
 const participants = participantsOf(draftState);
@@ -232,7 +232,7 @@ describe("renderBill", () => {
     ]);
   });
 
-  it("offers the payer a picker to add people who were at dinner, on a row of its own", () => {
+  it("offers the payer a picker to add people who were there, on a row of its own", () => {
     const data = render(bill, draftState);
     const rows = data.components as { type: number; components: Button[] }[];
 
@@ -241,7 +241,7 @@ describe("renderBill", () => {
       {
         type: 5,
         custom_id: "roster:bill-1",
-        placeholder: expect.stringMatching(/at dinner/i),
+        placeholder: expect.stringMatching(/were there/i),
         min_values: 1,
         max_values: 25,
       },

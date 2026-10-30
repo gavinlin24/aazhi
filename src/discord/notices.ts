@@ -22,7 +22,7 @@ export function clip(text: string, max: number): string {
 // Clipped before anything escapes it, so a cut never strands a backslash.
 export function billName(bill: BillRow): string {
   const date = formatDate(bill.billDate);
-  return `${clip(bill.place?.trim() || "dinner", MAX_BILL_NAME)}${date ? `, ${date}` : ""}`;
+  return `${clip(bill.place?.trim() || "the bill", MAX_BILL_NAME)}${date ? `, ${date}` : ""}`;
 }
 
 export function nameOf(participants: Participant[], id: string): string {

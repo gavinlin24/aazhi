@@ -64,13 +64,13 @@ type Grant = { billId: string; participantId: ParticipantId };
 const LINK_REFUSED =
   "This link has expired or isn't yours. Go back to the bill in Discord and tap Open the split for a fresh one.";
 const NOT_FOUND = "This bill doesn't exist any more.";
-const NOT_ON_BILL = "You're not on this bill. If you were at dinner, tap Open the split on the bill in Discord to join it.";
+const NOT_ON_BILL = "You're not on this bill. If you were there, tap Open the split on the bill in Discord to join it.";
 const GONE: Partial<Record<BillRow["status"], string>> = {
   superseded: "This split was replaced by a newer one. Open the newer bill message in Discord and tap Open the split there.",
   deleted: "This split was deleted, so there's nothing left to change on it.",
 };
 
-// $999,999.99. Far past any dinner, and it keeps every sum of lines well
+// $999,999.99. Far past any bill, and it keeps every sum of lines well
 // inside the range where integer arithmetic stays exact.
 const MAX_CENTS = 99_999_999;
 const MAX_LABEL = 120;
