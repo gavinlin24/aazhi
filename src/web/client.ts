@@ -418,12 +418,10 @@ export const CLIENT_SCRIPT = String.raw`
     }
   }
 
-  // Tax rates are rarely whole, so tax shows a decimal. A tip is picked as a
-  // whole percent and shows as one.
-  function percentOf(part, subtotal, decimals) {
-    if (subtotal <= 0) return "";
-    const scale = Math.pow(10, decimals || 0);
-    return (Math.round((part * 100 * scale) / subtotal) / scale).toFixed(decimals || 0) + "%";
+  // "Tax (8.2%)": the share of the subtotal, to one decimal, read as part of
+  // the label.
+  function withPercent(label, part, subtotal) {
+    return subtotal > 0 ? label + " (" + ((part * 100) / subtotal).toFixed(1) + "%)" : label;
   }
 
   function receiptMark(s) {
@@ -479,23 +477,22 @@ export const CLIENT_SCRIPT = String.raw`
     const entries = [];
     const row = (id, key, cls, build) => entries.push({ id, key: JSON.stringify(key), build: () => el("div", { class: "trow" + (cls ? " " + cls : "") }, build()) });
     const field = (name, key, cents, label, opts) => {
-      const { extra, cls, pct } = opts || {};
+      const { extra, cls, shown } = opts || {};
       if (editing && editing.kind === "field" && editing.field === name) {
         entries.push({ id: name, key: "editing:" + tipMode, build: () => el("div", { class: "trow is-editing", "data-field-row": name }, fieldForm(s, name)) });
         return;
       }
       entries.push({
         id: name,
-        key: JSON.stringify([cents, mode, extra ? extra.key : null, cls || "", pct || ""]),
+        key: JSON.stringify([cents, mode, shown || "", extra ? extra.key : null, cls || ""]),
         build: () => el("div", { class: "trow" + (cls ? " " + cls : ""), "data-field-row": name }, [
-          el("dt", null, [label].concat(extra ? extra.nodes() : [])),
-          pct ? el("dd", { class: "pct" }, pct) : null,
+          el("dt", null, [shown || label].concat(extra ? extra.nodes() : [])),
           el("dd", null, amount(mode, name, key, cents, name === "printedTotal" ? "Printed total" : label)),
         ]),
       });
     };
     row("subtotal", [r.billSubtotalCents], "", () => [el("dt", null, "Subtotal"), el("dd", { "data-total": "subtotal" }, money(r.billSubtotalCents))]);
-    field("tax", "tax", s.taxCents, "Tax", { pct: percentOf(s.taxCents, r.billSubtotalCents, 1) });
+    field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents) });
     if (s.viewerIsPayer && s.status === "draft") {
       const cls = "receipt-row " + (s.reconciles.ok ? "is-ok" : "is-off");
       field("printedTotal", "printed", s.printedTotalCents, "Receipt",
@@ -508,7 +505,7 @@ export const CLIENT_SCRIPT = String.raw`
         return built;
       };
     }
-    field("tip", "tip", s.tipCents, "Tip", { pct: percentOf(s.tipCents, r.billSubtotalCents) });
+    field("tip", "tip", s.tipCents, "Tip", { shown: withPercent("Tip", s.tipCents, r.billSubtotalCents) });
     row("total", [r.distributableCents], "grand", () => [el("dt", null, "Total"), el("dd", { "data-total": "total" }, money(r.distributableCents))]);
     if (r.unclaimedCents !== 0) {
       row("unclaimed", [r.unclaimedCents], "short", () => [

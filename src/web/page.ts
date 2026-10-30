@@ -332,20 +332,10 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-/* Label, percent, amount. Each row is a subgrid of the list, so percents
-   line up in one column whatever the width of the amounts beside them. A
-   row with a percent gives its term a second dd. */
-.totals {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  column-gap: 12px;
-  margin: 8px 0 0;
-  padding: 0 var(--edge) 10px;
-}
-.trow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: 40px; }
-.trow dt { grid-column: 1; display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
-.trow dd { grid-column: 3; justify-self: end; margin: 0; white-space: nowrap; }
-.trow dd.pct { grid-column: 2; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.totals { margin: 8px 0 0; padding: 0 var(--edge) 10px; }
+.trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
+.trow dd { margin: 0; white-space: nowrap; }
 /* Subtotal plus tax, so it sits under them as their sum. */
 .receipt-row { margin-top: 4px; border-top: 1px solid var(--rule); }
 .receipt-row dt { align-items: center; }
@@ -419,7 +409,7 @@ button.row:active { background: var(--fill); }
 .field-msg { flex-basis: 100%; color: var(--warn); font-size: 15px; }
 .field-msg:empty { display: none; }
 .field-msg.is-hint { color: var(--muted); }
-.trow.is-editing { display: flex; flex-wrap: wrap; }
+.trow.is-editing { flex-wrap: wrap; }
 
 /* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
@@ -976,16 +966,10 @@ function itemRow(v: View, item: LineItem): string {
   return `<li class="${classes.filter(Boolean).join(" ")}" data-item="${id}"><div class="row">${CHECK_TICK}${inner}</div></li>`;
 }
 
-// Tax rates are rarely whole, so tax shows a decimal. A tip is picked as a
-// whole percent and shows as one.
-function percentOf(part: Cents, subtotal: Cents, decimals = 0): string {
-  if (subtotal <= 0) return "";
-  const scale = 10 ** decimals;
-  return `${(Math.round((part * 100 * scale) / subtotal) / scale).toFixed(decimals)}%`;
-}
-
-function pctCell(pct: string): string {
-  return pct ? `<dd class="pct">${pct}</dd>` : "";
+// "Tax (8.2%)": the share of the subtotal, to one decimal, read as part of
+// the label.
+function withPercent(label: string, part: Cents, subtotal: Cents): string {
+  return subtotal > 0 ? `${label} (${((part * 100) / subtotal).toFixed(1)}%)` : label;
 }
 
 function receiptMark(s: BillState): string {
@@ -1008,7 +992,7 @@ function totals(v: View): string {
   const r = s.result;
   const rows = [
     `<div class="trow"><dt>Subtotal</dt><dd data-total="subtotal">${formatCents(r.billSubtotalCents)}</dd></div>`,
-    `<div class="trow" data-field-row="tax"><dt>Tax</dt>${pctCell(percentOf(s.taxCents, r.billSubtotalCents, 1))}<dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
+    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   ];
   // Between tax and tip, because the printed total is what the restaurant
   // charged before anyone added a tip: it reads as the sum of the two above.
@@ -1019,7 +1003,7 @@ function totals(v: View): string {
     );
   }
   rows.push(
-    `<div class="trow" data-field-row="tip"><dt>Tip</dt>${pctCell(percentOf(s.tipCents, r.billSubtotalCents))}<dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
+    `<div class="trow" data-field-row="tip"><dt>${withPercent("Tip", s.tipCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {
