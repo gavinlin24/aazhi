@@ -82,6 +82,16 @@ export const CLIENT_SCRIPT = String.raw`
     return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
   }
 
+  // A line's price, where a leading minus (a hyphen or a true minus sign)
+  // means money off. Zero stays unsigned, since the server has no "-0".
+  function linePrice(text) {
+    const trimmed = text.trim();
+    const off = /^[-−]/.test(trimmed);
+    const value = decimal(off ? trimmed.slice(1) : trimmed);
+    if (value === null) return null;
+    return off && hundredths(value) !== 0 ? "-" + value : value;
+  }
+
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
     for (const name in attrs || {}) {
@@ -975,25 +985,22 @@ export const CLIENT_SCRIPT = String.raw`
 
   function lineForm(item) {
     const n = Date.now();
-    const off = item ? item.cents < 0 : false;
     const label = el("input", { id: "line-name-" + n, class: "text-input", name: "label", maxlength: MAX_LABEL, autocomplete: "off", enterkeyhint: "next", "aria-label": "Name", placeholder: item ? null : "Name" });
     const price = el("input", { id: "line-price-" + n, name: "price", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-label": "Price", placeholder: "0.00" });
     if (item) {
       label.value = item.label;
-      price.value = plain(Math.abs(item.cents));
+      price.value = plain(item.cents);
     }
     const form = el("form", { class: "line-form", novalidate: true }, [
       label,
-      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, off ? "−$" : "$"), price]),
+      el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), price]),
       el("p", { class: "field-msg", role: "status" }),
       el("div", { class: "actions" }, [
-        el("button", { type: "button", class: "icon-btn sign", "data-sign": true, "aria-pressed": String(off), "aria-label": "Money off" }, icon("minus")),
         item ? el("button", { type: "button", class: "icon-btn danger", "data-delete-line": item.id, "aria-label": "Delete line" }, icon("trash")) : null,
         item ? null : el("button", { type: "button", class: "icon-btn", "data-cancel": true, "aria-label": "Cancel" }, icon("close")),
         el("button", { type: "submit", class: "icon-btn go", "aria-label": item ? "Save" : "Add line" }, icon("check")),
       ]),
     ]);
-    form._off = off;
     if (item) form.dataset.editLine = item.id;
     else form.dataset.addLine = "";
     return form;
@@ -1216,13 +1223,13 @@ export const CLIENT_SCRIPT = String.raw`
       form.elements.label.focus();
       return null;
     }
-    const price = decimal(form.elements.price.value);
+    const price = linePrice(form.elements.price.value);
     if (price === null) {
-      msg.textContent = "Enter the price like 12.50.";
+      msg.textContent = "Enter the price like 12.50, or -5.00 for money off.";
       form.elements.price.focus();
       return null;
     }
-    return { label, price: form._off && hundredths(price) !== 0 ? "-" + price : price };
+    return { label, price };
   }
 
   function setBusy(form, value) {
@@ -1267,13 +1274,6 @@ export const CLIENT_SCRIPT = String.raw`
     setBusy(form, false);
     if (failure) form.querySelector(".field-msg").textContent = failure.message;
     else closeSheet();
-  }
-
-  function toggleSign(button) {
-    const form = button.closest("form");
-    form._off = !form._off;
-    button.setAttribute("aria-pressed", String(form._off));
-    form.querySelector(".money-input span").textContent = form._off ? "−$" : "$";
   }
 
   function startEdit(field) {
@@ -1487,7 +1487,6 @@ export const CLIENT_SCRIPT = String.raw`
     if (field) return startEdit(field.dataset.editField);
     const mode = target.closest("[data-tip-mode]");
     if (mode) return setTipMode(mode.dataset.tipMode);
-    if (target.closest("[data-sign]")) return toggleSign(target.closest("[data-sign]"));
     const del = target.closest("[data-delete-line]");
     if (del) return deleteLine(del);
     if (target.closest("[data-add-open]")) {

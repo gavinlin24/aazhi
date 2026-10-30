@@ -416,7 +416,6 @@ button.row:active { background: var(--fill); }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
 .line-form .field-msg { grid-column: 1 / -1; }
-.sign { width: 44px; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
 .tile {
@@ -714,7 +713,6 @@ dialog.sheet::backdrop { background: var(--scrim); }
 const ICONS: Record<string, string> = {
   check: '<path d="M5 12.5l4.3 4.3L19 7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
-  minus: '<path d="M5 12h14"/>',
   arrow: '<path d="M4 12h15M14 6.5l5.5 5.5-5.5 5.5"/>',
   out: '<path d="M7 17L17 7M9 7h8v8"/>',
   chev: '<path d="M9.5 6l6 6-6 6"/>',
