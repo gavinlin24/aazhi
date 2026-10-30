@@ -501,10 +501,9 @@ button.tile:active { background: var(--fill); }
   box-shadow: 0 -6px 20px rgba(60, 40, 10, 0.06);
 }
 /* Bottom-aligned so the arrow and face sit on the amount's line, under its
-   caption, not centred on the two together. The left padding puts the
-   amount on the receipt's tick circles: card border, row padding, and half
-   the gap between a 26px tick and its 44px column. */
-.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; padding-left: 14px; }
+   caption, not centred on the two together. Its width and gutters match the
+   page's, so the caption, amount and claim chips start on the card's edge. */
+.bar-in { display: flex; align-items: flex-end; gap: 10px; max-width: 448px; min-height: 52px; margin: 0 auto; }
 /* Who a tap on a line claims for, one tap to switch. It shows only when there
    is more than one answer: you and the guests you brought. */
 /* The padding gives a focused chip's ring room inside the scroller, which
