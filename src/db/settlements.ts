@@ -194,25 +194,26 @@ export async function listSettlements(db: D1Database, billId: string): Promise<S
   return results.map(toSettlement);
 }
 
-// Only on a confirmed bill, like recording: a reopened bill's payments are
-// what its re-confirm reports against, so they hold still until then. A
-// settlement's bill and person never change, so reading them first is safe.
-export async function undoSettlement(db: D1Database, settlementId: string): Promise<void> {
-  const settlement = await getSettlement(db, settlementId);
-  if (!settlement) throw new SettlementGoneError(settlementId);
-  const [removed] = await db.batch([
+// Paid is yes or no, so taking it back removes everything the person paid on
+// the bill, a part payment recorded before that rule included. Only on a
+// confirmed bill, like recording: a reopened bill's payments are what its
+// re-confirm reports against, so they hold still until then. Resolves to the
+// cents taken back.
+export async function undoPaid(db: D1Database, billId: string, participantId: ParticipantId): Promise<Cents> {
+  const [removed] = await db.batch<{ cents: number }>([
     db
       .prepare(
         `DELETE FROM settlements
-         WHERE id = ?1 AND EXISTS (SELECT 1 FROM bills WHERE id = ?2 AND status = 'confirmed')
-         RETURNING id`,
+         WHERE bill_id = ?1 AND participant_id = ?2 AND EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND status = 'confirmed')
+         RETURNING cents`,
       )
-      .bind(settlementId, settlement.billId),
-    settledAtStatement(db, settlement.billId, settlement.participant, new Date().toISOString()),
+      .bind(billId, participantId),
+    settledAtStatement(db, billId, participantId, new Date().toISOString()),
   ]);
-  if (removed!.results.length === 1) return;
-  if (!(await getSettlement(db, settlementId))) throw new SettlementGoneError(settlementId);
-  throw new BillNotConfirmedError(settlement.billId);
+  if (removed!.results.length > 0) return removed!.results.reduce((sum, r) => sum + r.cents, 0);
+  const left = await db.prepare("SELECT 1 FROM settlements WHERE bill_id = ? AND participant_id = ?").bind(billId, participantId).first();
+  if (!left) throw new SettlementGoneError(`${billId}/${participantId}`);
+  throw new BillNotConfirmedError(billId);
 }
 
 // Everyone on the bill who answers for a share, cleared or not, but the payer:
@@ -297,9 +298,7 @@ const GUEST_PAID = "EXISTS (SELECT 1 FROM settlements WHERE bill_id = ?1 AND par
 // The payer's mark: the guest paid the payer directly. It is a payment like
 // any other, recorded against the guest for their whole frozen share, so it
 // comes off what the member who added them owes and the caller tells the
-// channel. A guest's share is paid directly whole or not at all; part of it
-// goes through the member, who records it with I paid. Unmarking takes the
-// guest's payment back. `cents` is the payment made or taken back; null means
+// channel. Unmarking takes the guest's payment back. `cents` is the payment made or taken back; null means
 // the mark already said that.
 export async function setGuestPaidToPayer(
   db: D1Database,

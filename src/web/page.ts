@@ -38,6 +38,17 @@ function grain(rgb: string, alpha: string): string {
   return `url("data:image/svg+xml,${svg.replace(/"/g, "'").replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
 }
 
+// A mask that lets most of the seal through and drops it in fine flecks, the
+// way a hand stamp never inks evenly.
+function speckle(): string {
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'>" +
+    "<filter id='s'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/>" +
+    "<feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.2 1.95'/></filter>" +
+    "<rect width='100%' height='100%' filter='url(%23s)'/></svg>";
+  return `url("data:image/svg+xml,${svg.replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
+}
+
 // Ink & Paper. Every pair that carries meaning was checked against WCAG: 4.5:1
 // for text, 3:1 for the tick rings and seals. The avatar hues are mineral
 // pigments, each a wash with its own ink, so an initial always reads.
@@ -65,6 +76,7 @@ const STYLES = `${FONT_FACES}
   --tip: #d9cdb6;
   --scrim: rgba(29, 27, 24, 0.36);
   --grain: ${grain(".3", ".07")};
+  --speckle: ${speckle()};
   --serif: "Iowan Old Style", "New York", ui-serif, "Noto Serif", "Source Serif Pro", Georgia, serif;
   --display: "Noto Serif Display", "Iowan Old Style", "New York", ui-serif, Georgia, serif;
   --brush: "Ma Shan Zheng", "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", serif;
@@ -474,6 +486,65 @@ button.tile:active { background: var(--fill); }
   from { transform: scale(1.6) rotate(-14deg); opacity: 0; }
   to { transform: scale(1) rotate(-6deg); opacity: 1; }
 }
+/* The small stamp waits for the big one to lift, so the seal reads as one
+   mark that came down and stayed. */
+.is-pressed.is-after-slam { animation-delay: 820ms; animation-fill-mode: backwards; }
+/* Paying in full: the seal comes down on the page like a stamp on paper. It
+   drops in large and tilted, presses past its size and springs back, bleeds a
+   ring of ink, holds a beat, and lifts, all in a second. */
+.slam {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding-bottom: 12vh;
+  pointer-events: none;
+  animation: slam-wash 1000ms ease both;
+}
+.slam .stamp {
+  position: relative;
+  padding: 14px 10px;
+  border-width: 6px;
+  border-radius: 9px;
+  font-size: 84px;
+  letter-spacing: 10px;
+  background: none;
+  -webkit-mask: var(--speckle);
+  mask: var(--speckle);
+  animation: slam 1000ms both;
+}
+.slam .stamp::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border: 3px solid var(--seal);
+  border-radius: 12px;
+  opacity: 0;
+  animation: bleed 1000ms ease-out both;
+}
+@keyframes slam {
+  0% { transform: scale(2.6) rotate(-24deg); opacity: 0; animation-timing-function: cubic-bezier(.55, 0, 1, .45); }
+  17% { transform: scale(.93) rotate(-8deg); opacity: 1; animation-timing-function: ease-out; }
+  25% { transform: scale(1.03) rotate(-8deg); }
+  33% { transform: scale(1) rotate(-8deg); }
+  80% { transform: scale(1) rotate(-8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(-8deg); opacity: 0; }
+}
+@keyframes bleed {
+  0%, 16% { opacity: 0; transform: scale(.97); }
+  19% { opacity: .5; }
+  50%, 100% { opacity: 0; transform: scale(1.22); }
+}
+@keyframes slam-wash {
+  0% { background: transparent; }
+  14%, 80% { background: color-mix(in srgb, var(--paper) 55%, transparent); }
+  100% { background: transparent; }
+}
+@keyframes slam-fade {
+  0%, 100% { opacity: 0; transform: rotate(-8deg); }
+  20%, 80% { opacity: 1; transform: rotate(-8deg); }
+}
 .add-tile .av { background: none; border: 1.5px dashed var(--ring); color: var(--muted); box-shadow: none; }
 .add-tile .av .ic { width: 22px; height: 22px; }
 .add-tile .tile-name { color: var(--muted); }
@@ -516,7 +587,7 @@ button.tile:active { background: var(--fill); }
   align-items: center;
   gap: 7px;
   flex: none;
-  max-width: 11em;
+  max-width: 14em;
   height: 44px;
   padding: 0 14px 0 6px;
   border: 1.5px solid var(--line);
@@ -527,6 +598,7 @@ button.tile:active { background: var(--fill); }
 }
 .claimer .av { --s: 30px; box-shadow: none; }
 .claimer .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claimer .chip-amt { flex: none; font-weight: 400; }
 .claimer[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--card); font-weight: 600; }
 .claimer[aria-pressed="true"] .av { box-shadow: 0 0 0 1.5px var(--card); }
 .bar .av.payer { --s: 32px; margin-bottom: -2px; }
@@ -565,6 +637,9 @@ button.tile:active { background: var(--fill); }
 .flow .stack .av + .av { margin-left: -6px; }
 .flow .arrow { width: 26px; height: 26px; color: var(--muted); }
 .hero-amt { font: 500 50px/1.1 var(--display); letter-spacing: -0.02em; margin-top: 12px; }
+/* Same words and weight as the bar's label, so the two read as one sentence. */
+.hero-cap { margin-top: 14px; font-size: 14px; line-height: 1; color: var(--muted); }
+.hero-cap + .collect .hero-amt { margin-top: 2px; }
 .hero .was { color: var(--muted); font-size: 18px; margin-top: 12px; }
 .hero .was + .hero-amt { margin-top: 0; }
 .hero .stamp { position: absolute; right: 20px; top: 54px; font-size: 26px; padding: 5px 4px; border-width: 2.5px; letter-spacing: 3px; }
@@ -579,21 +654,54 @@ button.tile:active { background: var(--fill); }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .key { width: 9px; height: 9px; border-radius: 2px; }
 .legend .ic { width: 18px; height: 18px; }
-.pay-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.pay-row { display: flex; gap: 8px; margin-top: 16px; }
+/* Basis 0 splits the row equally among however many apps the payer has. */
 .pay {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 0;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-width: 0;
   min-height: 46px;
-  padding: 0 18px;
+  padding: 0 12px;
   border-radius: 23px;
   background: var(--seal);
   color: var(--seal-ink);
   font-weight: 600;
   text-decoration: none;
+  white-space: nowrap;
 }
 .pay .ic { width: 18px; height: 18px; }
-.pay-note { flex-basis: 100%; color: var(--muted); font-size: 15px; }
+/* Whose shares one amount covers, when it covers guests too. */
+.whose { list-style: none; margin: 12px 0 0; padding: 0; }
+.whose li { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid var(--rule); }
+.whose .av { --s: 28px; }
+.whose .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whose .note { flex: 1; color: var(--muted); font-size: 15px; white-space: nowrap; }
+.whose .is-off { color: var(--muted); }
+.hero .whose .stamp { position: static; font-size: 12px; padding: 2px 1px; border-width: 1.5px; letter-spacing: 1px; }
+/* Recording a payment is the person's own word, not a link out, so it is
+   inked rather than sealed and sits under the ways to pay. */
+.sent-row { margin-top: 16px; }
+.pay-row + .sent-row { margin-top: 10px; }
+.sent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1.5px solid var(--ink);
+  border-radius: 23px;
+  background: var(--ink);
+  color: var(--card);
+  font-weight: 600;
+  cursor: pointer;
+}
+.sent .ic { width: 18px; height: 18px; stroke-width: 2.2; }
+.sent[aria-busy="true"] { cursor: progress; opacity: 0.6; }
 .collect { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pie { width: 54px; height: 54px; margin-top: 12px; transform: rotate(-90deg); }
 .pie circle { fill: none; stroke-width: 6; }
@@ -606,6 +714,7 @@ button.tile:active { background: var(--fill); }
 .mine li:last-child { border-bottom: 0; }
 .mine li .item-label { flex: 1; }
 .mine .piece { color: var(--muted); }
+.mine .tax-tip, .sheet-lines .tax-tip { color: var(--muted); }
 /* A guest's lines hang off their name under a dashed rule, the same dash as a
    guest's avatar, so it is plain which lines are theirs. */
 .mine-group { border-top: 1px solid var(--rule); }
@@ -629,6 +738,65 @@ button.tile:active { background: var(--fill); }
 .drill-row .ic { color: var(--muted); }
 .drill-row .stack .av { --s: 26px; }
 .drill-row .count { color: var(--muted); font-size: 15px; }
+/* What can be done to the bill as a whole. Plain rows like the drill card's,
+   so they read as quieter than paying, with Confirm the one loud thing. */
+.acts { margin-top: 14px; padding: 0 6px; }
+.view .acts { margin-top: 12px; }
+.confirm-area { padding: 14px 10px; border-bottom: 1px solid var(--rule); }
+.confirm-area:last-child { border-bottom: 0; }
+.confirm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 26px;
+  background: var(--seal);
+  color: var(--seal-ink);
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.confirm-btn .brush { font: 23px/1 var(--brush); }
+.confirm-btn:disabled { background: var(--fill); color: var(--muted); cursor: default; }
+.confirm-btn[aria-busy="true"] { cursor: progress; opacity: 0.75; }
+.why { margin-top: 10px; text-align: center; color: var(--warn); font-size: 15px; font-weight: 600; }
+.why.is-hint { color: var(--muted); font-weight: 400; }
+.act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.act:last-child { border-bottom: 0; }
+.act:active { background: var(--fill); }
+.act .ic { color: var(--muted); }
+.act .grow { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.act-sub { color: var(--muted); font-size: 15px; }
+.act.is-warn .ic { color: var(--warn); }
+.act.danger, .act.danger .ic { color: var(--seal); }
+.act[aria-busy="true"] { cursor: progress; opacity: 0.6; }
+
+.payments { margin-top: 12px; padding: 0 16px 4px; }
+.payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
+.payments ul { list-style: none; margin: 0; padding: 0; }
+.payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
+.payments li:last-child { border-bottom: 0; }
+.payments .av { --s: 30px; }
+.payments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payments .stamp { margin-right: 4px; }
+.payments .chip-btn { padding: 0 14px; font-size: 15px; }
+
 .back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -6px 0 6px -8px; padding: 0 8px; color: var(--muted); text-decoration: none; }
 
 dialog.sheet {
@@ -685,6 +853,10 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .chip-btn.danger.is-armed { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
 .chip-btn:disabled { opacity: 0.45; cursor: default; }
 .chip-btn[aria-busy="true"] { cursor: progress; }
+.sheet-body { margin: 0 0 10px; color: var(--muted); }
+.sheet-go { flex: 1; justify-content: center; min-height: 50px; border-radius: 25px; }
+.sheet-go.is-seal { background: var(--seal); border-color: var(--seal); color: var(--seal-ink); }
+.sheet-go.is-ink { background: var(--ink); border-color: var(--ink); color: var(--card); }
 .sheet-msg { margin-top: 8px; color: var(--warn); font-size: 15px; }
 .sheet-msg:empty { display: none; }
 .picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 4px 0 8px; }
@@ -702,6 +874,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 
 @media (prefers-reduced-motion: reduce) {
   .is-inked .tick, .is-pressed { animation: none; }
+  .slam .stamp { animation-name: slam-fade; }
+  .slam .stamp::after { animation: none; }
 }
 @media (min-width: 700px) {
   .page { padding-top: 40px; }
@@ -876,6 +1050,16 @@ function leftOf(v: View, id: ParticipantId): Cents {
 function paidUp(v: View, id: ParticipantId): boolean {
   const o = v.s.owing[id];
   return v.bill.status === "confirmed" && id !== v.bill.payerId && !!o && o.owedCents > 0 && o.paidCents >= o.owedCents;
+}
+
+// A member who paid in full paid their guests' shares with it, so those
+// guests are paid too, until that is undone. A forgiven guest keeps the gift.
+// Paying the adder settles nothing with the payer, so only the adder sees
+// that one as paid.
+function guestPaid(v: View, g: StateParticipant): boolean {
+  if (g.paidToPayer === true || (g.paidToHost === true && g.addedBy === v.s.viewer)) return true;
+  const debtor = debtorOf(g, v.bill.payerId);
+  return debtor !== g.id && paidUp(v, debtor) && v.shares.get(g.id)?.pardoned !== true;
 }
 
 function forgivenWhole(v: View, id: ParticipantId): boolean {
@@ -1077,13 +1261,15 @@ function people(v: View): string {
 
 // You first, then the guests you brought. Nobody else's: the payer settles
 // other people's lines from the line itself. Each chip carries a name, your
-// own too, so the pressed one says whose lines a tap claims.
+// own too, so the pressed one says whose lines a tap claims, and that
+// person's share, so the total beside them reads as theirs added up.
 function claimers(v: View): string {
   const ids = [v.s.viewer, ...guestsOf(v, v.s.viewer).map((g) => g.id)];
   const chips = ids.map(
     (id) =>
       `<button type="button" class="claimer" data-claim-as="${escapeHtml(id)}" aria-pressed="${id === v.s.viewer}">` +
-      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span></button>`,
+      `${av(v, id)}<span class="label">${escapeHtml(nameOf(v, id))}</span>` +
+      `<span class="chip-amt money">${formatCents(v.shares.get(id)?.owedCents ?? 0)}</span></button>`,
   );
   const hidden = v.s.editable !== "none" && ids.length > 1 ? "" : " hidden";
   return `<div class="claimers" data-claimers role="group" aria-label="Claim for"${hidden}>${hidden ? "" : chips.join("")}</div>`;
@@ -1105,8 +1291,8 @@ function bar(v: View): string {
 }
 
 // Food, tax and tip of what is asked for after pardons and after any guest
-// who paid the payer directly. Payments are not taken off: the paid-so-far
-// line under it says how much of this is done.
+// who paid the payer directly. Payments are not taken off: paid is yes or
+// no, and the stamp says which.
 function counted(v: View, id: ParticipantId): Share[] {
   const own = v.shares.get(id);
   const guests = guestsOf(v, id)
@@ -1135,14 +1321,49 @@ function pie(done: Cents, total: Cents): string {
     `${f > 0 ? `<circle class="done" cx="27" cy="27" r="22" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}"/>` : ""}</svg>`;
 }
 
-function payRow(s: BillState): string {
-  if (s.pay.length === 0) return "";
-  const links = s.pay.map((o) =>
-    "url" in o
-      ? `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`
-      : `<p class="pay-note">${escapeHtml(o.instructions)}</p>`,
+// With no app link to offer, "I paid" stands alone: the person pays the
+// way they usually would and records it here after.
+function payRow(v: View): string {
+  const links = v.s.pay.map(
+    (o) => `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`,
   );
-  return `<div class="pay-row" data-pay>${links.join("")}</div>`;
+  return links.length > 0 ? `<div class="pay-row" data-pay>${links.join("")}</div>` : "";
+}
+
+// Only someone with something left to pay has anything to record. Paid is
+// yes or no, so the tap records all of it, with nothing to ask first.
+function sentRow(v: View): string {
+  if (leftOf(v, v.s.viewer) <= 0) return "";
+  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-pay-all>${icon("check")}I paid</button></div>`;
+}
+
+// One amount for you and the guests you brought, then whose it is: you
+// first, then each guest. A paid guest gets the stamp, which says it without
+// words. One who paid the payer directly is also off the amount, so the row
+// is greyed.
+function whoRows(v: View): string {
+  const s = v.s;
+  const guests = guestsOf(v, s.viewer);
+  if (guests.length === 0) return "";
+  const stamp = `<span class="stamp" role="img" aria-label="Paid">付讫</span>`;
+  const row = (id: ParticipantId, name: string, paid: boolean, off: boolean) => {
+    const share = v.shares.get(id);
+    const forgiven = share?.pardoned === true;
+    const cls = forgiven ? " is-forgiven is-off" : off ? " is-off" : "";
+    return `<li${off ? ' class="is-off"' : ""}>${av(v, id)}<span class="name">${escapeHtml(name)}</span>${paid ? stamp : ""}` +
+      `<span class="note">${forgiven ? "forgiven" : ""}</span><span class="money${cls}">${formatCents(share?.owedCents ?? 0)}</span></li>`;
+  };
+  const rows = [
+    row(s.viewer, "You", false, false),
+    ...guests.map((g) => row(g.id, g.displayName, guestPaid(v, g), g.paidToPayer === true)),
+  ];
+  return `<ul class="whose" data-who aria-label="Whose share">${rows.join("")}</ul>`;
+}
+
+// The bill's whole debt to the payer next to what has come in, so the big
+// number above reads as what is still out.
+function collectedOf(done: Cents, total: Cents): string {
+  return `<p class="legend"><span><span class="money">${formatCents(total)}</span> owed to you · <span class="money">${formatCents(done)}</span> paid</span></p>`;
 }
 
 function hero(v: View): string {
@@ -1154,16 +1375,15 @@ function hero(v: View): string {
     const left = debtors.reduce((n, id) => n + leftOf(v, id), 0);
     return `<section class="card hero is-payer" data-you aria-label="Owed to you">
 <div class="flow">${stack(v, debtors, 4)}${arrow}${av(v, s.viewer)}</div>
+<p class="hero-cap">to collect</p>
 <div class="collect"><p class="hero-amt money" data-you-owed>${formatCents(left)}</p>${pie(total - left, total)}</div>
-<p class="legend"><span>${icon("check")}<span class="money">${formatCents(total - left)}</span> / <span class="money">${formatCents(total)}</span></span></p>
+${collectedOf(total - left, total)}
 </section>`;
   }
   // A guest who paid the payer directly is no longer part of what the viewer pays.
   const mine = [s.viewer, ...guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id)];
   const forgiven = forgivenWhole(v, s.viewer);
   const paid = paidUp(v, s.viewer);
-  const o = s.owing[s.viewer];
-  const partial = o && o.paidCents > 0 && !paid;
   const was = forgiven
     ? `<p class="was money">${formatCents(mine.reduce((n, id) => n + (v.shares.get(id)?.owedCents ?? 0), 0))}</p>`
     : "";
@@ -1172,17 +1392,29 @@ function hero(v: View): string {
     : forgiven
       ? `<span class="gift-mark" role="img" aria-label="Forgiven">${icon("gift")}</span>`
       : "";
-  const parts = splitParts(counted(v, s.viewer));
+  // With guests the bar would mix their food, tax and tip in with the
+  // viewer's. Each person's lines below add up to their own amount instead.
+  const split = forgiven || guestsOf(v, s.viewer).length > 0 ? "" : splitBar(splitParts(counted(v, s.viewer)));
   return `<section class="card hero${paid ? " is-paid" : ""}${forgiven ? " is-forgiven" : ""}" data-you aria-label="Your share">
 <div class="flow">${stack(v, mine, 3)}${arrow}${av(v, s.payerId)}</div>
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
-${forgiven ? "" : splitBar(parts)}
-${partial ? `<p class="legend"><span>${icon("check")}<span class="money">${formatCents(o.paidCents)}</span> / <span class="money">${formatCents(o.owedCents)}</span></span></p>` : ""}
-${paid ? "" : payRow(s)}
+${whoRows(v)}
+${split}
+${paid ? "" : payRow(v)}
+${sentRow(v)}
 </section>`;
 }
 
-function mineList(v: View, id: ParticipantId): string {
+// Tax and tip are the share's own, from the split, so the lines add up to
+// that person's amount to the cent.
+function taxTipRows(v: View, id: ParticipantId): string {
+  const share = v.shares.get(id);
+  if (!share) return "";
+  const row = (label: string, cents: Cents) => `<li class="tax-tip"><span class="item-label">${label}</span><span class="money">${formatCents(cents)}</span></li>`;
+  return row("Tax", share.taxCents) + row("Tip", share.tipCents);
+}
+
+function mineList(v: View, id: ParticipantId, withTaxTip: boolean): string {
   const rows = v.s.items
     .filter((i) => i.claimedBy.includes(id))
     .map((item) => {
@@ -1190,21 +1422,28 @@ function mineList(v: View, id: ParticipantId): string {
       const cents = itemPieces(item).get(id) ?? 0;
       return `<li><span class="item-label">${escapeHtml(item.label)}</span>${n > 1 ? `<span class="piece">÷${n}</span>` : ""}<span class="money">${formatCents(cents)}</span></li>`;
     });
-  return rows.length > 0 ? `<ul>${rows.join("")}</ul>` : "";
+  return rows.length > 0 ? `<ul>${rows.join("")}${withTaxTip ? taxTipRows(v, id) : ""}</ul>` : "";
 }
 
+// Grouped the way the amount is broken down: yours, then each guest's, each
+// ending in its tax and tip so it adds up to that person's amount up top. No
+// amount on the headings, since the rows above already say it. A paid
+// guest's stamp is on their row up top, not here again. A diner alone needs
+// no heading, since the card above is their share. The payer's card above is
+// what others owe, so their own lines say whose they are.
 function mine(v: View): string {
-  const own = mineList(v, v.s.viewer);
+  const withTaxTip = guestsOf(v, v.s.viewer).length > 0;
+  const own = mineList(v, v.s.viewer, withTaxTip);
   const guests = guestsOf(v, v.s.viewer)
     .map((g) => {
-      const list = mineList(v, g.id);
-      // These are the viewer's own guests, so either mark is theirs to see.
-      const paid = g.paidToPayer || g.paidToHost ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
-      return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}${paid}</p>${list}</div>` : "";
+      const list = mineList(v, g.id, withTaxTip);
+      return list ? `<div class="mine-group"><p class="mine-guest">${av(v, g.id)}${escapeHtml(g.displayName)}</p>${list}</div>` : "";
     })
     .join("");
   if (!own && !guests) return "";
-  return `<section class="card mine" data-mine aria-label="Your lines">${own}${guests}</section>`;
+  const yours =
+    own && (guests || v.s.viewerIsPayer) ? `<div class="mine-group"><p class="mine-guest">${av(v, v.s.viewer)}You</p>${own}</div>` : own;
+  return `<section class="card mine" data-mine aria-label="Your lines">${yours}${guests}</section>`;
 }
 
 function drill(v: View): string {
@@ -1214,8 +1453,92 @@ function drill(v: View): string {
   return `<nav class="card drill" aria-label="More">
 <a class="drill-row" href="#receipt" data-go="receipt">${icon("receipt")}<span class="grow">Total</span><span class="money">${formatCents(v.s.result.distributableCents)}</span>${icon("chev")}</a>
 <a class="drill-row" href="#people" data-go="people">${icon("people")}<span class="grow">${stack(v, members, 6)}</span>` +
-    `${debtors.length > 0 ? `<span class="count">付讫 ${done}/${debtors.length}</span>` : ""}${icon("chev")}</a>
+    `${debtors.length > 0 ? `<span class="count">${done} of ${debtors.length} paid</span>` : ""}${icon("chev")}</a>
 </nav>`;
+}
+
+// Why the payer can't confirm yet, in their words, or null when they can.
+// The server refuses the same cases; this says so before the tap.
+function confirmBlock(s: BillState): string | null {
+  if (s.printedTotalCents === null) return "Enter the receipt total first.";
+  if (!s.reconciles.ok) return "Line items do not add up to total!";
+  if (!s.items.some((i) => i.claimedBy.length > 0)) return "Nobody has claimed anything yet.";
+  return null;
+}
+
+function openLines(s: BillState): LineItem[] {
+  return s.items.filter((i) => i.claimedBy.length === 0);
+}
+
+function confirmArea(v: View): string {
+  const blocked = confirmBlock(v.s);
+  const open = openLines(v.s).length;
+  const why = blocked ?? (open === 0 ? "" : open === 1 ? "1 line has nobody on it." : `${open} lines have nobody on them.`);
+  return `<div class="confirm-area"><button type="button" class="confirm-btn" data-confirm${blocked ? " disabled" : ""}${why ? ' aria-describedby="confirm-why"' : ""}>` +
+    `<span class="brush" aria-hidden="true">定</span>Confirm</button>` +
+    `${why ? `<p class="why${blocked ? "" : " is-hint"}" id="confirm-why">${escapeHtml(why)}</p>` : ""}</div>`;
+}
+
+function act(attrs: string, iconName: string, title: string, sub: string | null, cls = ""): string {
+  return `<button type="button" class="act${cls ? ` ${cls}` : ""}" ${attrs}>${icon(iconName)}<span class="grow"><span>${escapeHtml(title)}</span>` +
+    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span></button>`;
+}
+
+// The payer confirms, reopens to fix, and deletes. Anyone else on a
+// confirmed bill can say something is wrong, which reopens it for the payer
+// to fix. Nothing here for someone who is only claiming on a draft.
+function actions(v: View): string {
+  const s = v.s;
+  const parts: string[] = [];
+  if (s.viewerIsPayer) {
+    if (v.bill.status === "draft") parts.push(confirmArea(v));
+    if (v.bill.status === "confirmed") parts.push(act("data-reopen", "receipt", "Edit the bill", "Paying pauses until you confirm again."));
+    parts.push(act("data-delete-bill", "trash", "Delete this bill", null, "danger"));
+  } else if (v.bill.status === "confirmed" && v.onBill) {
+    parts.push(
+      act('data-ask="wrong" aria-haspopup="dialog"', "warn", "Something's wrong", `Paying pauses until ${nameOf(v, s.payerId)} fixes it.`, "is-warn"),
+    );
+  }
+  if (parts.length === 0) return "";
+  return `<section class="card acts needs-js" data-actions aria-label="Bill actions">${parts.join("")}</section>`;
+}
+
+interface PaidBy {
+  id: ParticipantId;
+  cents: Cents;
+}
+
+// Everyone who has paid, in roster order: paid is yes or no, so only those
+// whose payments cover what they were asked for. A payment against a guest is
+// the guest paying the payer directly, so it is measured against the guest's
+// own share rather than what their member is asked for. A part payment made
+// before that rule leaves the person unpaid, and off this list.
+function paidBy(v: View): PaidBy[] {
+  const paid = new Map<ParticipantId, Cents>();
+  for (const p of v.s.payments) paid.set(p.participant, (paid.get(p.participant) ?? 0) + p.cents);
+  return v.s.participants.flatMap((p) => {
+    const share = v.shares.get(p.id);
+    const asked = p.id in v.s.owing ? owedOf(v, p.id) : share && !share.pardoned ? share.owedCents : 0;
+    return asked > 0 && (paid.get(p.id) ?? 0) >= asked ? [{ id: p.id, cents: asked }] : [];
+  });
+}
+
+function paymentRows(v: View): string {
+  const rows = paidBy(v).map((r) => {
+    const name = escapeHtml(nameOf(v, r.id));
+    return `<li>${av(v, r.id)}<span class="name">${name}</span><span class="money">${formatCents(r.cents)}</span>` +
+      `<span class="stamp" role="img" aria-label="Paid">付讫</span>` +
+      `<button type="button" class="chip-btn" data-undo-paid="${escapeHtml(r.id)}" aria-label="Undo ${name}'s payment">Undo</button></li>`;
+  });
+  return rows.length > 0 ? `<h2>Payments</h2><ul>${rows.join("")}</ul>` : "";
+}
+
+// Always drawn for the payer of a confirmed bill, hidden while empty, so the
+// first payment has somewhere to appear without a reload.
+function payments(v: View): string {
+  if (!v.s.viewerIsPayer || v.bill.status !== "confirmed") return "";
+  const rows = paymentRows(v);
+  return `<section class="card payments needs-js" data-payments aria-label="Payments"${rows ? "" : " hidden"}>${rows}</section>`;
 }
 
 function back(): string {
@@ -1227,11 +1550,13 @@ function body(v: View): string {
     return `${v.onBill ? "" : notOnBill(v)}
 ${receipt(v)}
 ${people(v)}
+${actions(v)}
 ${bar(v)}`;
   }
   return `<div class="view is-active" data-view="home">
-${v.onBill ? `${hero(v)}\n${mine(v)}` : notOnBill(v)}
+${v.onBill ? `${hero(v)}\n${payments(v)}\n${mine(v)}` : notOnBill(v)}
 ${drill(v)}
+${actions(v)}
 </div>
 <div class="view" data-view="receipt" id="receipt">${back()}
 ${receipt(v)}

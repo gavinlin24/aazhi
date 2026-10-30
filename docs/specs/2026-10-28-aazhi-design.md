@@ -328,7 +328,8 @@ each payment individually, puts them back to doing bookkeeping, which is
 the problem this project exists to solve. The payer can undo any
 settlement.
 
-Partial payments are recorded against the remaining balance.
+Paid is yes or no. Tapping I paid records the whole remaining balance, and
+the payer's undo takes the whole of it back.
 
 A confirmed bill stays open until its debts clear. Nothing expires.
 
@@ -532,9 +533,10 @@ Each of these will cost a day if discovered late.
 - **The payer defaults to whoever invoked the command**, which is right
   almost always and wrong when somebody else's card went down. The draft
   page lets the payer be reassigned to another member of the roster.
-- **Partial payments** are ordinary, not an edge case. A settlement is an
-  amount, not a flag, and a share is clear when its settlements sum to
-  what is owed.
+- **A settlement is an amount, not a flag**, and a share is clear when its
+  settlements sum to what is owed. The page only ever records the whole
+  remaining balance, so rows from before that rule that fall short read as
+  unpaid.
 
 ## Left to the builder
 

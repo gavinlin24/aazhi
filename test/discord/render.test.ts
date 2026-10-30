@@ -132,7 +132,8 @@ describe("renderBill", () => {
 
     expect(text).toContain("✓ **Every dish is claimed.** Gavin can confirm.");
     expect(text).not.toMatch(/unclaimed/);
-    expect(buttonsOf(data).map((b) => b.custom_id)).toContain("confirm:bill-1:7");
+    // Confirming is done on the page, so the message still has only its one button.
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
   });
 
   it("counts guests among the people on the bill", () => {
@@ -148,11 +149,11 @@ describe("renderBill", () => {
     expect(text).not.toContain("$0.00");
   });
 
-  it("renders no pay control while the bill is a draft", () => {
+  it("offers only Open the split while the bill is a draft, since confirming and deleting happen on the page", () => {
     const buttons = buttonsOf(render(bill, draftState));
 
-    expect(buttons.map((b) => b.custom_id)).toEqual(["open:bill-1", "confirm:bill-1:7", "delete:bill-1"]);
-    expect(buttons.map((b) => b.label)).toEqual(["Open the split", "Confirm", "Delete"]);
+    expect(buttons.map((b) => b.custom_id)).toEqual(["open:bill-1"]);
+    expect(buttons.map((b) => b.label)).toEqual(["Open the split"]);
     expect(JSON.stringify(buttons)).not.toMatch(/pay|settle|venmo|zelle|cash/i);
   });
 
@@ -170,7 +171,7 @@ describe("renderBill", () => {
     const data = render(bill, misread);
     const embed = embedOf(data);
 
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
     expect(embed.description!.split("\n")).toEqual([
       "**Receipt total $273.82**",
       "🪙 Gavin paid · 8 people",
@@ -190,10 +191,10 @@ describe("renderBill", () => {
     ]);
   });
 
-  it("says the receipt total could not be read, and offers no Confirm", () => {
+  it("says the receipt total could not be read", () => {
     const data = render({ ...bill, printedTotalCents: null }, draftState);
 
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1", "delete:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
     expect(embedOf(data).description!.split("\n")).toEqual([
       "**Total $324.12**",
       "🪙 Gavin paid · 8 people",
@@ -278,7 +279,7 @@ describe("renderBill", () => {
     expect(confirmed.description).toMatch(/^\*\*Total \$/);
   });
 
-  it("shows what each person owes the payer once confirmed, with pay controls and the payer's Reopen and Delete", () => {
+  it("shows what each person owes the payer once confirmed, and one button that leads to the page", () => {
     const confirmedBill: BillRow = { ...bill, status: "confirmed", confirmedAt: "2026-10-28T22:00:00.000Z" };
     // The frozen rows, not a fresh split: Marcus's row says $40.00 here even
     // though the lines would give him $44.46 today.
@@ -295,27 +296,9 @@ describe("renderBill", () => {
     // The payer's own share is owed to nobody, so it has no row.
     expect(text).not.toMatch(/<@gavin> ·/);
     expect(text).not.toContain("$48.33");
-    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual([
-      "pay:bill-1",
-      "paid:bill-1",
-      "math:bill-1",
-      "notmine:bill-1",
-      "open:bill-1",
-      "undo:bill-1",
-      "reopen:bill-1",
-      "delete:bill-1",
-    ]);
-    expect(buttonsOf(data).map((b) => b.label)).toEqual([
-      "Pay my share",
-      "I paid",
-      "Show my math",
-      "That's not mine",
-      "Open the split",
-      "Undo a payment",
-      "Reopen",
-      "Delete",
-    ]);
-    expect(JSON.stringify(data.components)).not.toMatch(/confirm:/);
+    expect(buttonsOf(data).map((b) => b.custom_id)).toEqual(["open:bill-1"]);
+    expect(buttonsOf(data).map((b) => b.label)).toEqual(["Open the split"]);
+    expect(data.components).toHaveLength(1);
     expect(data.allowed_mentions).toEqual({ parse: [] });
   });
 

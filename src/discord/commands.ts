@@ -61,13 +61,12 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
         choices: [
           { name: "Venmo", value: "venmo" },
           { name: "Cash App", value: "cashapp" },
-          { name: "Zelle", value: "zelle" },
         ],
       },
       {
         type: ApplicationCommandOptionType.String,
         name: "handle",
-        description: "Your Venmo username, $Cashtag, or Zelle email or US mobile number",
+        description: "Your Venmo username or $Cashtag",
         required: true,
         max_length: 254,
       },

@@ -57,7 +57,7 @@ app.get("/b/:billId", async (c) => {
   const { bill, input, participants } = snapshot;
   if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
 
-  const { result, extras } = await pageData(c.env.DB, snapshot);
+  const { result, extras } = await pageData(c.env.DB, snapshot, grant.participantId);
   return page(renderPage(bill, result, input.items, participants, grant.participantId, extras), 200);
 });
 

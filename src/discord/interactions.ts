@@ -5,10 +5,10 @@ import {
   type APIInteractionResponse,
 } from "discord-api-types/v10";
 import type { Env } from "../env";
-import { confirmTap, deleteConfirmTap, deleteTap, reopenTap, splitOrphansTap } from "./handlers/lifecycle";
-import { mathTap, notMineTap, payTap, paywithCommand } from "./handlers/owe";
+import { ledgerCommand } from "./handlers/ledger";
+import { paywithCommand } from "./handlers/paywith";
+import { retired } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
-import { ledgerCommand, paidAllTap, paidAmountSubmit, paidPartTap, paidTap, undoPick, undoTap } from "./handlers/settle";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
 
 // `origin` is where this Worker was reached, so a handler can link back to the
@@ -30,27 +30,33 @@ export const commandHandlers: Record<string, InteractionHandler> = {
   paywith: paywithCommand,
   ledger: ledgerCommand,
 };
+// Everything else a bill needs is done on the page now. The prefixes of the
+// buttons and forms that used to do it stay mapped, so a tap on a message
+// posted before that still gets an answer.
+const RETIRED = [
+  "confirm:",
+  "orphans:",
+  "reopen:",
+  "delete:",
+  "delete-confirm:",
+  "pay:",
+  "math:",
+  "notmine:",
+  "paid:",
+  "paidall:",
+  "paidpart:",
+  "undo:",
+  "undopick:",
+];
 export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
-  "confirm:": confirmTap,
-  "orphans:": splitOrphansTap,
-  "reopen:": reopenTap,
-  "delete:": deleteTap,
-  "delete-confirm:": deleteConfirmTap,
-  "pay:": payTap,
-  "math:": mathTap,
-  "notmine:": notMineTap,
-  "paid:": paidTap,
-  "paidall:": paidAllTap,
-  "paidpart:": paidPartTap,
-  "undo:": undoTap,
-  "undopick:": undoPick,
+  ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),
 };
 // A modal's submit is its own interaction type, keyed the same way by the
 // custom_id the modal was opened with.
 export const modalHandlers: Record<string, InteractionHandler> = {
-  "paidamount:": paidAmountSubmit,
+  "paidamount:": retired("paidamount:"),
 };
 
 function respond(body: APIInteractionResponse): Response {

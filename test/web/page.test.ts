@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import app from "../../src/index";
 import type { BillRow, Participant } from "../../src/db/bills";
 import type { Env } from "../../src/env";
+import { formatCents } from "../../src/format";
 import { splitBill } from "../../src/money/split";
 import type { BillInput } from "../../src/money/types";
 import { CLIENT_SCRIPT } from "../../src/web/client";
@@ -217,9 +218,11 @@ describe("renderPage", () => {
       expect(row.attrs.hidden).toBeUndefined();
       expect(row.attrs["aria-label"]).toBe("Claim for");
       const chips = await select(html, "[data-claimers] button.claimer");
+      // Each chip carries that person's share of the total beside them.
+      const owed = (id: string) => formatCents(splitBill(withSam).shares.find((x) => x.participant === id)!.owedCents);
       expect(chips.map((c) => [c.attrs["data-claim-as"], c.attrs["aria-pressed"], c.text])).toEqual([
-        ["dani", "true", "DDani"],
-        ["guest-sam", "false", "SSam"],
+        ["dani", "true", `DDani${owed("dani")}`],
+        ["guest-sam", "false", `SSam${owed("guest-sam")}`],
       ]);
       expect(html).toMatch(/\.claimers\[hidden\]\s*\{\s*display:\s*none/);
     });
@@ -432,6 +435,32 @@ describe("renderPage", () => {
     expect(await textOf(diner, "header span.payer-chip")).toBe("Paid by Gavin");
   });
 
+  it("gives the payer Confirm and Delete, and says why Confirm is waiting", async () => {
+    const html = page("gavin");
+
+    const confirm = await one(html, "[data-actions] [data-confirm]");
+    expect(confirm.text).toBe("定Confirm");
+    expect(confirm.attrs).not.toHaveProperty("disabled");
+    expect(await textOf(html, "#confirm-why")).toBe("2 lines have nobody on them.");
+    expect(await textOf(html, "[data-actions] [data-delete-bill]")).toBe("Delete this bill");
+    expect(await select(html, "[data-reopen], [data-ask=wrong], [data-sent]")).toEqual([]);
+
+    const ready = page("gavin", bill, SAIGON);
+    expect(await select(ready, "#confirm-why")).toEqual([]);
+
+    const off = page("gavin", bill, withItem(SAIGON, { id: "extra", label: "Extra", cents: 600, claimedBy: ["dani"] }));
+    expect((await one(off, "[data-confirm]")).attrs).toHaveProperty("disabled");
+    expect(await textOf(off, "#confirm-why")).toBe("Line items do not add up to total!");
+
+    const unread = page("gavin", { ...bill, printedTotalCents: null }, SAIGON);
+    expect(await textOf(unread, "#confirm-why")).toBe("Enter the receipt total first.");
+  });
+
+  it("gives everyone else on a draft nothing to do to the bill as a whole", async () => {
+    expect(await select(page("marcus"), "[data-actions]")).toEqual([]);
+    expect(await select(page("zoe"), "[data-actions]")).toEqual([]);
+  });
+
   it("hides the payer picker once anyone has paid, so it never offers a change the server refuses", async () => {
     const reopened = { ...bill, confirmedAt: "2026-10-28T22:00:00.000Z" };
     const html = renderPage(reopened, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { hasPayments: true }, NOW);
@@ -488,33 +517,97 @@ describe("renderPage", () => {
 
       expect(await textOf(html, "[data-you-owed]")).toBe(money(dani.owedCents + guest.owedCents));
       expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani, Sam");
-      const detail = await textOf(html, "[data-you-detail]");
-      expect(detail).toContain(money(dani.subtotalCents + guest.subtotalCents));
-      expect(detail).toContain(`Tax ${money(dani.taxCents + guest.taxCents)}`);
-      expect(detail).toContain(`Tip ${money(dani.tipCents + guest.tipCents)}`);
-      const lines = await textOf(html, "[data-mine]");
-      expect(lines).toContain("Garlic noodles");
-      expect(await textOf(html, "[data-mine] .mine-guest")).toContain("Sam");
-      expect(lines).toContain("Lobster");
+      // A food, tax and tip bar would mix Sam's in with Dani's.
+      expect(await select(html, "[data-you] .split-bar, [data-you-detail]")).toEqual([]);
+      // Right under the one amount, whose it is.
+      expect((await select(html, "[data-you] [data-who] li")).map((r) => r.text)).toEqual([
+        `DYou${money(dani.owedCents)}`,
+        `SSam${money(guest.owedCents)}`,
+      ]);
+      // The lines are grouped the same way.
+      const groups = await select(html, "[data-mine] .mine-group");
+      expect(groups).toHaveLength(2);
+      expect(groups[0]!.text).toMatch(/^DYou.*Garlic noodles/);
+      expect(groups[0]!.text).not.toContain("Lobster");
+      expect(groups[1]!.text).toMatch(/^SSam.*Lobster/);
       expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
     });
 
-    it("takes a guest who paid the payer directly off the share, and stamps them in the lines", async () => {
+    // So "$5.00 and $32.00" under You never has to be squared with $47.68 up
+    // top in someone's head.
+    it("ends each person's lines with their tax and tip, adding up to their amount to the cent", async () => {
+      const sum = (text: string) => [...text.matchAll(/\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + Number(m[1]) * 100 + Number(m[2]), 0);
+      for (const [html, ids] of [[view("dani"), ["dani", "guest-sam"]], [view("gavin"), ["gavin", "guest-kim"]]] as const) {
+        const groups = await select(html, "[data-mine] .mine-group");
+        expect(groups).toHaveLength(ids.length);
+        groups.forEach((group, i) => {
+          const x = share(ids[i]!);
+          expect(group.text).toContain(`Tax${money(x.taxCents)}Tip${money(x.tipCents)}`);
+          expect(sum(group.text), ids[i]).toBe(x.owedCents);
+        });
+      }
+      expect((await select(view("dani"), "[data-mine] .tax-tip")).map((r) => r.text)).toEqual([
+        `Tax${money(share("dani").taxCents)}`,
+        `Tip${money(share("dani").tipCents)}`,
+        `Tax${money(share("guest-sam").taxCents)}`,
+        `Tip${money(share("guest-sam").tipCents)}`,
+      ]);
+      // Alone, the bar up top already breaks the one amount down.
+      expect(await select(view("theo"), "[data-mine] .tax-tip")).toEqual([]);
+      expect(await select(view("theo"), "[data-you] .split-bar")).toHaveLength(1);
+    });
+
+    it("breaks nothing down for someone who brought nobody", async () => {
+      const html = view("theo");
+      expect(await select(html, "[data-who], [data-mine] .mine-guest")).toEqual([]);
+    });
+
+    // The payer's top card is what others owe, so their own lines say whose
+    // they are even with no guest to tell them apart from.
+    it("heads the payer's own lines with You", async () => {
+      const html = renderPage(confirmedBill, splitBill(SAIGON), SAIGON.items, participantsOf(SAIGON), "gavin", { paid: [] }, NOW);
+      const groups = await select(html, "[data-mine] .mine-group");
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.text).toMatch(/^GYou/);
+    });
+
+    it("takes a guest who paid the payer directly off the share, and stamps them once", async () => {
       const sam = share("guest-sam");
       const settled = [{ participant: "guest-sam", cents: sam.owedCents }];
       const html = view("dani", { settled, paid: ["dani"], paidToPayer: ["guest-sam"], hasPayments: true });
 
       expect(await textOf(html, "[data-you-owed]")).toBe(money(share("dani").owedCents));
       expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani");
-      expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
+      // On Sam's row in the top card, and not again over Sam's lines.
+      expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
       expect((await one(html, '[data-person="dani"]')).attrs["aria-label"]).toContain(money(share("dani").owedCents));
+      // Still listed, greyed and stamped, with no words beside the stamp.
+      const rows = await select(html, "[data-who] li");
+      expect(rows[1]!.attrs.class).toBe("is-off");
+      expect(rows[1]!.text).toBe(`SSam付讫${money(sam.owedCents)}`);
     });
 
     it("stamps a guest who paid their adder for the adder, without taking anything off", async () => {
       const html = view("dani", { paidToHost: ["guest-sam"] });
 
       expect(await textOf(html, "[data-you-owed]")).toBe(money(share("dani").owedCents + share("guest-sam").owedCents));
-      expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
+      expect(await select(html, "[data-mine] .mine-guest .stamp")).toEqual([]);
+      const rows = await select(html, "[data-who] li");
+      expect(rows[1]!.attrs.class).toBeUndefined();
+      expect(rows[1]!.text).toBe(`SSam付讫${money(share("guest-sam").owedCents)}`);
+    });
+
+    // Their share went with the member's, so they are paid the moment the
+    // member is, and not once that payment is undone.
+    it("stamps the guests of a member who paid in full", async () => {
+      const together = share("dani").owedCents + share("guest-sam").owedCents;
+      const settled = [{ participant: "dani", cents: together }];
+      const html = view("dani", { settled, paid: ["dani"], hasPayments: true });
+
+      const rows = await select(html, "[data-who] li");
+      expect(rows[1]!.attrs.class).toBeUndefined();
+      expect(rows[1]!.text).toBe(`SSam付讫${money(share("guest-sam").owedCents)}`);
+      expect((await select(view("dani"), "[data-who] li"))[1]!.text).toBe(`SSam${money(share("guest-sam").owedCents)}`);
     });
 
     it("draws a forgiven share as nothing owed, with what it was struck through", async () => {
@@ -544,8 +637,10 @@ describe("renderPage", () => {
       expect(await select(html, '[data-person="theo"] .stamp')).toEqual([]);
 
       const theo = view("theo", { settled, paid: ["jess", "theo"], hasPayments: true });
+      // A part payment from before paid was yes or no leaves them unpaid,
+      // with no fraction to say how far along.
       expect(await textOf(theo, "[data-you-owed]")).toBe(money(share("theo").owedCents - 100));
-      expect(await textOf(theo, "[data-you] .legend:not([data-you-detail])")).toBe(`${money(100)} / ${money(share("theo").owedCents)}`);
+      expect(await select(theo, "[data-you] .stamp, [data-you] .legend:not([data-you-detail])")).toEqual([]);
 
       // Everyone who owes something but the forgiven, less the two payments.
       // Kim, whom the payer added, owes the payer directly.
@@ -553,8 +648,9 @@ describe("renderPage", () => {
       const total = debtors.reduce((n, id) => n + share(id).owedCents, 0) + share("guest-sam").owedCents;
       const payer = view("gavin", { settled, paid: ["jess", "theo"], hasPayments: true });
       expect(await textOf(payer, "[data-you-owed]")).toBe(money(total - jess - 100));
-      expect(await textOf(payer, "[data-you] .legend")).toBe(`${money(jess + 100)} / ${money(total)}`);
-      expect(await textOf(payer, '[data-go="people"] .count')).toBe(`付讫 1/${debtors.length}`);
+      expect(await textOf(payer, "[data-you] .hero-cap")).toBe("to collect");
+      expect(await textOf(payer, "[data-you] .legend")).toBe(`${money(total)} owed to you · ${money(jess + 100)} paid`);
+      expect(await textOf(payer, '[data-go="people"] .count')).toBe(`1 of ${debtors.length} paid`);
     });
 
     // A guest the payer added owes the payer directly, so they sit on the
@@ -583,6 +679,73 @@ describe("renderPage", () => {
       expect(link.text).toBe("Venmo");
       expect(await select(view("gavin", { handles }), "[data-pay]")).toEqual([]);
       expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
+    });
+
+    it("offers a button per app the payer has, and just I paid when they have none", async () => {
+      const venmo = { method: "venmo" as const, handle: "gavin-l" };
+      const cashapp = { method: "cashapp" as const, handle: "GavinL" };
+
+      const both = view("theo", { handles: [venmo, cashapp] });
+      expect((await select(both, "[data-pay] a.pay")).map((x) => x.text)).toEqual(["Venmo", "Cash App"]);
+
+      const none = view("theo", { handles: [] });
+      expect(await select(none, "[data-pay]")).toEqual([]);
+      expect(await textOf(none, "[data-you] [data-sent] [data-pay-all]")).toBe("I paid");
+    });
+
+    it("lets someone with something left record that they paid, or say something is wrong", async () => {
+      const html = view("theo", { settled: [{ participant: "theo", cents: 100 }] });
+
+      // One tap records all of it, with no sheet to ask how much.
+      const sent = await one(html, "[data-you] [data-sent] [data-pay-all]");
+      expect(sent.text).toBe("I paid");
+      expect(sent.attrs).not.toHaveProperty("aria-haspopup");
+      // No handle on file, so no link: "I paid" stands alone.
+      expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
+      const actions = await one(html, "[data-actions]");
+      expect(actions.text).toBe("Something&#39;s wrongPaying pauses until Gavin fixes it.");
+      expect(await select(html, "[data-actions] [data-ask]")).toEqual([expect.objectContaining({ attrs: expect.objectContaining({ "data-ask": "wrong" }) })]);
+      expect(await select(html, "[data-confirm], [data-reopen], [data-delete-bill], [data-payments]")).toEqual([]);
+    });
+
+    it("offers nothing to record once the share is paid or forgiven", async () => {
+      const jess = share("jess").owedCents;
+      expect(await select(view("jess", { settled: [{ participant: "jess", cents: jess }], paid: ["jess"] }), "[data-sent]")).toEqual([]);
+      expect(await select(view("marcus"), "[data-sent], [data-pay]")).toEqual([]);
+    });
+
+    it("gives the payer the payments to undo, and the bill to edit or delete, with nothing to pay", async () => {
+      const jess = share("jess").owedCents;
+      const sam = share("guest-sam").owedCents;
+      const at = (hour: number) => `2026-10-29T${String(hour).padStart(2, "0")}:00:00.000Z`;
+      const payments = [
+        { id: "p-4", billId: "bill-1", participant: "guest-sam", cents: sam, recordedAt: at(12), recordedBy: "gavin" },
+        { id: "p-3", billId: "bill-1", participant: "theo", cents: 200, recordedAt: at(11), recordedBy: "theo" },
+        { id: "p-2", billId: "bill-1", participant: "jess", cents: jess, recordedAt: at(10), recordedBy: "jess" },
+        { id: "p-1", billId: "bill-1", participant: "theo", cents: 100, recordedAt: at(9), recordedBy: "theo" },
+      ];
+      const settled = payments.map(({ participant, cents }) => ({ participant, cents }));
+      const html = view("gavin", { payments, settled, hasPayments: true });
+
+      expect(await select(html, "[data-sent], [data-ask=wrong], [data-confirm]")).toEqual([]);
+      // One row per person who paid, in roster order. A guest who paid
+      // directly is measured against their own share. Theo's two part
+      // payments, from before paid was yes or no, don't cover his share.
+      const rows = await select(html, "[data-payments] li");
+      expect(rows.map((r) => r.text)).toEqual([`JJess${money(jess)}付讫Undo`, `SSam${money(sam)}付讫Undo`]);
+      expect((await select(html, "[data-payments] [data-undo-paid]")).map((b) => [b.attrs["data-undo-paid"], b.attrs["aria-label"]])).toEqual([
+        ["jess", "Undo Jess's payment"],
+        ["guest-sam", "Undo Sam's payment"],
+      ]);
+      expect(stateOf(html).payments.map((p: any) => p.id)).toEqual(["p-4", "p-3", "p-2", "p-1"]);
+      expect(await textOf(html, "[data-actions] [data-reopen]")).toBe("Edit the billPaying pauses until you confirm again.");
+      expect(await textOf(html, "[data-actions] [data-delete-bill]")).toBe("Delete this bill");
+      // One tap does it: no sheet asks first.
+      expect(await select(html, "[data-undo-paid][aria-haspopup], [data-delete-bill][aria-haspopup]")).toEqual([]);
+
+      // Drawn even before anyone pays, hidden, so the first payment has a place to land.
+      expect((await one(view("gavin"), "[data-payments]")).attrs).toHaveProperty("hidden");
+      expect(stateOf(view("dani", { payments })).payments).toEqual([]);
     });
   });
 

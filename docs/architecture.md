@@ -67,10 +67,12 @@ items plus tax are checked against the printed total. A bill that doesn't
 match can be fixed but not confirmed.
 
 **3. Saving and posting.** `src/db/bills.ts` writes the draft to D1. Each
-change bumps the bill's `revision`, so a button drawn from an older version
+change bumps the bill's `revision`, so a confirm sent from an older version
 is refused. `src/discord/render.ts` draws the message, and
 `src/discord/rest.ts` posts it with the *interaction token* (a 15-minute
-credential to edit that reply).
+credential to edit that reply). The message is a notice: the total, who
+paid, any problem, what is unclaimed, and one **Open the split** button.
+Everything else is done on the page.
 
 **4. Joining.** **Open the split** (`src/discord/handlers/roster.ts`) adds the
 tapper to the bill and replies privately with
@@ -88,8 +90,10 @@ only land while the SQL `WHERE` still sees a draft. The page polls every
 5 s. The Discord message updates at most every 3 s per bill, through a lease
 stored in D1, since Worker instances share no memory.
 
-**6. Confirming.** `confirmBill` (`src/db/bills.ts`) requires the payer, a
-current revision, a matching total and every line claimed.
+**6. Confirming.** The payer taps Confirm on the page (`POST
+/b/:billId/confirm`). `confirmBill` (`src/db/bills.ts`) requires the payer, a
+current revision, a matching total and every line claimed. Unclaimed lines
+can instead be split evenly between everyone who claimed something.
 `src/money/split.ts` splits each line between its claimants and gives tax and
 tip in proportion to subtotal. Largest-remainder rounding (round everyone
 down, then give spare cents to the largest fractions) makes shares sum to the
@@ -97,21 +101,26 @@ cent. The shares are frozen in the `shares` table, and the message becomes
 the owe card.
 
 **7. Paying.** `/paywith` stores the payer's handle (`src/db/handles.ts`).
-**Pay my share** (`src/discord/handlers/owe.ts`) builds Venmo or Cash App links
-with the remaining amount (`src/web/paylink.ts`). Zelle gets written
-instructions. Once the bill is confirmed, the split page shows the same links
-under your share.
+Once the bill is confirmed, the page shows Venmo or Cash App links for what
+you have left (`src/web/paylink.ts`).
 
-**8. Recording.** **I paid** (`src/discord/handlers/settle.ts`) inserts into
-`settlements` (`src/db/settlements.ts`). The checks run inside the insert, so
-racing taps cannot overpay. The payment is announced in the channel, and
-`/ledger` totals who still owes the payer. A guest has no Discord account, so
-the payer marks them paid on the page instead; that is a settlement against
-the guest, and it counts toward whoever answers for them.
+**8. Recording.** Someone has paid or they haven't. **I paid** on the page
+(`POST /b/:billId/payment`) records everything they have left, guests they
+brought included, in `settlements` (`src/db/settlements.ts`). The checks run
+inside the insert, so a stale or part amount is refused, and the page's own
+id for the payment makes a retry land once. The payment is announced in the
+channel (`src/discord/notices.ts`), and `/ledger` totals who still owes the
+payer. The payer sees who paid on the page and can undo someone's paid if it
+never arrived (`DELETE /b/:billId/paid/:participantId`). A guest has no
+Discord account, so the payer marks them paid on the page instead; that is a
+settlement against the guest, and it counts toward whoever answers for them.
 
-**9. Corrections.** **That's not mine** or **Reopen**
-(`src/discord/handlers/lifecycle.ts`) returns the bill to draft and pauses
-paying. Re-confirming announces any changed amounts.
+**9. Corrections.** **Something's wrong** (anyone on the bill) or **Edit the
+bill** (the payer) on the page returns the bill to draft and pauses paying.
+Re-confirming announces any changed amounts. The payer can also delete the
+bill. Bill messages posted before the page took over still carry the old
+buttons, so `src/discord/handlers/retired.ts` answers those taps with a
+pointer to Open the split.
 
 ```mermaid
 sequenceDiagram
@@ -140,14 +149,14 @@ sequenceDiagram
   B->>W: POST /b/:billId/claim
   W->>DB: write claim
   W->>D: edit message (max every 3 s)
-  Payer->>D: Confirm
-  D->>W: POST /interactions
+  Payer->>B: Confirm
+  B->>W: POST /b/:billId/confirm
   W->>DB: freeze shares
-  W-->>D: owe card
-  Diner->>D: Pay my share, then I paid
-  D->>W: POST /interactions
+  W->>D: edit message to the owe card
+  Diner->>B: pay by link, then I paid
+  B->>W: POST /b/:billId/payment
   W->>DB: insert settlement
-  W-->>D: payment announced
+  W->>D: payment announced
 ```
 
 ## Deployment

@@ -22,14 +22,13 @@ import { renderPage } from "../../src/web/page";
 import { mintToken } from "../../src/web/token";
 import { generateKeypair, signedRequest, type TestKeypair } from "../discord/helpers";
 import { seedSaigon } from "../fixtures/seed";
-import { one, select } from "./html";
+import { one, select, textOf } from "./html";
 
 const db = workerEnv.DB;
 const KEY = "guests-test-signing-key";
 const BILL = "bill-1";
 const API = "https://discord.com/api/v10";
 const APP_ID = "app-1";
-const EPHEMERAL = 1 << 6;
 const SAIGON_KITCHEN = "Saigon Kitchen, Oct 28, 2026";
 
 let keypair: TestKeypair;
@@ -154,29 +153,6 @@ function member(id: string, nick: string) {
 }
 
 const GAVIN = member("gavin", "Gavin");
-const DANI = member("dani", "Dani");
-const MARCUS = member("marcus", "Marcus");
-
-function tap(customId: string, who: unknown) {
-  return {
-    id: "int-1",
-    application_id: APP_ID,
-    type: 3,
-    token: "interaction-token",
-    version: 1,
-    guild_id: "guild-1",
-    channel_id: "chan-1",
-    channel: { id: "chan-1", type: 0 },
-    member: who,
-    message: { id: "msg-1", channel_id: "chan-1" },
-    data: { custom_id: customId, component_type: 2 },
-  };
-}
-
-// The payer picking one payment from the Undo a payment menu.
-function undoPick(settlementId: string) {
-  return { ...tap(`undopick:${BILL}`, GAVIN), data: { custom_id: `undopick:${BILL}`, component_type: 3, values: [settlementId] } };
-}
 
 function ledgerCommand(who: unknown) {
   return {
@@ -191,10 +167,6 @@ function ledgerCommand(who: unknown) {
     member: who,
     data: { id: "cmd-2", name: "ledger", type: 1 },
   };
-}
-
-function customIds(data: any): string[] {
-  return ((data.components ?? []) as any[]).flatMap((row) => row.components ?? []).flatMap((c: any) => (c.custom_id ? [c.custom_id] : []));
 }
 
 function channelPosts() {
@@ -253,6 +225,32 @@ async function renderedCard() {
 
 function cardRows(card: ReturnType<typeof renderBill>): string[] {
   return (card.embeds![0]!.description ?? "").split("\n");
+}
+
+// Amounts the way the page sends them: plain dollars and cents, no sign.
+function plain(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
+function payment(as: string, cents: number) {
+  return send("POST", `/b/${BILL}/payment`, as, { id: crypto.randomUUID(), amount: plain(cents) });
+}
+
+async function confirmOnPage(): Promise<Reply> {
+  return send("POST", `/b/${BILL}/confirm`, "gavin", { revision: await revision() });
+}
+
+async function stateFor(as: string): Promise<any> {
+  return (await send("GET", `/b/${BILL}/state`, as)).body;
+}
+
+async function page(as: string): Promise<string> {
+  const link = `/b/${BILL}?t=${await mintToken(BILL, as, KEY, Date.now())}`;
+  return (await app.fetch(new Request(`https://aazhi.test${link}`), env(), createExecutionContext())).text();
+}
+
+function lastPost(): string {
+  return channelPosts().at(-1)!.body.content;
 }
 
 function inState(body: any, id: string): any {
@@ -496,7 +494,7 @@ describe("a guest another member added", () => {
     expect(await standing(sam)).toBeUndefined();
   });
 
-  it("asks the member for their guest's share too, in Pay my share and I paid", async () => {
+  it("asks the member for their guest's share too, on the page and when they record paying it", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -504,29 +502,21 @@ describe("a guest another member added", () => {
       .prepare("INSERT INTO payment_handles (user_id, method, handle, updated_at) VALUES ('gavin', 'venmo', 'gavin-lin', '2026-10-28')")
       .run();
     const together = (await owedOf("dani")) + (await owedOf(sam));
-    await recordSettlement(db, BILL, "dani", 1000, "dani");
-    const left = together - 1000;
 
-    const pay = await run(tap(`pay:${BILL}`, DANI));
-    expect(pay.data.flags).toBe(EPHEMERAL);
-    expect(pay.data.content).toContain(formatCents(left));
-    expect(pay.data.content).toContain("Sam");
-    const venmo = (pay.data.components[0].components as any[]).find((c) => c.style === 5);
-    expect(new URL(venmo.url).searchParams.get("amount")).toBe(formatCents(left).slice(1));
+    const state = await stateFor("dani");
+    expect(state.owing.dani).toEqual({ owedCents: together, paidCents: 0 });
+    const venmo = state.pay.find((o: any) => o.method === "venmo");
+    expect(new URL(venmo.url).searchParams.get("amount")).toBe(plain(together));
 
-    const paid = await run(tap(`paid:${BILL}`, DANI));
-    expect(paid.data.content).toContain(formatCents(left));
-    expect(customIds(paid.data)).toEqual([`paidall:${BILL}:${left}`, `paidpart:${BILL}`]);
-
-    const all = await run(tap(`paidall:${BILL}:${left}`, DANI));
-    expect(all.data.content).toMatch(/paid up/i);
+    expect((await payment("dani", together)).status).toBe(200);
+    expect(lastPost()).toBe(`Dani paid Gavin ${formatCents(together)} for ${SAIGON_KITCHEN}, and is all paid up.`);
     expect((await listSettlements(db, BILL)).every((s) => s.participant === "dani")).toBe(true);
     // Clear is the pair's: both rows settle when Dani's payments cover both.
     expect(await settledAt("dani")).not.toBeNull();
     expect(await settledAt(sam)).not.toBeNull();
   });
 
-  it("never takes an I paid payment for a guest, who has no Discord account", async () => {
+  it("never takes a payment recorded for a guest, who has no link of their own", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -550,21 +540,18 @@ describe("a guest another member added", () => {
     expect(reply.data.content.split("\n").find((l: string) => l.includes("Dani"))).toContain(formatCents(together));
   });
 
-  it("shows the member their guest's lines in a separate block in Show my math", async () => {
+  it("shows the member their guest's lines in a block of their own on the page", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
 
-    const reply = await run(tap(`math:${BILL}`, DANI));
-    const text: string = reply.data.content;
-    expect(reply.data.flags).toBe(EPHEMERAL);
-    const block = text.indexOf("**Sam, your guest**");
-    expect(block).toBeGreaterThan(text.indexOf("Garlic noodles"));
-    expect(text.slice(block)).toContain("Lobster");
-    expect(text.slice(0, block)).not.toContain("Lobster");
-    expect(text).toContain(formatCents(await owedOf(sam)));
-    expect(text).toContain(formatCents((await owedOf("dani")) + (await owedOf(sam))));
-    expect(text.length).toBeLessThanOrEqual(2000);
+    const html = await page("dani");
+    // Dani's group first, then Sam's.
+    const groups = await select(html, "[data-mine] .mine-group");
+    expect(groups.map((g) => g.text.slice(0, 4))).toEqual(["DYou", "SSam"]);
+    expect(groups[0]!.text).not.toContain("Lobster");
+    expect(groups[1]!.text).toContain("Lobster");
+    expect(await textOf(html, "[data-you-owed]")).toBe(formatCents((await owedOf("dani")) + (await owedOf(sam))));
   });
 
   it("says out loud how the member's amount moved when the bill is confirmed again", async () => {
@@ -577,13 +564,12 @@ describe("a guest another member added", () => {
     expect(await reopenBill(db, BILL)).toEqual([]);
     await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
     await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
-    const reply = await run(tap(`confirm:${BILL}:${await revision()}`, GAVIN));
+    expect((await confirmOnPage()).status).toBe(200);
 
     const now = (await owedOf("dani")) + (await owedOf(sam));
     expect(now).not.toBe(was);
-    expect(reply.data.flags ?? 0).toBe(0);
-    expect(reply.data.content).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
-    expect(reply.data.content).not.toContain("Sam paid");
+    expect(lastPost()).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
+    expect(lastPost()).not.toContain("Sam paid");
   });
 });
 
@@ -619,14 +605,18 @@ describe("a guest the payer added", () => {
     expect(inState(state.body, kim)).toMatchObject({ addedBy: "gavin", paidToPayer: false, paidToHost: false });
   });
 
-  it("tells the payer only their own part in Pay my share", async () => {
+  it("offers the payer nothing to pay, with their guest owing them apart", async () => {
     await seedSaigon(db, BILL);
-    await withGuest("Kim", "gavin");
+    const kim = await withGuest("Kim", "gavin");
     await confirmed();
 
-    const pay = await run(tap(`pay:${BILL}`, GAVIN));
-    expect(pay.data.content).toContain(`Your own part of it was ${formatCents(await owedOf("gavin"))}.`);
-    expect(pay.data.content).not.toContain("Kim");
+    const state = await stateFor("gavin");
+    expect(state.pay).toEqual([]);
+    expect(state.owing.gavin.owedCents).toBe(await owedOf("gavin"));
+    expect(state.owing[kim].owedCents).toBe(await owedOf(kim));
+    const refused = await payment("gavin", 100);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe("You paid the bill, so there's nothing for you to pay.");
   });
 
   it("can be forgiven like anyone else who owes the payer", async () => {
@@ -710,16 +700,10 @@ describe("marking a guest paid", () => {
       },
     ]);
 
-    const pay = (await run(tap(`pay:${BILL}`, DANI))).data.content as string;
-    expect(pay).toContain(`You owe Gavin **${formatCents(daniOwes)}** for ${SAIGON_KITCHEN}.`);
-    expect(pay).toContain("Sam paid Gavin directly, so that share is off your total.");
-    const math = (await run(tap(`math:${BILL}`, DANI))).data.content as string;
-    expect(math).toContain(`Sam paid Gavin ${formatCents(samOwes)} directly, so that's off your total.`);
-    expect(math).toContain(`= ${formatCents(daniOwes)}**`);
-    const paid = await run(tap(`paid:${BILL}`, DANI));
-    expect(customIds(paid.data)).toEqual([`paidall:${BILL}:${daniOwes}`, `paidpart:${BILL}`]);
+    expect((await stateFor("dani")).owing.dani).toEqual({ owedCents: daniOwes, paidCents: 0 });
+    expect(await textOf(await page("dani"), "[data-you-owed]")).toBe(formatCents(daniOwes));
 
-    await run(tap(`paidall:${BILL}:${daniOwes}`, DANI));
+    expect((await payment("dani", daniOwes)).status).toBe(200);
     expect(await settledAt("dani")).not.toBeNull();
     expect(await settledAt(sam)).not.toBeNull();
   });
@@ -760,7 +744,7 @@ describe("marking a guest paid", () => {
     expect(await listSettlements(db, BILL)).toEqual([]);
     expect(await standing("dani")).toEqual({ participant: "dani", owedCents: together, settledCents: 0 });
     expect(channelPosts()).toEqual([]);
-    expect((await run(tap(`pay:${BILL}`, DANI))).data.content).toContain(`You owe Gavin **${formatCents(together)}**`);
+    expect((await stateFor("dani")).owing.dani.owedCents).toBe(together);
 
     // The two marks are separate facts, so one never moves the other.
     expect(inState((await markPaid("gavin", sam)).body, sam)).toMatchObject({ paidToPayer: true, paidToHost: true });
@@ -831,7 +815,7 @@ describe("marking a guest paid", () => {
     expect(covered.status).toBe(409);
     expect(covered.body.error).toBe(
       "Dani has already paid you Sam's share, so it can't be paid twice. " +
-        "If Sam paid you instead, undo Dani's payment with Undo a payment in Discord first.",
+        "If Sam paid you instead, undo Dani's payment under Payments first.",
     );
     const forgiven = await markPaid("gavin", kim);
     expect(forgiven.status).toBe(409);
@@ -851,9 +835,7 @@ describe("marking a guest paid", () => {
     expect((await markPaid("gavin", sam)).status).toBe(200);
 
     expect(await standing("dani")).toEqual({ participant: "dani", owedCents: daniOwes, settledCents: 1000 });
-    expect((await run(tap(`pay:${BILL}`, DANI))).data.content).toContain(
-      `You have **${formatCents(daniOwes - 1000)}** left to pay Gavin for ${SAIGON_KITCHEN}: you've paid $10.00 of ${formatCents(daniOwes)}.`,
-    );
+    expect((await stateFor("dani")).owing.dani).toEqual({ owedCents: daniOwes, paidCents: 1000 });
   });
 
   it("refuses to forgive the member or their guest once the guest paid the payer", async () => {
@@ -870,7 +852,7 @@ describe("marking a guest paid", () => {
     expect((await getShares(db, BILL)).some((s) => s.pardoned)).toBe(false);
   });
 
-  it("tells the channel the member's balance when the payer undoes the guest's payment in Discord", async () => {
+  it("tells the channel the member's balance when the payer undoes the guest's payment on the page", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
@@ -878,14 +860,12 @@ describe("marking a guest paid", () => {
     const together = formatCents((await owedOf("dani")) + (await owedOf(sam)));
     await markPaid("gavin", sam);
 
-    const menu = await run(tap(`undo:${BILL}`, GAVIN));
-    const [option] = menu.data.components[0].components[0].options;
-    expect(option.label).toBe(`Sam paid ${samOwes}`);
-    expect(option.description).toMatch(/ by Gavin$/);
+    const [listed] = (await stateFor("gavin")).payments;
+    expect(listed).toMatchObject({ participant: sam, cents: await owedOf(sam) });
 
-    const reply = await run(undoPick(option.value));
-    expect(reply.data.content).toBe(`Gavin removed Sam's ${samOwes} payment on ${SAIGON_KITCHEN}. Dani has ${together} left to pay.`);
-    expect(inState((await send("GET", `/b/${BILL}/state`, "dani")).body, sam)).toMatchObject({ paidToPayer: false });
+    expect((await send("DELETE", `/b/${BILL}/paid/${sam}`, "gavin")).status).toBe(200);
+    expect(lastPost()).toBe(`Gavin removed Sam's ${samOwes} payment on ${SAIGON_KITCHEN}. Dani has ${together} left to pay.`);
+    expect(inState(await stateFor("dani"), sam)).toMatchObject({ paidToPayer: false });
   });
 
   it("nets a guest's direct payment out of the member's amount when the bill is confirmed again", async () => {
@@ -899,11 +879,11 @@ describe("marking a guest paid", () => {
     await reopenBill(db, BILL);
     await editItem(db, BILL, `${BILL}-lobster-Sam`, { cents: 3000 });
     await setBillAmounts(db, BILL, { printedTotalCents: 27382 + 3000 });
-    const reply = await run(tap(`confirm:${BILL}:${await revision()}`, GAVIN));
+    expect((await confirmOnPage()).status).toBe(200);
 
     const now = (await owedOf("dani")) + (await owedOf(sam)) - direct;
-    expect(reply.data.content).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
-    expect(reply.data.content).not.toContain("Sam paid");
+    expect(lastPost()).toContain(`Dani paid $10.00 and now owes ${formatCents(now)}`);
+    expect(lastPost()).not.toContain("Sam paid");
   });
 
   it("reports both marks for every guest in the page state, and neither for members", async () => {
@@ -1024,20 +1004,22 @@ describe("pardons", () => {
     expect(row).toMatch(/Sam forgiven/);
   });
 
-  it("shows the pardon in Show my math", async () => {
+  it("shows the pardon on the page", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
     await pardon("gavin", "marcus");
     await pardon("gavin", sam);
 
-    const marcus = (await run(tap(`math:${BILL}`, MARCUS))).data.content as string;
+    const marcus = await page("marcus");
+    expect((await one(marcus, "[data-you]")).attrs.class).toContain("is-forgiven");
     // Sam's lobster moves everyone's tax and tip slice, so Marcus owes less than the plain Saigon $44.46.
-    expect(marcus).toContain(`Gavin forgave your ${formatCents(await owedOf("marcus"))}`);
+    expect(await textOf(marcus, "[data-you] .was")).toBe(formatCents(await owedOf("marcus")));
+    expect(await textOf(marcus, "[data-you-owed]")).toBe("$0.00");
 
-    const dani = (await run(tap(`math:${BILL}`, DANI))).data.content as string;
-    expect(dani).toMatch(new RegExp(`Gavin forgave Sam's \\${formatCents(await owedOf(sam))}`));
-    expect(dani).toContain(formatCents(await owedOf("dani")));
+    const dani = await page("dani");
+    expect((await one(dani, "[data-you]")).attrs.class).not.toContain("is-forgiven");
+    expect(await textOf(dani, "[data-you-owed]")).toBe(formatCents(await owedOf("dani")));
   });
 
   // An edit to the owe card notifies nobody, so a forgiven amount (or one
@@ -1116,18 +1098,19 @@ describe("pardons", () => {
     expect(channelPosts()).toEqual([]);
   });
 
-  it("asks for nothing in Pay my share once the member and their guest are both forgiven", async () => {
+  it("asks for nothing on the page once the member and their guest are both forgiven", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
     await pardon("gavin", "dani");
 
-    const partly = await run(tap(`pay:${BILL}`, DANI));
-    expect(partly.data.content).toContain(formatCents(await owedOf(sam)));
+    expect((await stateFor("dani")).owing.dani.owedCents).toBe(await owedOf(sam));
 
     await pardon("gavin", sam);
-    const covered = await run(tap(`pay:${BILL}`, DANI));
-    expect(covered.data.content).toMatch(/Gavin covered your share/);
+    const covered = await stateFor("dani");
+    expect(covered.owing.dani.owedCents).toBe(0);
+    expect(covered.pay).toEqual([]);
+    expect(await select(await page("dani"), "[data-sent]")).toEqual([]);
   });
 });
 

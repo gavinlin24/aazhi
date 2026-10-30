@@ -2,7 +2,12 @@ import { Hono, type Context } from "hono";
 import {
   addGuest,
   addItem,
+  BillChangedError,
+  BillGoneError,
+  BillNotConfirmedError,
   BillNotDraftError,
+  confirmBill,
+  deleteBill,
   deleteItem,
   editItem,
   getBill,
@@ -10,24 +15,39 @@ import {
   getParticipants,
   getShares,
   GuestRefusedError,
+  NobodyClaimedError,
   PardonRefusedError,
+  PaymentsChangedError,
   PaymentsRecordedError,
   reassignPayer,
   removeGuest,
   renameGuest,
+  reopenBill,
   setBillAmounts,
   setClaim,
   setPardon,
+  splitOrphansEvenly,
+  type AmountChange,
   type BillAmounts,
   type BillRow,
   type BillSnapshot,
   type Participant,
 } from "../db/bills";
-import { GuestPaidRefusedError, outstanding, setGuestPaidToHost, setGuestPaidToPayer } from "../db/settlements";
-import { guestPaidNotice, pardonNotice } from "../discord/handlers/owe";
+import {
+  GuestPaidRefusedError,
+  outstanding,
+  recordSettlement,
+  SettlementGoneError,
+  SettlementRefusedError,
+  setGuestPaidToHost,
+  setGuestPaidToPayer,
+  undoPaid,
+} from "../db/settlements";
+import { guestPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
+import { formatCents } from "../format";
 import { debtorOf } from "../money/debtors";
 import type { Cents, ParticipantId } from "../money/types";
 import { stateOf } from "./state";
@@ -151,6 +171,22 @@ async function currentState(c: Ctx, grant: Grant): Promise<Response> {
 
 // The Discord message is only a summary of the page, so it follows on the
 // coalesced timer and a failed edit is logged rather than failing the write.
+function refreshMessage(c: Ctx, bill: BillRow): void {
+  c.executionCtx.waitUntil(editBillMessage(bill, c.env).catch((error) => console.error("could not update the bill message", error)));
+}
+
+// A new message in the channel, unlike an edit, notifies people, so this is
+// how a payment or a reopen reaches everyone. A failed post is logged and the
+// write stands.
+function announce(c: Ctx, bill: BillRow, content: string | null): void {
+  if (!content) return;
+  c.executionCtx.waitUntil(
+    postChannelMessage(bill.channelId, { content, allowed_mentions: { parse: [] } }, c.env).catch((error) =>
+      console.error("could not post to the channel", error),
+    ),
+  );
+}
+
 async function commit(c: Ctx, grant: Grant, bill: BillRow, write: () => Promise<number>): Promise<Response> {
   try {
     await write();
@@ -158,8 +194,18 @@ async function commit(c: Ctx, grant: Grant, bill: BillRow, write: () => Promise<
     if (error instanceof BillNotDraftError) return notDraft(await getBill(c.env.DB, grant.billId));
     throw error;
   }
-  c.executionCtx.waitUntil(editBillMessage(bill, c.env).catch((error) => console.error("could not update the bill message", error)));
+  refreshMessage(c, bill);
   return currentState(c, grant);
+}
+
+// The bill as it is now, for a write that works on a confirmed bill as well
+// as a draft. A bill that was replaced or deleted takes no more writes.
+async function loadLive(c: Ctx, grant: Grant): Promise<BillSnapshot | Response> {
+  const snapshot = await getBillSnapshot(c.env.DB, grant.billId);
+  if (!snapshot) return refuse(404, NOT_FOUND);
+  const gone = GONE[snapshot.bill.status];
+  if (gone) return refuse(409, gone);
+  return snapshot;
 }
 
 function route(handler: (c: Ctx, grant: Grant) => Promise<Response>) {
@@ -490,7 +536,7 @@ api.post(
           return refuse(
             409,
             `${answers} has already paid you ${guest.displayName}'s share, so it can't be paid twice. ` +
-              `If ${guest.displayName} paid you instead, undo ${answers}'s payment with Undo a payment in Discord first.`,
+              `If ${guest.displayName} paid you instead, undo ${answers}'s payment under Payments first.`,
           );
         case "changed":
           return refuse(409, "The bill changed while you were doing that. Look again and try once more.");
@@ -567,11 +613,224 @@ api.post(
           return refuse(
             409,
             `There's already a payment toward what ${answers} owes on this bill, so ${target.id === debtor ? "their" : `${target.displayName}'s`} ` +
-              "share can't be forgiven or brought back now. Undo the payment with Undo a payment in Discord first.",
+              "share can't be forgiven or brought back now. Undo the payment under Payments first.",
           );
         case "changed":
           return refuse(409, "The bill changed while you were doing that. Look again and try once more.");
       }
     }
+  }),
+);
+
+const CONFIRM_REFUSED = {
+  stale: "The bill changed while you were looking. Check it and confirm again.",
+  unreconciled: "Line items do not add up to total!",
+  unclaimed: "Some lines have nobody on them yet.",
+};
+
+// `revision` is the bill the payer looked at: anything that changed since
+// means they would be agreeing to numbers they never saw. `splitUnclaimed`
+// puts every line nobody claimed on everyone who claimed something first.
+api.post(
+  "/:billId/confirm",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["revision"], ["splitUnclaimed"]);
+    const revision = body.revision;
+    if (typeof revision !== "number" || !Number.isSafeInteger(revision)) bad('"revision" must be a whole number.');
+    const splitUnclaimed = body.splitUnclaimed ?? false;
+    if (typeof splitUnclaimed !== "boolean") bad('"splitUnclaimed" must be true or false.');
+
+    const snapshot = await loadDraft(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (grant.participantId !== snapshot.bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can confirm the bill, because they paid.`);
+    }
+
+    let at = revision;
+    if (splitUnclaimed) {
+      try {
+        at = await splitOrphansEvenly(c.env.DB, grant.billId, { revision });
+      } catch (error) {
+        if (error instanceof BillChangedError) return refuse(409, CONFIRM_REFUSED.stale);
+        if (error instanceof NobodyClaimedError) return refuse(409, "Nobody has claimed anything yet.");
+        if (error instanceof BillNotDraftError) return notDraft(await getBill(c.env.DB, grant.billId));
+        throw error;
+      }
+    }
+    const result = await confirmBill(c.env.DB, grant.billId, at, grant.participantId);
+    // The split's claims landed even when the confirm did not, and the
+    // message has to show them either way.
+    if (result.ok || splitUnclaimed) refreshMessage(c, snapshot.bill);
+    if (!result.ok) {
+      switch (result.reason) {
+        case "not-payer":
+          return refuse(403, `Only ${payerName(snapshot)} can confirm the bill, because they paid.`);
+        case "not-draft":
+          return notDraft(await getBill(c.env.DB, grant.billId));
+        default:
+          return refuse(409, CONFIRM_REFUSED[result.reason]);
+      }
+    }
+    announce(c, snapshot.bill, reconfirmNotice(snapshot.bill, snapshot.participants, result.changes));
+    return currentState(c, grant);
+  }),
+);
+
+// The payer reopens to fix their own bill. Anyone else on it reopens it to
+// say something is wrong: one person's objection is enough, because a bill
+// somebody knows is wrong must not take payments.
+api.post(
+  "/:billId/reopen",
+  route(async (c, grant) => {
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const { bill, participants } = snapshot;
+    if (grant.participantId !== bill.payerId && !participants.some((p) => p.id === grant.participantId && p.kind === "member")) {
+      return refuse(403, "You're not on this bill, so there's nothing here for you to change.");
+    }
+    const already = "This bill is already back to a draft, so paying is paused.";
+    if (bill.status !== "confirmed") return refuse(409, already);
+
+    let changes: AmountChange[];
+    try {
+      changes = await reopenBill(c.env.DB, grant.billId);
+    } catch (error) {
+      if (error instanceof BillNotConfirmedError) return refuse(409, already);
+      throw error;
+    }
+    refreshMessage(c, bill);
+    announce(c, bill, reopenNotice(bill, participants, changes, grant.participantId));
+    return currentState(c, grant);
+  }),
+);
+
+// What someone has left to pay, after their guests' direct payments and
+// their own.
+async function leftFor(env: Env, billId: string, debtor: ParticipantId): Promise<Cents> {
+  const row = (await outstanding(env.DB, billId)).find((o) => o.participant === debtor);
+  return row ? row.owedCents - row.settledCents : 0;
+}
+
+function paymentRefused(error: SettlementRefusedError, snapshot: BillSnapshot): Response {
+  const left = formatCents(error.remainingCents ?? 0);
+  switch (error.reason) {
+    case "not-confirmed":
+      return refuse(409, `This bill was reopened, so paying is paused until ${payerName(snapshot)} confirms it again.`);
+    case "payer":
+      return refuse(403, "You paid the bill, so there's nothing for you to pay.");
+    case "not-allowed":
+      return refuse(403, "You can only record your own payment.");
+    case "no-share":
+      return refuse(409, "You have no share on this bill, so there's nothing for you to pay.");
+    case "not-positive":
+      return refuse(400, "That amount is $0.00, so there's nothing to record.");
+    case "clear":
+      return refuse(409, "You're all paid up on this bill.");
+    case "stale":
+      return refuse(409, `What you owe changed. You have ${left} left to pay.`);
+    case "over":
+      return refuse(400, `That's more than you have left to pay, which is ${left}.`);
+  }
+}
+
+// The person paid, all of it: someone has paid or they haven't. `amount` is
+// what the page showed as left, and it must still be what is left, so a
+// part payment is refused and so is a payment against an amount they never
+// saw. `id` comes from the page, one per tap, so a retried request finds its
+// own payment. A tap from someone already paid up changes nothing.
+api.post(
+  "/:billId/payment",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["id", "amount"]);
+    const id = text(body.id, "id");
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) bad('"id" must be 8 to 64 letters, digits or dashes.');
+    const amount = cents(body.amount, "amount", { signed: false });
+
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const { bill, participants } = snapshot;
+    if (grant.participantId === bill.payerId) return refuse(403, "You paid the bill, so there's nothing for you to pay.");
+
+    let recorded: boolean;
+    try {
+      recorded = await recordSettlement(c.env.DB, grant.billId, grant.participantId, amount, grant.participantId, {
+        id: `${grant.participantId}:${id}`,
+        remainingCents: amount,
+      });
+    } catch (error) {
+      if (error instanceof SettlementRefusedError && error.reason === "clear") return currentState(c, grant);
+      if (error instanceof SettlementRefusedError) return paymentRefused(error, snapshot);
+      throw error;
+    }
+    if (recorded) {
+      refreshMessage(c, bill);
+      const after = await leftFor(c.env, grant.billId, grant.participantId);
+      announce(c, bill, paymentNotice(bill, participants, grant.participantId, amount, after));
+    }
+    return currentState(c, grant);
+  }),
+);
+
+const PAYMENT_GONE = "That payment isn't on this bill any more.";
+
+// Only the payer takes a payment back: it was paid to them, so they are the
+// one who knows it never arrived. It takes back the person's paid, whole.
+api.delete(
+  "/:billId/paid/:participantId",
+  route(async (c, grant) => {
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const { bill, participants } = snapshot;
+    if (grant.participantId !== bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can undo a payment, because it was paid to them.`);
+    }
+    const who = c.req.param("participantId") ?? "";
+
+    let taken: Cents;
+    try {
+      taken = await undoPaid(c.env.DB, grant.billId, who);
+    } catch (error) {
+      if (error instanceof SettlementGoneError) return refuse(404, PAYMENT_GONE);
+      // A reopened bill's payments are what its re-confirm reports against.
+      if (error instanceof BillNotConfirmedError) {
+        return refuse(409, "This bill was reopened, so its payments stay as they are until it's confirmed again.");
+      }
+      throw error;
+    }
+    refreshMessage(c, bill);
+    const paidBy = participants.find((p) => p.id === who);
+    const after = await leftFor(c.env, grant.billId, paidBy ? debtorOf(paidBy, bill.payerId) : who);
+    announce(c, bill, undoNotice(bill, participants, who, taken, after));
+    return currentState(c, grant);
+  }),
+);
+
+// `paid` is the payment total the page showed the payer when they agreed to
+// throw it away; a payment recorded since means they agreed to something else.
+api.delete(
+  "/:billId",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["paid"]);
+    const paid = cents(body.paid, "payments total", { signed: false });
+
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    if (grant.participantId !== snapshot.bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can delete the bill, because they paid.`);
+    }
+    try {
+      await deleteBill(c.env.DB, grant.billId, paid);
+    } catch (error) {
+      if (error instanceof PaymentsChangedError) {
+        return refuse(409, "Someone paid since you looked, so nothing was deleted. Look again before you delete it.");
+      }
+      if (error instanceof BillGoneError) return refuse(409, GONE.deleted!);
+      throw error;
+    }
+    refreshMessage(c, snapshot.bill);
+    return reply({ deleted: true });
   }),
 );
