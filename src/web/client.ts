@@ -390,13 +390,25 @@ export const CLIENT_SCRIPT = String.raw`
       el("span", { class: "ini" }, initialOf(nameOf(v, actor))));
   }
 
+  // Same as addonsLine on the server.
+  function addonsLine(addons, editable) {
+    const nodes = [];
+    addons.forEach((a, i) => {
+      if (i > 0) nodes.push(", ");
+      if (a.cents === 0) return nodes.push(a.label);
+      const amount = (a.cents > 0 ? "+" : "") + money(a.cents);
+      nodes.push(a.label + " ", editable ? el("span", { class: "addon-amt", "data-addon-index": i }, [amount, icon("brush", "brush")]) : amount);
+    });
+    return nodes;
+  }
+
   function rowNode(v, item, actor, mode) {
     const mine = item.claimedBy.includes(actor);
     const others = item.claimedBy.filter((id) => id !== actor);
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
       el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
-      item.addons ? el("span", { class: "item-addons" }, addonsText(item.addons)) : null,
+      item.addons ? el("span", { class: "item-addons" }, addonsLine(item.addons, mode === "all")) : null,
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
@@ -1864,7 +1876,13 @@ export const CLIENT_SCRIPT = String.raw`
     const claim = target.closest("[data-claim]");
     if (claim) return onClaim(claim);
     const line = target.closest("[data-open-line]");
-    if (line) return openSheet({ kind: "line", id: line.dataset.openLine, form: null }, line);
+    if (line) {
+      openSheet({ kind: "line", id: line.dataset.openLine, form: null }, line);
+      const addon = target.closest("[data-addon-index]");
+      const price = addon ? root.querySelectorAll("dialog[data-sheet] [data-addon-price]")[Number(addon.dataset.addonIndex)] : null;
+      if (price) price.focus();
+      return;
+    }
     if (target.closest("[data-open-payer]")) return openSheet({ kind: "payer", picked: null }, target.closest("[data-open-payer]"));
     const pick = target.closest("[data-pick-payer]");
     if (pick && sheet) {

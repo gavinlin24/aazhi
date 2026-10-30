@@ -331,6 +331,17 @@ describe("renderPage", () => {
     expect((await one(html, 'li.item[data-item="burger"] [aria-label]')).attrs["aria-label"]).toBe(`Burger (${note}), $19.50`);
     expect(await select(html, 'li.item[data-item="bun"] .item-addons')).toEqual([]);
     expect(stateOf(html).items.find((i: any) => i.id === "burger").addons).toEqual(addons);
+    expect(await select(html, ".addon-amt")).toEqual([]);
+  });
+
+  it("puts each priced add-on's amount in a pill for the payer, who can change it", async () => {
+    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }, { label: "No cheese", cents: -50 }];
+    const input = withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: [] });
+    const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "gavin", {}, NOW);
+
+    const pills = await select(html, 'li.item[data-item="burger"] .addon-amt');
+    expect(pills.map((p) => [p.text, p.attrs["data-addon-index"]])).toEqual([["+$3.00", "0"], ["-$0.50", "2"]]);
+    expect(await textOf(html, 'li.item[data-item="burger"] .item-addons')).toBe("Extra patty +$3.00, No onions, No cheese -$0.50");
   });
 
   it("escapes text that came from the receipt or from people", async () => {

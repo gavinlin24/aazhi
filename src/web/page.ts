@@ -2,7 +2,7 @@ import type { BillRow, Participant } from "../db/bills";
 import { formatAddons, formatCents, formatDate } from "../format";
 import { debtorOf } from "../money/debtors";
 import { itemPieces } from "../money/split";
-import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Addon, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { CLIENT_SCRIPT } from "./client";
 import { FONT_FACES } from "./fonts";
 import { billState, type BillState, type StateParticipant, type StateExtras } from "./state";
@@ -157,8 +157,8 @@ a { color: inherit; }
   background: var(--fill);
   color: var(--ink);
 }
-.amt:active, .is-editable button.row:active .item-price, button.payer-chip:active, .name-btn:active { background: var(--line); }
-@media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
+.amt:active, .is-editable button.row:active .item-price, .is-editable button.row:active .addon-amt, button.payer-chip:active, .name-btn:active { background: var(--line); }
+@media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, .is-editable button.row:hover .addon-amt, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
 /* A 30px pill is easier to see than to hit, so the buttons reach 44px. */
 .amt, button.payer-chip, .name-btn { position: relative; cursor: pointer; }
 .amt::after, button.payer-chip::after, .name-btn::after { content: ""; position: absolute; inset: -7px -4px; }
@@ -260,6 +260,12 @@ button.row:active { background: var(--fill); }
 .item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
 /* A dish's modifiers wrap rather than clip: they explain the price beside it. */
 .item-addons { grid-area: addons; min-width: 0; font-size: 14px; line-height: 18px; color: var(--muted); padding-bottom: 2px; }
+/* The dish's pill, scaled to the add-on line. The taller line keeps pills on
+   wrapped lines from touching. */
+.is-editable .item-addons { line-height: 26px; }
+.addon-amt { white-space: nowrap; }
+.is-editable .addon-amt { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 6px 0 8px; border-radius: 11px; background: var(--fill); color: var(--ink); vertical-align: 1px; }
+.addon-amt .ic.brush { width: 13px; height: 13px; }
 .has-addons .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" "tick addons addons" "tick who piece"; }
 .is-bare.has-addons .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" "tick addons addons"; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
@@ -1137,6 +1143,19 @@ const CHECK_TICK = `<span class="tick" aria-hidden="true">${icon("check")}</span
 // Three shapes: the payer can tap the tick (their own claim) apart from the
 // rest of the line (who had it, and fixing it); a member taps the whole line
 // for their own claim; anyone else sees it locked.
+// The short line under a dish. Each priced add-on's amount is a pill with a
+// brush when the payer can change it, like the dish's own price, and its index
+// lets a tap on it open the editor at that price.
+function addonsLine(addons: Addon[], brush: string): string {
+  return addons
+    .map((a, i) => {
+      if (a.cents === 0) return escapeHtml(a.label);
+      const amount = `${a.cents > 0 ? "+" : ""}${formatCents(a.cents)}`;
+      return `${escapeHtml(a.label)} ${brush ? `<span class="addon-amt" data-addon-index="${i}">${amount}${brush}</span>` : amount}`;
+    })
+    .join(", ");
+}
+
 function itemRow(v: View, item: LineItem): string {
   const mine = item.claimedBy.includes(v.s.viewer);
   const unclaimed = item.claimedBy.length === 0;
@@ -1144,7 +1163,7 @@ function itemRow(v: View, item: LineItem): string {
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
     `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
-    (item.addons ? `<span class="item-addons">${escapeHtml(formatAddons(item.addons))}</span>` : "") +
+    (item.addons ? `<span class="item-addons">${addonsLine(item.addons, brush)}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
   const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : ""];
