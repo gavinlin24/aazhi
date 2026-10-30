@@ -60,6 +60,20 @@ handler to call. Reading takes longer than 3 s, so
 `src/discord/handlers/split.ts` replies "thinking..." at once and continues in
 `ctx.waitUntil` (work allowed to run after the response).
 
+**Read limits.** Each Claude call spends credits, so `grantRead` in
+`src/extract/read-limit.ts` counts it in D1 first. A person gets 5 reads a rolling
+hour and 15 a day across all servers, and the bot gets 100 a day. Days turn over
+at midnight in Los Angeles. A photo is one read, and a read carries at most three,
+so a big receipt costs what it costs Claude. A retry counts as another read. A
+read that fails or gets refused stays counted, because it was still billed.
+
+The count happens before the reply, so a refusal can stay private, and one insert
+decides it, so simultaneous commands can't slip past. If the counter can't answer
+in two seconds, nothing is read and the person is told to try again.
+`extractReceipt` takes only the permit `grantRead` hands out, so a new command
+can't reach Claude around the limit. `receipt_reads` keeps two days of rows and
+clears older ones on each new read.
+
 **2. Reading the receipt.** `src/extract/claude.ts` sends the photo's Discord
 URL to Claude with a forced tool call (a fixed JSON schema in
 `src/extract/schema.ts`), so the photo never passes through the Worker or gets

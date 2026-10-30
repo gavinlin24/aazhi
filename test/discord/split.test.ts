@@ -106,7 +106,7 @@ function customIds(body: any): string[] {
 }
 
 beforeEach(async () => {
-  await db.prepare("DELETE FROM bills").run();
+  await db.batch([db.prepare("DELETE FROM bills"), db.prepare("DELETE FROM receipt_reads")]);
   calls = [];
   discordFailures = 0;
   anthropic = () => toolUse(saigonToolInput());
@@ -776,6 +776,157 @@ describe("a receipt already on a confirmed bill", () => {
     await run(slashSplit());
 
     expect((await billsNow()).map((b) => b.status)).toEqual(["superseded", "draft"]);
+  });
+});
+
+describe("the receipt read limit", () => {
+  const USER_LIMIT = "You've read a lot of receipts lately. Try again later.";
+  const GLOBAL_LIMIT = "Receipt reading is paused until tomorrow.";
+  const billCount = async () => (await db.prepare("SELECT COUNT(*) AS n FROM bills").first<{ n: number }>())!.n;
+  const readCount = async () => (await db.prepare("SELECT COALESCE(SUM(photos), 0) AS n FROM receipt_reads").first<{ n: number }>())!.n;
+
+  async function fillRows(userId: string, reads: number) {
+    const now = Date.now();
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(now);
+    await db
+      .prepare("INSERT INTO receipt_reads (user_id, read_at, day, photos) VALUES (?, ?, ?, ?)")
+      .bind(userId, now, day, reads)
+      .run();
+  }
+
+  function expectPrivately(json: any, content: string | RegExp) {
+    expect(json.type).toBe(4);
+    expect(json.data.flags).toBe(EPHEMERAL);
+    expect(json.data.content).toMatch(content);
+  }
+
+  it("refuses privately past a person's limit, with no Claude call, no thinking message and nothing saved", async () => {
+    await fillRows("gavin", 5);
+
+    const response = await run(slashSplit());
+
+    expectPrivately(await response.json(), USER_LIMIT);
+    expect(calls).toHaveLength(0);
+    expect(await billCount()).toBe(0);
+  });
+
+  it("refuses privately past the global cap", async () => {
+    await fillRows("everyone-else", 100);
+
+    const response = await run(slashSplit());
+
+    expectPrivately(await response.json(), GLOBAL_LIMIT);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("follows the person across servers", async () => {
+    await fillRows("gavin", 5);
+
+    const response = await run({ ...slashSplit(), guild_id: "guild-2", channel_id: "chan-2" });
+
+    expectPrivately(await response.json(), USER_LIMIT);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("covers the message command too", async () => {
+    await fillRows("gavin", 5);
+
+    const response = await run(messageSplit([{ url: RECEIPT_URL, contentType: "image/jpeg" }]));
+
+    expectPrivately(await response.json(), USER_LIMIT);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stops the sixth /split in a row after five that reached Claude", async () => {
+    for (let i = 0; i < 5; i++) await run(slashSplit());
+    expect(anthropicCalls()).toHaveLength(5);
+
+    await run(slashSplit());
+
+    expect(anthropicCalls()).toHaveLength(5);
+  });
+
+  it.each([
+    ["not a receipt", () => toolUse({ ...saigonToolInput(), is_receipt: false })],
+    ["an API error", () => new Response("overloaded", { status: 529 })],
+  ])("still counts a read that ended in %s", async (_, reply) => {
+    anthropic = reply;
+
+    await run(slashSplit());
+
+    expect(await readCount()).toBe(1);
+    expect(await billCount()).toBe(0);
+  });
+
+  it("still counts a read refused as an already split receipt", async () => {
+    anthropic = () => toolUse(saigonToolInput({ bill_time: "19:42" }));
+    await run(slashSplit());
+    await db.prepare("UPDATE bills SET status = 'confirmed'").run();
+
+    await run(slashSplit());
+
+    expect(originalEdits().at(-1)!.body.content).toBe("This receipt was already split.");
+    expect(await readCount()).toBe(2);
+  });
+
+  it("counts the retry after an unusable answer", async () => {
+    anthropic = () => toolUse(saigonToolInput({ items: "none" }));
+
+    await run(slashSplit());
+
+    expect(anthropicCalls()).toHaveLength(2);
+    expect(await readCount()).toBe(2);
+  });
+
+  it("makes no retry when the retry doesn't fit under the limit", async () => {
+    await fillRows("gavin", 4);
+    anthropic = () => toolUse(saigonToolInput({ items: "none" }));
+
+    await run(slashSplit());
+
+    expect(anthropicCalls()).toHaveLength(1);
+    expect(originalEdits()[0]!.body.content).toMatch(/try again/i);
+    expect(await readCount()).toBe(5);
+  });
+
+  it("charges a three-page /split three reads", async () => {
+    await run(
+      slashSplit([
+        { option: "receipt", url: "https://cdn.discordapp.com/1.jpg" },
+        { option: "page_2", url: "https://cdn.discordapp.com/2.jpg" },
+        { option: "page_3", url: "https://cdn.discordapp.com/3.jpg" },
+      ]),
+    );
+
+    expect(await readCount()).toBe(3);
+  });
+
+  it("refuses a message of too many photos without counting or reading any", async () => {
+    const photo = (n: number) => ({ url: `https://cdn.discordapp.com/${n}.jpg`, contentType: "image/jpeg" });
+
+    const response = await run(messageSplit([1, 2, 3, 4].map(photo)));
+
+    expectPrivately(await response.json(), /up to 3 photos/);
+    expect(calls).toHaveLength(0);
+    expect(await readCount()).toBe(0);
+  });
+
+  it("doesn't count a command with no photo", async () => {
+    await run(slashSplit([{ option: "receipt", url: "https://cdn.discordapp.com/receipt.pdf", contentType: "application/pdf" }]));
+
+    expect(await readCount()).toBe(0);
+  });
+
+  it("asks for another try and leaves Claude alone when the counter can't be reached", async () => {
+    await db.prepare("ALTER TABLE receipt_reads RENAME TO receipt_reads_away").run();
+    try {
+      const response = await run(slashSplit());
+
+      expectPrivately(await response.json(), /try again in a minute/i);
+      expect(calls).toHaveLength(0);
+    } finally {
+      await db.prepare("ALTER TABLE receipt_reads_away RENAME TO receipt_reads").run();
+    }
   });
 });
 
