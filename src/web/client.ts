@@ -1078,8 +1078,9 @@ export const CLIENT_SCRIPT = String.raw`
         }, icon("trash")),
       );
     }
-    // Once the guest paid the payer, the adder has nothing left to mark.
-    if (confirmed && manage && (v.s.viewerIsPayer || g.paidToPayer !== true)) {
+    // A guest already paid, directly or with their member, has nothing left
+    // to mark, so the chip stays only to take back the viewer's own mark.
+    if (confirmed && manage && (ownMark(v, g) || !guestPaid(v, g))) {
       actions.push(el("button", {
         type: "button",
         class: "chip-btn",
