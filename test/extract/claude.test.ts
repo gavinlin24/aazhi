@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractReceipt, reconciles, type Extraction } from "../../src/extract/claude";
+import type { ReadPermit } from "../../src/extract/read-limit";
 import { EXTRACT_TOOL_NAME, parseToolInput } from "../../src/extract/schema";
 import { LA_PALMA, MENSHO, PATTY_SHACK } from "../fixtures/modifiers";
 import { SAIGON } from "../fixtures/saigon";
@@ -15,6 +16,10 @@ const SAIGON_EXTRACTION: Extraction = {
 };
 
 const URL_ONE = "https://cdn.discordapp.com/attachments/1/2/receipt.jpg";
+
+function permit(...imageUrls: string[]): ReadPermit {
+  return { imageUrls, retry: async () => true } as ReadPermit;
+}
 
 function cents(value: number): string {
   const sign = value < 0 ? "-" : "";
@@ -143,7 +148,7 @@ describe("extractReceipt", () => {
   it("returns the extraction with prices converted to integer cents and the gate result", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toEqual({
       ok: true,
@@ -159,7 +164,7 @@ describe("extractReceipt", () => {
     );
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ items })));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toMatchObject({ ok: true, reconciles: false, discrepancyCents: 5000 });
   });
@@ -168,7 +173,7 @@ describe("extractReceipt", () => {
     const second = "https://cdn.discordapp.com/attachments/1/3/receipt-back.jpg";
     fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    await extractReceipt([URL_ONE, second], "sk-test");
+    await extractReceipt(permit(URL_ONE, second), "sk-test");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
@@ -206,7 +211,7 @@ describe("extractReceipt", () => {
     const items = [{ label: "Thing", price, confidence: 1 }];
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ items, tax: null, printed_total: null })));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toMatchObject({ ok: true, extraction: { items: [{ cents: expected }] } });
     if (result.ok) expect(Object.is(result.extraction.items[0].cents, -0)).toBe(false);
@@ -215,7 +220,7 @@ describe("extractReceipt", () => {
   it("keeps a null tax and a null printed total as null and cannot pass the gate", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ tax: null, printed_total: null })));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toMatchObject({
       ok: true,
@@ -228,7 +233,7 @@ describe("extractReceipt", () => {
   it("keeps a whole-bill discount out of the items, as money off", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ discount: "-25.15", printed_total: "248.67" })));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toEqual({
       ok: true,
@@ -240,18 +245,18 @@ describe("extractReceipt", () => {
 
   it("reads a discount printed without a minus sign as money off too", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ discount: "25.15", printed_total: "248.67" })));
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toMatchObject({ extraction: { discountCents: 2515 }, reconciles: true });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toMatchObject({ extraction: { discountCents: 2515 }, reconciles: true });
   });
 
   it("takes a missing discount as none", async () => {
     const { discount: _discount, ...withoutDiscount } = SAIGON_TOOL_INPUT;
     fetchMock.mockResolvedValueOnce(toolUseResponse(withoutDiscount));
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toMatchObject({ extraction: { discountCents: 0 }, reconciles: true });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toMatchObject({ extraction: { discountCents: 0 }, reconciles: true });
   });
 
   it("asks for whole-bill discounts apart from the items, and a dish's own discount under it", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
-    await extractReceipt([URL_ONE], "k");
+    await extractReceipt(permit(URL_ONE), "k");
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.tools[0].input_schema.required).toContain("discount");
     const prompt = body.messages[0].content.at(-1).text;
@@ -262,21 +267,21 @@ describe("extractReceipt", () => {
   it("reports a photo that is not a receipt rather than inventing a bill", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ items: [], tax: null, printed_total: null })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "not-a-receipt" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "not-a-receipt" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("trusts the model when it says the image is not a receipt, without demanding the other fields", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse({ is_receipt: false, readable: false }));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "not-a-receipt" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "not-a-receipt" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("reports a receipt the model cannot read as unreadable", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ readable: false, items: [] })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "unreadable" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "unreadable" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -285,7 +290,7 @@ describe("extractReceipt", () => {
       .mockResolvedValueOnce(toolUseResponse(withOverrides({ items: "none" })))
       .mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
 
     expect(result).toMatchObject({ ok: true, reconciles: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -296,8 +301,16 @@ describe("extractReceipt", () => {
       .mockResolvedValueOnce(toolUseResponse(withOverrides({ items: "none" })))
       .mockResolvedValueOnce(toolUseResponse(withOverrides({ items: "none" })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("makes no second call when the read limit refuses the retry", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ items: "none" })));
+    const refused = { imageUrls: [URL_ONE], retry: async () => false } as ReadPermit;
+
+    await expect(extractReceipt(refused, "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("treats a reply with no tool call as a schema violation", async () => {
@@ -305,7 +318,7 @@ describe("extractReceipt", () => {
       Response.json({ content: [{ type: "text", text: "Sure, here is the receipt" }], usage: USAGE });
     fetchMock.mockResolvedValueOnce(prose()).mockResolvedValueOnce(prose());
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -324,7 +337,7 @@ describe("extractReceipt", () => {
     const items = [{ label: "Thing", price, confidence: 1 }];
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ items })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -332,18 +345,18 @@ describe("extractReceipt", () => {
     const items = [{ label: "Thing", price: 19.5, confidence: 1 }];
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ items })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
   });
 
   it("rejects an unparseable tax, discount or printed total", async () => {
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ tax: "twenty" })));
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
 
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ printed_total: "$273.82" })));
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
 
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ discount: "10%" })));
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
   });
 
   it.each([
@@ -355,7 +368,7 @@ describe("extractReceipt", () => {
     const items = [{ label: "Thing", price: "5.00", confidence }];
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ items })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -363,7 +376,7 @@ describe("extractReceipt", () => {
     const items = [{ price: "5.00", confidence: 1 }];
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ items })));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
   });
 
   it("reports a model error rather than a crash when the credit balance is empty", async () => {
@@ -377,7 +390,7 @@ describe("extractReceipt", () => {
       ),
     );
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -386,7 +399,7 @@ describe("extractReceipt", () => {
       Response.json({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }, { status: 529 }),
     );
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -398,7 +411,7 @@ describe("extractReceipt", () => {
     );
     const deadline = new AbortController();
 
-    const result = extractReceipt([URL_ONE], "k", { signal: deadline.signal });
+    const result = extractReceipt(permit(URL_ONE), "k", { signal: deadline.signal });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     deadline.abort(new DOMException("deadline", "TimeoutError"));
 
@@ -413,7 +426,7 @@ describe("extractReceipt", () => {
       return toolUseResponse({ not: "the schema" });
     });
 
-    await expect(extractReceipt([URL_ONE], "k", { signal: deadline.signal })).resolves.toEqual({
+    await expect(extractReceipt(permit(URL_ONE), "k", { signal: deadline.signal })).resolves.toEqual({
       ok: false,
       reason: "model-error",
     });
@@ -427,7 +440,7 @@ describe("extractReceipt", () => {
       return toolUseResponse(SAIGON_TOOL_INPUT);
     });
 
-    const result = await extractReceipt([URL_ONE], "k", { signal: deadline.signal });
+    const result = await extractReceipt(permit(URL_ONE), "k", { signal: deadline.signal });
 
     expect(result).toMatchObject({ ok: true, reconciles: true });
   });
@@ -435,7 +448,7 @@ describe("extractReceipt", () => {
   it("reports a model error when the network call itself fails", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
 
-    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "model-error" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -444,7 +457,7 @@ describe("extractReceipt", () => {
       .mockResolvedValueOnce(toolUseResponse(withOverrides({ items: "none" })))
       .mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    await extractReceipt([URL_ONE], "k");
+    await extractReceipt(permit(URL_ONE), "k");
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0].join(" ")).toContain(JSON.stringify(USAGE));
@@ -453,7 +466,7 @@ describe("extractReceipt", () => {
   it("never logs the API key or the image URL", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    await extractReceipt([URL_ONE], "sk-secret-key");
+    await extractReceipt(permit(URL_ONE), "sk-secret-key");
 
     const logged = logSpy.mock.calls.flat().join(" ");
     expect(logged).not.toContain("sk-secret-key");
@@ -464,7 +477,7 @@ describe("extractReceipt", () => {
 describe("modifiers", () => {
   async function read(input: unknown) {
     fetchMock.mockResolvedValueOnce(toolUseResponse(input));
-    const result = await extractReceipt([URL_ONE], "k");
+    const result = await extractReceipt(permit(URL_ONE), "k");
     if (!result.ok) throw new Error(`read failed: ${result.reason}`);
     return result;
   }
@@ -583,7 +596,7 @@ describe("modifiers", () => {
   it("asks the model for modifiers under their dish rather than as lines of their own", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
-    await extractReceipt([URL_ONE], "k");
+    await extractReceipt(permit(URL_ONE), "k");
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     const item = body.tools[0].input_schema.properties.items.items;

@@ -1,4 +1,5 @@
 import type { Cents } from "../money/types";
+import type { ReadPermit } from "./read-limit";
 import {
   EXTRACT_PROMPT,
   EXTRACT_TOOL,
@@ -91,7 +92,7 @@ async function callModel(
 // `signal` is the caller's deadline. An aborted call surfaces as a model error
 // ("try again shortly") rather than hanging until the runtime kills the work.
 export async function extractReceipt(
-  imageUrls: string[],
+  permit: ReadPermit,
   apiKey: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<ExtractionResult> {
@@ -108,7 +109,8 @@ export async function extractReceipt(
     // A retry past the deadline would only be aborted; an answer that already
     // arrived is still used.
     if (attempt > 0 && options.signal?.aborted) break;
-    const result = await callModel(imageUrls, apiKey, logFirstUsage, options.signal);
+    if (attempt > 0 && !(await permit.retry())) break;
+    const result = await callModel(permit.imageUrls, apiKey, logFirstUsage, options.signal);
     if (result.kind === "api-error") return { ok: false, reason: "model-error" };
     if (result.kind === "malformed") continue;
 

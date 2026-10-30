@@ -9,6 +9,7 @@ import {
 import { addParticipant, createBill, insertItems, ReceiptAlreadySplitError, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
 import type { Env } from "../../env";
 import { extractReceipt, type Extraction } from "../../extract/claude";
+import { grantRead, type ReadPermit } from "../../extract/read-limit";
 import { receiptKey } from "../../extract/receipt-key";
 import type { InteractionHandler } from "../interactions";
 import { displayName } from "../members";
@@ -63,7 +64,7 @@ function context(body: APIInteraction): { guildId: string; channelId: string; in
   };
 }
 
-function begin(body: APIInteraction, imageUrls: string[], env: Env, ctx: ExecutionContext): Response {
+async function begin(body: APIInteraction, imageUrls: string[], env: Env, ctx: ExecutionContext): Promise<Response> {
   const where = context(body);
   if (!where) return Response.json(ephemeral(NOT_IN_SERVER));
   return startSplit(imageUrls, where.guildId, where.channelId, where.invoker, body.token, env, ctx);
@@ -95,8 +96,10 @@ export const splitMessageCommand: InteractionHandler = async (body, env, ctx) =>
 
 // Reading a receipt takes longer than Discord's three-second deadline, so the
 // interaction is acknowledged at once and everything else runs after the
-// response, finishing through the interaction token's 15-minute window.
-export function startSplit(
+// response, finishing through the interaction token's 15-minute window. The
+// read limit comes first because a deferred reply is public from then on, and
+// a refusal has to stay private.
+export async function startSplit(
   imageUrls: string[],
   guildId: string,
   channelId: string,
@@ -104,9 +107,11 @@ export function startSplit(
   interactionToken: string,
   env: Env,
   ctx: ExecutionContext,
-): Response {
+): Promise<Response> {
   if (imageUrls.length === 0) return Response.json(ephemeral(NO_PHOTO));
-  ctx.waitUntil(readAndPost(imageUrls, guildId, channelId, invoker, interactionToken, env));
+  const grant = await grantRead(env.DB, invoker.id, imageUrls);
+  if (!grant.ok) return Response.json(ephemeral(grant.refusal));
+  ctx.waitUntil(readAndPost(grant.permit, guildId, channelId, invoker, interactionToken, env));
   return Response.json({ type: InteractionResponseType.DeferredChannelMessageWithSource });
 }
 
@@ -143,7 +148,7 @@ async function saveDraft(e: Extraction, guildId: string, channelId: string, paye
 }
 
 async function readAndPost(
-  imageUrls: string[],
+  permit: ReadPermit,
   guildId: string,
   channelId: string,
   invoker: Invoker,
@@ -154,7 +159,7 @@ async function readAndPost(
   // that finished early, and tests can drive the deadline with fake timers.
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(new DOMException("receipt read timed out", "TimeoutError")), READ_DEADLINE_MS);
-  const read = await extractReceipt(imageUrls, env.ANTHROPIC_API_KEY, { signal: deadline.signal }).finally(() =>
+  const read = await extractReceipt(permit, env.ANTHROPIC_API_KEY, { signal: deadline.signal }).finally(() =>
     clearTimeout(timer),
   );
   // A failed read creates nothing and leaves any open draft here alone: a bad
