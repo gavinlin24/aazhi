@@ -311,7 +311,7 @@ describe("renderPage", () => {
     expect(await select(page("marcus", bill, input, outsider), "[data-add-guest]")).toEqual([]);
   });
 
-  it("shows a line's add-ons under the dish name, and reads them out with it", async () => {
+  it("shows each add-on on its own line under the dish, and reads them out with it", async () => {
     const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }, { label: "No cheese", cents: -50 }];
     const note = "Extra patty +$3.00, No onions, No cheese -$0.50";
     const input = withItem(withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: ["marcus"] }), {
@@ -325,23 +325,24 @@ describe("renderPage", () => {
 
     const row = await one(html, 'li.item[data-item="burger"]');
     expect(row.attrs.class.split(" ")).toContain("has-addons");
-    expect(await textOf(html, 'li.item[data-item="burger"] .item-addons')).toBe(note);
+    const lines = await select(html, 'li.item[data-item="burger"] .item-addons .addon-line');
+    expect(lines.map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions", "No cheese-$0.50"]);
+    expect((await select(html, 'li.item[data-item="burger"] .addon-price')).map((p) => p.text)).toEqual(["+$3.00", "-$0.50"]);
     expect(html).not.toContain("<b>bold");
     expect(html).toContain("&lt;b&gt;bold&lt;/b&gt;");
     expect((await one(html, 'li.item[data-item="burger"] [aria-label]')).attrs["aria-label"]).toBe(`Burger (${note}), $19.50`);
     expect(await select(html, 'li.item[data-item="bun"] .item-addons')).toEqual([]);
     expect(stateOf(html).items.find((i: any) => i.id === "burger").addons).toEqual(addons);
-    expect(await select(html, ".addon-amt")).toEqual([]);
   });
 
-  it("puts each priced add-on's amount in a pill for the payer, who can change it", async () => {
-    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }, { label: "No cheese", cents: -50 }];
+  it("keeps add-on prices plain for the payer, whose brush is on the dish's price", async () => {
+    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }];
     const input = withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: [] });
     const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "gavin", {}, NOW);
 
-    const pills = await select(html, 'li.item[data-item="burger"] .addon-amt');
-    expect(pills.map((p) => [p.text, p.attrs["data-addon-index"]])).toEqual([["+$3.00", "0"], ["-$0.50", "2"]]);
-    expect(await textOf(html, 'li.item[data-item="burger"] .item-addons')).toBe("Extra patty +$3.00, No onions, No cheese -$0.50");
+    expect((await select(html, 'li.item[data-item="burger"] .addon-line')).map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions"]);
+    expect(await select(html, 'li.item[data-item="burger"] .item-addons svg')).toEqual([]);
+    expect(await select(html, 'li.item[data-item="burger"] .item-price svg')).toHaveLength(1);
   });
 
   it("escapes text that came from the receipt or from people", async () => {
