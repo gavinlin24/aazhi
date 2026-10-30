@@ -2,6 +2,7 @@ import { getSettled, getShares, hasSplitPartner, type BillRow, type BillSnapshot
 import { getVenmoHandles } from "../db/handles";
 import { listSettlements, type Settlement } from "../db/settlements";
 import { reconciles } from "../extract/claude";
+import { receiptStamp } from "../extract/receipt-time";
 import { groupByDebtor, paidByDebtor } from "../money/debtors";
 import { splitBill } from "../money/split";
 import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
@@ -15,6 +16,14 @@ export interface BillState {
   billId: string;
   revision: number;
   status: BillRow["status"];
+  kind: BillRow["kind"];
+  // A log changes its name after the fact, so the script has to know it.
+  place: string | null;
+  // "Oct 30, 6:12 PM", for a log's header.
+  stamp: string | null;
+  vote: BillRow["vote"];
+  // A confirmed log whose post never made it to the channel.
+  postMissing: boolean;
   payerId: ParticipantId;
   viewer: ParticipantId;
   viewerIsPayer: boolean;
@@ -40,6 +49,7 @@ export interface BillState {
   // Worked out here so the page and its script can't disagree with Confirm.
   hasSplitPartner: boolean;
   receiptTaken: boolean;
+  receiptSplit: boolean;
   // One entry per debtor: the one amount the page shows as theirs (their own
   // share and their guests', after pardons, less what any guest paid the
   // payer directly), and what they have paid towards it themselves. Worked
@@ -86,6 +96,7 @@ export interface PayExtras {
 
 export interface StateFlags {
   receiptTaken?: boolean;
+  receiptSplit?: boolean;
 }
 
 // Everything renderPage takes besides the bill, in one bag.
@@ -93,9 +104,11 @@ export type StateExtras = { hasPayments?: boolean; paid?: ParticipantId[] } & Gu
 
 // Someone holding a link to a bill they are not on (they opened it while it
 // was confirmed, and it was reopened since) gets nothing to tap: claiming
-// needs a roster row, and only Open the split adds one.
+// needs a roster row, and only Open the split adds one. On a log the one person
+// picks their own lines and nothing else, until it is logged or up for a vote.
 export function editableFor(bill: BillRow, participants: Pick<Participant, "id">[], viewer: ParticipantId): Editable {
   if (bill.status !== "draft") return "none";
+  if (bill.kind === "log") return viewer === bill.payerId && !bill.vote ? "self" : "none";
   if (viewer === bill.payerId) return "all";
   return participants.some((p) => p.id === viewer) ? "self" : "none";
 }
@@ -144,6 +157,11 @@ export function billState(
     billId: bill.id,
     revision: bill.revision,
     status: bill.status,
+    kind: bill.kind ?? "split",
+    place: bill.place,
+    stamp: receiptStamp(bill.billDate, bill.billTime ?? null),
+    vote: bill.vote ?? null,
+    postMissing: bill.kind === "log" && bill.status === "confirmed" && !bill.messageId,
     payerId: bill.payerId,
     viewer,
     viewerIsPayer: viewer === bill.payerId,
@@ -164,6 +182,7 @@ export function billState(
     result,
     hasSplitPartner: hasSplitPartner(result.shares, participants, bill.payerId),
     receiptTaken: flags.receiptTaken ?? false,
+    receiptSplit: flags.receiptSplit ?? false,
     owing,
     pay,
     viewerVenmo: payExtras.viewerVenmo ?? null,
@@ -220,13 +239,13 @@ export async function pageData(
   snapshot: BillSnapshot,
   viewer: ParticipantId,
 ): Promise<{ result: SplitResult; extras: StateExtras }> {
-  const { hasPayments, paid, paidToPayer, paidToHost, receiptTaken } = snapshot;
+  const { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
   const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, ...pay } };
+  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit, ...pay } };
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
-  const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost, receiptTaken } = snapshot;
+  const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
   const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken });
+  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken, receiptSplit });
 }

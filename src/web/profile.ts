@@ -1,4 +1,6 @@
+import type { LoggedRow } from "../db/bills";
 import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profile, Ranked } from "../db/stats";
+import { RECEIPT_TIME_ZONE, receiptStamp } from "../extract/receipt-time";
 import { formatCents } from "../format";
 import { RANK_FACE } from "./fonts";
 import { escapeHtml, hills, hueOf, icon, initialOf, notice, shell, sprite } from "./page";
@@ -193,7 +195,24 @@ ${tile(icon("pin"), plural(p.places, "place"), "unique visits")}
 </div>`;
 }
 
-export function renderProfile(p: Profile, v: Viewer, nowMs: number): string {
+function logDay(log: LoggedRow, nowMs: number): string {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: RECEIPT_TIME_ZONE }).format(nowMs);
+  return log.billDate === today ? "Today" : (receiptStamp(log.billDate, null) ?? "Logged");
+}
+
+// Only ever on your own profile, and every server's, since a log is yours
+// wherever you logged it. This is where you fix one once its link has run out.
+function logsCard(logs: LoggedRow[], v: Viewer, nowMs: number): string {
+  if (logs.length === 0) return "";
+  const rows = logs.map((log) => {
+    const line = `${logDay(log, nowMs)} · ${formatCents(log.cents)}`;
+    return `<li data-log="${escapeHtml(log.id)}"><span class="log-seal" aria-hidden="true">记</span><span class="log-text"><span class="log-place">${escapeHtml(log.place ?? "Receipt")}</span>` +
+      `<span class="log-line">${line}</span></span><button type="button" class="log-btn" data-log-rename>Rename</button><button type="button" class="log-btn is-danger" data-log-remove>Remove</button></li>`;
+  });
+  return `<section class="card logs" data-logs="${escapeHtml(v.guildId)}"><p class="card-h">Your logs<span class="sub">Only you see this</span></p><ul>${rows.join("")}</ul></section>`;
+}
+
+export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: LoggedRow[] = []): string {
   const self = p.id === v.viewerId;
   const title = `${avatar(p.id, p.name, 30, self)}${escapeHtml(p.name)}`;
   const back = `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
@@ -204,6 +223,7 @@ ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
 ${tiles(p, v)}
+${self ? logsCard(logs, v, nowMs) : ""}
 </main>
 <script>${PROFILE_SCRIPT}</script>`;
   return shell(`${p.name} · AAzhi`, main, PROFILE_STYLES);
@@ -327,6 +347,20 @@ const PROFILE_STYLES = `${RANK_FACE}
 .card-h { display: flex; align-items: center; gap: 7px; padding: 13px var(--edge) 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .card-h .sub { margin-left: auto; font-weight: 400; font-size: 14px; }
 .pair-card { margin: 12px 0; }
+.logs { margin: 12px 0; }
+.logs ul { list-style: none; margin: 0; padding: 4px 0 2px; }
+.logs li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 58px; padding: 8px var(--edge); border-top: 1px solid var(--rule); }
+.logs li:first-child { border-top: 0; }
+.log-seal { display: grid; flex: none; place-items: center; width: 24px; height: 24px; border-radius: 3px; background: var(--seal); color: #fbf3ea; font-size: 15px; }
+.log-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.log-place { font-size: 16px; overflow-wrap: anywhere; }
+.log-line { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums lining-nums; }
+.log-btn { min-height: 44px; padding: 0 6px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 15px; cursor: pointer; }
+.log-btn.is-danger { color: var(--seal); }
+.log-btn.is-armed { color: var(--ink); font-weight: 600; }
+.log-form { display: flex; flex: 1 1 100%; gap: 8px; }
+.log-form input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 1.5px solid var(--azurite); border-radius: var(--radius); background: var(--paper); color: var(--ink); font: inherit; font-size: 17px; }
+.log-msg { flex: 1 1 100%; color: var(--warn); font-size: 14px; }
 .pair-none { padding: 10px var(--edge) 14px; color: var(--muted); font-size: 15px; }
 .figures { display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 4px 9px; text-align: center; }
 .figures > div { display: flex; flex-direction: column; min-width: 0; }

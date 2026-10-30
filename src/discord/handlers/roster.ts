@@ -79,7 +79,8 @@ export const openSplit: InteractionHandler = async (body, env, ctx, origin) => {
   if (body.type !== InteractionType.MessageComponent || !who) return json(ephemeral(NOT_SUPPORTED));
 
   const bill = await getBill(env.DB, billIdFrom(body.data.custom_id, "open:"));
-  if (!bill) return json(ephemeral(NOT_FOUND));
+  // A log is one person's, so nobody joins it, whatever button reaches here.
+  if (!bill || bill.kind === "log") return json(ephemeral(NOT_FOUND));
   const gone = GONE[bill.status];
   if (gone) return json(ephemeral(gone));
 
@@ -115,7 +116,7 @@ export const pickRoster: InteractionHandler = async (body, env, ctx) => {
   }
 
   const bill = await getBill(env.DB, billIdFrom(body.data.custom_id, "roster:"));
-  if (!bill) return json(ephemeral(NOT_FOUND));
+  if (!bill || bill.kind === "log") return json(ephemeral(NOT_FOUND));
   const gone = GONE[bill.status];
   if (gone) return json(ephemeral(gone));
   if (bill.status !== "draft") return json(ephemeral(NOT_DRAFT));

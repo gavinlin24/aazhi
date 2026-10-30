@@ -1,11 +1,12 @@
 import { Hono, type Context } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
-import { getBillSnapshot } from "./db/bills";
+import { getBillSnapshot, listLogs } from "./db/bills";
 import { hasBillHere, personProfile, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
 import { api } from "./web/api";
+import { logsApi } from "./web/logs";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
 import { renderBoards, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
 import { pageData } from "./web/state";
@@ -57,7 +58,8 @@ app.get("/b/:billId", async (c) => {
   const snapshot = await getBillSnapshot(c.env.DB, billId);
   if (!snapshot) return page(renderBillNotFound(), 404);
   const { bill, input, participants } = snapshot;
-  if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill.status), 410);
+  if (bill.kind === "log" && grant.participantId !== bill.payerId) return page(renderLinkRefused(), 403);
+  if (bill.status === "superseded" || bill.status === "deleted") return page(renderBillGone(bill), 410);
 
   const { result, extras } = await pageData(c.env.DB, snapshot, grant.participantId);
   return page(renderPage(bill, result, input.items, participants, grant.participantId, extras), 200);
@@ -94,7 +96,8 @@ async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) 
   if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
   const profile = await personProfile(c.env.DB, viewer.guildId, person, nowMs);
   if (!profile) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
-  return page(renderProfile(profile, viewer, nowMs), 200);
+  const logs = person === viewer.viewerId ? await listLogs(c.env.DB, person) : [];
+  return page(renderProfile(profile, viewer, nowMs, logs), 200);
 }
 
 app.get("/g/:guildId", (c) => profilePage(c, (viewer) => viewer.viewerId));
@@ -112,5 +115,7 @@ app.get("/g/:guildId/boards", async (c) => {
   };
   return page(renderBoards(await serverBoards(c.env.DB, viewer.guildId, Date.now()), viewer, shown), 200);
 });
+
+app.route("/g", logsApi);
 
 export default app;

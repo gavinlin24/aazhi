@@ -15,7 +15,7 @@ const GUILD_LOOKUP_MS = 1000;
 async function discord(
   env: Env,
   what: string,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string,
   body: unknown,
   auth: "bot" | "none",
@@ -30,8 +30,44 @@ async function discord(
 
 // A new message, unlike an edit, shows up as unread in the channel. It uses
 // the bot token because it is sent long after any interaction token expired.
-export async function postChannelMessage(channelId: string, body: unknown, env: Env): Promise<void> {
-  await discord(env, "channel message", "POST", `/channels/${channelId}/messages`, body, "bot");
+export async function postChannelMessage(channelId: string, body: unknown, env: Env): Promise<string> {
+  const response = await discord(env, "channel message", "POST", `/channels/${channelId}/messages`, body, "bot");
+  return (await response.json<{ id: string }>()).id;
+}
+
+// Discord takes files only as multipart. Bytes rather than links, because the
+// post has to outlive the links an interaction's attachments arrive on.
+export async function postChannelFiles(channelId: string, body: unknown, urls: string[], env: Env): Promise<string> {
+  const form = new FormData();
+  form.set("payload_json", JSON.stringify(body));
+  await Promise.all(
+    urls.map(async (url, i) => {
+      const photo = await fetch(url);
+      if (!photo.ok) throw new Error(`could not fetch a receipt photo: ${photo.status}`);
+      form.set(`files[${i}]`, await photo.blob(), `receipt-${i + 1}.jpg`);
+    }),
+  );
+  const response = await fetch(`${API}/channels/${channelId}/messages`, {
+    method: "POST",
+    headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, "user-agent": USER_AGENT },
+    body: form,
+  });
+  if (!response.ok) throw new Error(`Discord channel files failed: ${response.status} ${await response.text()}`);
+  return (await response.json<{ id: string }>()).id;
+}
+
+export async function editChannelMessage(channelId: string, messageId: string, body: unknown, env: Env): Promise<void> {
+  await discord(env, "channel message edit", "PATCH", `/channels/${channelId}/messages/${messageId}`, body, "bot");
+}
+
+// A 404 is a post someone already deleted, which is what this wanted anyway. A
+// bot needs no permission to delete its own message.
+export async function deleteChannelMessage(channelId: string, messageId: string, env: Env): Promise<void> {
+  const response = await fetch(`${API}/channels/${channelId}/messages/${messageId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, "user-agent": USER_AGENT },
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`Discord message delete failed: ${response.status} ${await response.text()}`);
 }
 
 // An interaction carries the server's id but not its name. The name is
@@ -44,6 +80,20 @@ export async function guildName(guildId: string, env: Env): Promise<string | nul
     return name ?? null;
   } catch (error) {
     console.error("could not look up the server name", error);
+    return null;
+  }
+}
+
+// Approximate, and it counts bots, which is all Discord offers without a
+// privileged intent. Null if the lookup is slow: a vote must still answer inside
+// Discord's three seconds.
+export async function guildMemberCount(guildId: string, env: Env): Promise<number | null> {
+  try {
+    const response = await discord(env, "guild count", "GET", `/guilds/${guildId}?with_counts=true`, undefined, "bot", AbortSignal.timeout(GUILD_LOOKUP_MS));
+    const { approximate_member_count: count } = await response.json<{ approximate_member_count?: number }>();
+    return count ?? null;
+  } catch (error) {
+    console.error("could not count the server's members", error);
     return null;
   }
 }
@@ -83,7 +133,8 @@ function sleep(ms: number): Promise<void> {
 // render. The bill message outlives the interaction token, so this uses the
 // bot token and the stored ids.
 export async function editBillMessage(bill: BillRow, env: Env): Promise<void> {
-  if (!bill.messageId) return;
+  // A log's message is its one-line post, not a bill card.
+  if (!bill.messageId || bill.kind === "log") return;
   if (!(await claimEditLease(env.DB, bill.id, EDIT_WINDOW_MS))) return;
   await sleep(EDIT_WINDOW_MS);
 

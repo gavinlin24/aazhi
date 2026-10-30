@@ -45,6 +45,30 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     name: "Split this receipt",
     type: ApplicationCommandType.Message,
   },
+  {
+    ...guildOnly,
+    name: "log",
+    type: ApplicationCommandType.ChatInput,
+    description: "Log your own meal from a photo of the receipt",
+    options: [
+      {
+        type: ApplicationCommandOptionType.Attachment,
+        name: "receipt",
+        description: "A photo of the receipt",
+        required: true,
+      },
+      {
+        type: ApplicationCommandOptionType.Attachment,
+        name: "page_2",
+        description: "The second page, if the receipt runs over",
+      },
+      {
+        type: ApplicationCommandOptionType.Attachment,
+        name: "page_3",
+        description: "The third page, if the receipt runs over",
+      },
+    ],
+  },
   // A debt belongs to a bill and a bill to a server, so the same rows answer
   // "in this server" and "everywhere". A DM with the bot has no server, so
   // there it always answers everywhere.

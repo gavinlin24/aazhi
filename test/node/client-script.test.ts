@@ -38,13 +38,14 @@ describe("the page script", () => {
 describe("the actions card on an open page", () => {
   const card = { _key: "", draws: 0, contains: () => false, replaceChildren() { this.draws += 1; } };
   const { renderActions } = lift<{ renderActions: (v: unknown) => void }>(
-    ["renderActions", "keyedInto", "confirmBlock"],
+    ["renderActions", "keyedInto", "confirmBlock", "logBlock", "logSpent"],
     {
       root: { querySelector: () => card },
       busy: new Set(),
       armed: new Set(),
       editingPrinted: () => false,
       stopped: false,
+      logGone: null,
       actionNodes: () => [],
       document: { activeElement: null },
     },
@@ -67,6 +68,16 @@ describe("the actions card on an open page", () => {
     renderActions({ s: { ...ready, receiptTaken: true } });
     expect(card.draws).toBe(2);
   });
+
+  // A tick shows at once, but what it comes to arrives with the server's answer,
+  // when the items no longer change. That answer is what turns on Log it.
+  it("redraws a log when the amount picked lands", () => {
+    const picking = { ...ready, kind: "log", viewer: "gavin", place: "Saigon Kitchen", result: { shares: [] } };
+    renderActions({ s: picking });
+    const before = card.draws;
+    renderActions({ s: { ...picking, result: { shares: [{ participant: "gavin", owedCents: 1000 }] } } });
+    expect(card.draws).toBe(before + 1);
+  });
 });
 
 describe("the Confirm button's reason for waiting", () => {
@@ -75,7 +86,7 @@ describe("the Confirm button's reason for waiting", () => {
   const ready = { printedTotalCents: 2000, reconciles: { ok: true }, items: [{ claimedBy: ["gavin"] }], hasSplitPartner: true, payerId: "gavin", participants: [gavin] };
 
   it("waits for someone to split with, and matches the page", () => {
-    expect(confirmBlock({ ...ready, hasSplitPartner: false })).toBe("Add someone to split with.");
+    expect(confirmBlock({ ...ready, hasSplitPartner: false })).toBe("Add someone, or use /log.");
     expect(confirmBlock(ready)).toBeNull();
   });
 
@@ -86,7 +97,7 @@ describe("the Confirm button's reason for waiting", () => {
 
   it("still asks for someone when the only other person is a guest", () => {
     const guestOnly = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "sam", kind: "guest" }] };
-    expect(confirmBlock(guestOnly)).toBe("Add someone to split with.");
+    expect(confirmBlock(guestOnly)).toBe("Add someone, or use /log.");
   });
 
   it("puts a receipt already split ahead of everything, since nothing else can help", () => {
