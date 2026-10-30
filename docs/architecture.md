@@ -115,11 +115,20 @@ note from a link, so it is the only app.
 brought included, in `settlements` (`src/db/settlements.ts`). The checks run
 inside the insert, so a stale or part amount is refused, and the page's own
 id for the payment makes a retry land once. The payment is announced in the
-channel (`src/discord/notices.ts`), and `/ledger` totals who still owes the
-payer. The payer sees who paid on the page and can undo someone's paid if it
-never arrived (`DELETE /b/:billId/paid/:participantId`). A guest has no
-Discord account, so the payer marks them paid on the page instead; that is a
-settlement against the guest, and it counts toward whoever answers for them.
+channel (`src/discord/notices.ts`). The payer sees who paid and who hasn't on
+the page, can mark someone paid when the money reached them another way, say
+cash at the table (`POST /b/:billId/paid/:participantId`, the same settlement
+with the payer as `recorded_by`), and can undo someone's paid if it never
+arrived (`DELETE /b/:billId/paid/:participantId`). A guest has no Discord
+account, so the payer marks them paid on the page instead; that is a settlement
+against the guest, and it counts toward whoever answers for them.
+
+`/debts` is a private reply with both directions, one line per confirmed bill:
+what you're owed by person, and what you owe by person, each line linking to
+that bill's page. A reopened bill is out until it is confirmed again, since its
+amounts are about to change. The links are ordinary 30-minute bill links minted
+for the reply. Each costs about 250 of Discord's 2000 characters, so only six
+or so fit; the rest fold into a line carrying their total.
 
 **9. Corrections.** **Something's wrong** (anyone on the bill) or **Edit the
 bill** (the payer) on the page returns the bill to draft and pauses paying.

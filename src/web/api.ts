@@ -47,7 +47,7 @@ import {
   setGuestPaidToPayer,
   undoPaid,
 } from "../db/settlements";
-import { guestPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
+import { guestPaidNotice, markedPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
@@ -855,6 +855,61 @@ api.post(
       refreshMessage(c, bill);
       const after = await leftFor(c.env, grant.billId, grant.participantId);
       announce(c, bill, paymentNotice(bill, participants, grant.participantId, amount, after));
+    }
+    return currentState(c, grant);
+  }),
+);
+
+function markRefused(error: SettlementRefusedError, snapshot: BillSnapshot, who: ParticipantId): Response {
+  const name = snapshot.participants.find((p) => p.id === who)?.displayName ?? "They";
+  switch (error.reason) {
+    case "not-confirmed":
+      return refuse(409, "This bill was reopened, so payments are paused until you confirm it again.");
+    case "stale":
+    case "over":
+      return refuse(409, `What ${name} owes changed. They have ${formatCents(error.remainingCents ?? 0)} left to pay.`);
+    case "not-positive":
+      return refuse(400, "That amount is $0.00, so there's nothing to record.");
+    default:
+      return refuse(409, `${name} has nothing to pay on this bill.`);
+  }
+}
+
+// The payer's word that someone paid them, cash at the table say. It is the
+// same payment "I paid" makes, recorded by the payer, so everything derived
+// from payments comes out the same. A guest the payer added isn't a member, so
+// the page sends them through the guest's own mark instead.
+api.post(
+  "/:billId/paid/:participantId",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["id", "amount"]);
+    const id = text(body.id, "id");
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) bad('"id" must be 8 to 64 letters, digits or dashes.');
+    const amount = cents(body.amount, "amount", { signed: false });
+
+    const snapshot = await loadLive(c, grant);
+    if (snapshot instanceof Response) return snapshot;
+    const { bill, participants } = snapshot;
+    if (grant.participantId !== bill.payerId) {
+      return refuse(403, `Only ${payerName(snapshot)} can mark someone paid, because it was paid to them.`);
+    }
+    const who = c.req.param("participantId") ?? "";
+
+    let recorded: boolean;
+    try {
+      recorded = await recordSettlement(c.env.DB, grant.billId, who, amount, grant.participantId, {
+        id: `${grant.participantId}:${id}`,
+        remainingCents: amount,
+      });
+    } catch (error) {
+      if (error instanceof SettlementRefusedError && error.reason === "clear") return currentState(c, grant);
+      if (error instanceof SettlementRefusedError) return markRefused(error, snapshot, who);
+      throw error;
+    }
+    if (recorded) {
+      refreshMessage(c, bill);
+      announce(c, bill, markedPaidNotice(bill, participants, who, amount, await leftFor(c.env, grant.billId, who)));
     }
     return currentState(c, grant);
   }),

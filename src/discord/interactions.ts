@@ -5,7 +5,7 @@ import {
   type APIInteractionResponse,
 } from "discord-api-types/v10";
 import type { Env } from "../env";
-import { ledgerCommand } from "./handlers/ledger";
+import { debtsCommand } from "./handlers/debts";
 import { postProfile, profileCommand } from "./handlers/profile";
 import { retired } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
@@ -27,7 +27,7 @@ export type InteractionHandler = (
 export const commandHandlers: Record<string, InteractionHandler> = {
   split: splitCommand,
   "Split this receipt": splitMessageCommand,
-  ledger: ledgerCommand,
+  debts: debtsCommand,
   profile: profileCommand,
 };
 // Everything else a bill needs is done on the page now. The prefixes of the

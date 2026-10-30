@@ -13,7 +13,7 @@ import {
   reopenBill,
   setBillAmounts,
 } from "../../src/db/bills";
-import { ledger, listSettlements, outstanding, recordSettlement } from "../../src/db/settlements";
+import { debts, listSettlements, outstanding, recordSettlement } from "../../src/db/settlements";
 import { renderBill } from "../../src/discord/render";
 import type { Env } from "../../src/env";
 import { formatCents } from "../../src/format";
@@ -154,7 +154,7 @@ function member(id: string, nick: string) {
 
 const GAVIN = member("gavin", "Gavin");
 
-function ledgerCommand(who: unknown) {
+function debtsCommand(who: unknown) {
   return {
     id: "int-4",
     application_id: APP_ID,
@@ -165,7 +165,7 @@ function ledgerCommand(who: unknown) {
     channel_id: "chan-1",
     channel: { id: "chan-1", type: 0 },
     member: who,
-    data: { id: "cmd-2", name: "ledger", type: 1 },
+    data: { id: "cmd-2", name: "debts", type: 1 },
   };
 }
 
@@ -524,17 +524,17 @@ describe("a guest another member added", () => {
     expect(await listSettlements(db, BILL)).toEqual([]);
   });
 
-  it("never lists the guest in /ledger, and rolls their share into the member's", async () => {
+  it("never lists the guest in /debts, and rolls their share into the member's", async () => {
     await seedSaigon(db, BILL);
     const sam = await withGuest();
     await confirmed();
     const together = (await owedOf("dani")) + (await owedOf(sam));
 
-    const rows = await ledger(db, "gavin");
-    expect(rows.some((r) => r.participant === sam)).toBe(false);
-    expect(rows.find((r) => r.participant === "dani")!.owedCents).toBe(together);
+    const rows = await debts(db, "gavin");
+    expect(rows.some((r) => r.debtor === sam)).toBe(false);
+    expect(rows.find((r) => r.debtor === "dani")!.owedCents).toBe(together);
 
-    const reply = await run(ledgerCommand(GAVIN));
+    const reply = await run(debtsCommand(GAVIN));
     expect(reply.data.content).not.toContain("Sam");
     expect(reply.data.content.split("\n").find((l: string) => l.includes("Dani"))).toContain(formatCents(together));
   });
@@ -580,17 +580,16 @@ describe("a guest the payer added", () => {
     const kimOwes = await owedOf(kim);
 
     expect(await standing(kim)).toEqual({ participant: kim, owedCents: kimOwes, settledCents: 0 });
-    expect((await ledger(db, "gavin")).find((r) => r.participant === kim)).toEqual({
-      participant: kim,
-      displayName: "Kim",
-      kind: "guest",
+    expect((await debts(db, "gavin")).find((r) => r.debtor === kim)).toMatchObject({
+      debtorName: "Kim",
+      debtorKind: "guest",
       place: "Saigon Kitchen",
       owedCents: kimOwes,
       settledCents: 0,
-      billCount: 1,
     });
-    const lines: string[] = (await run(ledgerCommand(GAVIN))).data.content.split("\n");
-    expect(lines.filter((l) => l.includes("Kim"))).toEqual([`- Kim: ${formatCents(kimOwes)} (your guest at Saigon Kitchen)`]);
+    const lines: string[] = (await run(debtsCommand(GAVIN))).data.content.split("\n");
+    const at = lines.findIndex((l) => l.includes("Kim"));
+    expect(lines.slice(at, at + 2)).toEqual([`Kim (your guest): ${formatCents(kimOwes)}`, `- Saigon Kitchen, Oct 28, 2026: ${formatCents(kimOwes)}`]);
 
     const rows = cardRows(await renderedCard());
     expect(rows.filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ${formatCents(kimOwes)}`]);
@@ -644,7 +643,7 @@ describe("a guest the payer added", () => {
     expect(await listSettlements(db, BILL)).toMatchObject([{ participant: kim, cents, recordedBy: "gavin" }]);
     expect(await standing(kim)).toEqual({ participant: kim, owedCents: cents, settledCents: cents });
     expect(await settledAt(kim)).not.toBeNull();
-    expect((await ledger(db, "gavin")).some((r) => r.participant === kim)).toBe(false);
+    expect((await debts(db, "gavin")).some((r) => r.debtor === kim)).toBe(false);
 
     const back = await markPaid("gavin", kim, false);
     expect(back.status).toBe(200);
@@ -691,7 +690,7 @@ describe("marking a guest paid", () => {
     expect(await revision()).toBe(before + 1);
     expect(await listSettlements(db, BILL)).toMatchObject([{ participant: sam, cents: samOwes, recordedBy: "gavin" }]);
     expect(await standing("dani")).toEqual({ participant: "dani", owedCents: daniOwes, settledCents: 0 });
-    expect((await ledger(db, "gavin")).find((r) => r.participant === "dani")).toMatchObject({ owedCents: daniOwes, settledCents: 0 });
+    expect((await debts(db, "gavin")).find((r) => r.debtor === "dani")).toMatchObject({ owedCents: daniOwes, settledCents: 0 });
     expect(channelPosts().map((p) => p.body)).toEqual([
       {
         content: `Sam paid Gavin ${formatCents(samOwes)} directly for ${SAIGON_KITCHEN}. Dani has ${formatCents(daniOwes)} left to pay.`,

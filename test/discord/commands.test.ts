@@ -36,12 +36,12 @@ describe("application command definitions", () => {
     expect(message?.type).toBe(ApplicationCommandType.Message);
   });
 
-  it("keeps every bill command out of DMs, and lets /ledger answer in a DM with the bot", () => {
-    for (const command of commands.filter((c) => c.name !== "ledger")) {
+  it("keeps every bill command out of DMs, and lets /debts answer in a DM with the bot", () => {
+    for (const command of commands.filter((c) => c.name !== "debts")) {
       expect(command.contexts).toEqual([InteractionContextType.Guild]);
     }
-    const ledger = commands.find((c) => c.name === "ledger");
-    expect(ledger?.contexts).toEqual([InteractionContextType.Guild, InteractionContextType.BotDM]);
+    const debts = commands.find((c) => c.name === "debts");
+    expect(debts?.contexts).toEqual([InteractionContextType.Guild, InteractionContextType.BotDM]);
   });
 
   it("gives every command a unique name", () => {

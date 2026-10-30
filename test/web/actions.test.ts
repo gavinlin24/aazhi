@@ -436,6 +436,74 @@ describe("recording a payment", () => {
   });
 });
 
+describe("the payer marking someone paid", () => {
+  const ID = "tap-11111111";
+
+  it("records the same payment I paid does, out loud, and says who recorded it", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+    await freshEdits();
+
+    const reply = await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "44.46" });
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.paid).toContain("marcus");
+    expect(await listSettlements(db, BILL)).toMatchObject([{ participant: "marcus", cents: 4446, recordedBy: "gavin" }]);
+    const settled = await db.prepare("SELECT settled_at FROM shares WHERE bill_id = ? AND participant_id = 'marcus'").bind(BILL).first<{ settled_at: string | null }>();
+    expect(settled?.settled_at).not.toBeNull();
+    expect(messageEdits()).toHaveLength(1);
+    expect(channelPosts()).toEqual([`Gavin marked Marcus paid $44.46 for ${SAIGON_KITCHEN}. Marcus is all paid up.`]);
+  });
+
+  it("derives settled_at the way the debtor's own payment does, and Undo takes it back", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+
+    await pay("dani", (await send("GET", "/state", "dani")).body.owing.dani.owedCents);
+    await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "44.46" });
+    const rows = await db.prepare("SELECT participant_id, settled_at FROM shares WHERE bill_id = ? AND participant_id IN ('dani', 'marcus')").bind(BILL).all<{ settled_at: string | null }>();
+    expect(rows.results.every((r) => r.settled_at !== null)).toBe(true);
+
+    expect((await send("DELETE", "/paid/marcus", "gavin")).status).toBe(200);
+    expect((await listSettlements(db, BILL)).map((p) => p.participant)).toEqual(["dani"]);
+  });
+
+  it("does nothing the second time, for a retry and for a second tap alike", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+
+    await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "44.46" });
+    await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "44.46" });
+    const again = await send("POST", "/paid/marcus", "gavin", { id: "tap-22222222", amount: "44.46" });
+
+    expect(again.status).toBe(200);
+    expect(await listSettlements(db, BILL)).toHaveLength(1);
+    expect(channelPosts()).toHaveLength(1);
+  });
+
+  it("refuses anyone but the payer, an amount that moved, and a reopened bill", async () => {
+    await seedSaigon(db, BILL);
+    await confirmed();
+
+    const diner = await send("POST", "/paid/dani", "marcus", { id: ID, amount: "1.00" });
+    expect(diner.status).toBe(403);
+    expect(diner.body.error).toBe("Only Gavin can mark someone paid, because it was paid to them.");
+
+    const moved = await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "1.00" });
+    expect(moved.status).toBe(409);
+    expect(moved.body.error).toBe("What Marcus owes changed. They have $44.46 left to pay.");
+
+    const self = await send("POST", "/paid/gavin", "gavin", { id: ID, amount: "1.00" });
+    expect(self.status).toBe(409);
+
+    await send("POST", "/reopen", "gavin");
+    const reopened = await send("POST", "/paid/marcus", "gavin", { id: ID, amount: "44.46" });
+    expect(reopened.status).toBe(409);
+    expect(reopened.body.error).toBe("This bill was reopened, so payments are paused until you confirm it again.");
+    expect(await listSettlements(db, BILL)).toEqual([]);
+  });
+});
+
 describe("undoing a payment", () => {
   it("lists payments for the payer alone, newest first", async () => {
     await seedSaigon(db, BILL);

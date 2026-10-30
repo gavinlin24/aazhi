@@ -16,6 +16,9 @@ what they had. No accounts or installs: Discord already knows who everyone is.
 5. The page links to the payer's Venmo with your amount and a note filled in.
    **I paid** records the payment, and the bot tells the channel.
 
+Run `/debts` to see who owes you and who you owe, with a link to pay each bill.
+The payer can mark someone paid on the page when they're handed cash.
+
 Run `/profile` to see your months, your favorite place and who you go out with.
 `/profile @someone` shows theirs. Your numbers count every server you eat with.
 The boards rank the people in this server by Hosted, Spent and Unique visits,

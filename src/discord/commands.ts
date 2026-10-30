@@ -49,9 +49,9 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
   // "in this server" and "everywhere". A DM with the bot has no server, so
   // there it always answers everywhere.
   {
-    name: "ledger",
+    name: "debts",
     type: ApplicationCommandType.ChatInput,
-    description: "See who still owes you for bills you paid",
+    description: "See who owes you and who you owe",
     contexts: [InteractionContextType.Guild, InteractionContextType.BotDM],
     integration_types: [ApplicationIntegrationType.GuildInstall],
     options: [

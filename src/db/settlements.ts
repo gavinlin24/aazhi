@@ -21,16 +21,22 @@ export interface Outstanding {
   settledCents: Cents;
 }
 
-export interface LedgerRow {
-  participant: ParticipantId;
-  displayName: string;
-  // A guest the payer added owes them directly, so has a row of their own,
-  // always for one bill; `place` is that bill's, to tell the row apart.
-  kind: "member" | "guest";
+// What one person still owes on one bill, however the viewer stands in it. A
+// guest the payer added owes them directly, so is a debtor of their own; a
+// guest another member added is that member's to answer for.
+export interface BillDebt {
+  billId: string;
   place: string | null;
-  owedCents: Cents; // across bills, after pardons
+  // The printed date, or failing that the day the bill was made, so two bills
+  // with no place on them still read apart.
+  date: string;
+  payer: ParticipantId;
+  payerName: string;
+  debtor: ParticipantId;
+  debtorName: string;
+  debtorKind: "member" | "guest";
+  owedCents: Cents; // after pardons
   settledCents: Cents;
-  billCount: number;
 }
 
 // "clear": nothing left to pay (paid in full, or pardoned). "stale": a
@@ -233,48 +239,53 @@ export async function outstanding(db: D1Database, billId: string): Promise<Outst
   return results.map((r) => ({ participant: r.participant_id, owedCents: r.owed, settledCents: r.settled }));
 }
 
-// Who still owes `payerId`, one row per person across every confirmed bill
-// they paid for (or one server's, with `guildId`). A person is their Discord
-// user id on every bill, so the same friend rolls up across servers; a guest
-// is a label on one bill, so a guest another member added rolls into that
-// member's row, and one the payer added is a row for that bill alone. Only
-// bills with money still owed count: a share overpaid after a correction is
-// money the payer owes back, which a "who owes me" total must not quietly net
-// against someone's other debts.
-export async function ledger(db: D1Database, payerId: ParticipantId, guildId?: string): Promise<LedgerRow[]> {
+// Every debt `who` is on, either way round, one row per bill, newest first:
+// what people owe them on bills they paid for, and what they owe on anyone
+// else's. Only confirmed bills count: a reopened one is out until it is
+// confirmed again, since its amounts are about to change. Only money still
+// owed counts: a share overpaid after a correction is money going the other
+// way, which a total must not quietly net against someone's other debts.
+export async function debts(db: D1Database, who: ParticipantId, guildId?: string): Promise<BillDebt[]> {
   const { results } = await db
     .prepare(
       `WITH per_bill AS (
-         SELECT p.id AS participant, p.display_name, p.kind, b.place, b.created_at, b.rowid AS seq,
+         SELECT b.id AS bill_id, b.place, COALESCE(b.bill_date, substr(b.created_at, 1, 10)) AS date, b.created_at, b.rowid AS seq,
+           b.payer_id, payer.display_name AS payer_name, p.id AS debtor, p.display_name AS debtor_name, p.kind,
            ${standingSql("b.id", "p.id")}
          FROM bills b
          JOIN participants p ON p.bill_id = b.id
-         WHERE b.payer_id = ?1 AND b.status = 'confirmed' AND p.id <> ?1 AND ${debtorSql("p", "b.payer_id")} = p.id
+         JOIN participants payer ON payer.bill_id = b.id AND payer.id = b.payer_id
+         WHERE (b.payer_id = ?1 OR p.id = ?1) AND b.status = 'confirmed'
+           AND p.id <> b.payer_id AND ${debtorSql("p", "b.payer_id")} = p.id
            AND (?2 IS NULL OR b.guild_id = ?2)
            AND EXISTS (SELECT 1 FROM shares s WHERE s.bill_id = b.id AND s.participant_id = p.id)
-       ),
-       owing AS (SELECT * FROM per_bill WHERE owed > settled),
-       latest AS (
-         SELECT participant, display_name, kind, place,
-           ROW_NUMBER() OVER (PARTITION BY participant ORDER BY created_at DESC, seq DESC) AS n
-         FROM owing
        )
-       SELECT o.participant, l.display_name, l.kind, l.place,
-         SUM(o.owed) AS owed, SUM(o.settled) AS settled, COUNT(*) AS bills
-       FROM owing o JOIN latest l ON l.participant = o.participant AND l.n = 1
-       GROUP BY o.participant
-       ORDER BY SUM(o.owed) - SUM(o.settled) DESC, o.participant`,
+       SELECT * FROM per_bill WHERE owed > settled ORDER BY created_at DESC, seq DESC`,
     )
-    .bind(payerId, guildId ?? null)
-    .all<{ participant: string; display_name: string; kind: "member" | "guest"; place: string | null; owed: number; settled: number; bills: number }>();
+    .bind(who, guildId ?? null)
+    .all<{
+      bill_id: string;
+      place: string | null;
+      date: string;
+      payer_id: string;
+      payer_name: string;
+      debtor: string;
+      debtor_name: string;
+      kind: "member" | "guest";
+      owed: number;
+      settled: number;
+    }>();
   return results.map((r) => ({
-    participant: r.participant,
-    displayName: r.display_name,
-    kind: r.kind,
+    billId: r.bill_id,
     place: r.place,
+    date: r.date,
+    payer: r.payer_id,
+    payerName: r.payer_name,
+    debtor: r.debtor,
+    debtorName: r.debtor_name,
+    debtorKind: r.kind,
     owedCents: r.owed,
     settledCents: r.settled,
-    billCount: r.bills,
   }));
 }
 
