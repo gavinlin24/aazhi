@@ -55,10 +55,6 @@ export const CLIENT_SCRIPT = String.raw`
   const busy = new Set();
   const armed = new Set();
   let noteTimer = null;
-  // The Zelle button after a tap: "copied" for a moment, or "shown" for good
-  // when the clipboard refused and the address is spelled out instead.
-  let zelle = null;
-  let zelleTimer = null;
 
   // Same rules as formatCents on the server, in integers only.
   function money(cents) {
@@ -714,36 +710,9 @@ export const CLIENT_SCRIPT = String.raw`
   }
 
   function payNodes(v) {
-    const s = v.s;
-    if (s.pay.length === 0) {
-      return leftOf(v, s.viewer) > 0
-        ? el("div", { class: "pay-row", "data-pay": true }, el("p", { class: "pay-note" }, "Pay " + nameOf(v, s.payerId) + " however you usually do."))
-        : null;
-    }
-    return el("div", { class: "pay-row", "data-pay": true }, s.pay.map((o) => o.url
-      ? el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])
-      : zelleNode(v, o)));
-  }
-
-  function zelleNode(v, o) {
-    if (zelle === "shown") return el("span", { class: "pay is-address" }, o.address);
-    if (zelle === "copied") {
-      return el("button", { type: "button", class: "pay", "data-copy": o.address }, [icon("check"), "Copied", sr(", " + o.address)]);
-    }
-    return el("button", { type: "button", class: "pay", "data-copy": o.address }, [o.name, icon("copy"), sr(", copy " + nameOf(v, v.s.payerId) + "'s address")]);
-  }
-
-  async function copyAddress(button) {
-    clearTimeout(zelleTimer);
-    try {
-      await navigator.clipboard.writeText(button.dataset.copy);
-      zelle = "copied";
-      zelleTimer = setTimeout(() => { zelle = null; render(); }, NOTE_MS);
-      render();
-    } catch {
-      zelle = "shown";
-      render();
-    }
+    if (v.s.pay.length === 0) return null;
+    return el("div", { class: "pay-row", "data-pay": true }, v.s.pay.map((o) =>
+      el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])));
   }
 
   function fraction(done, total) {
@@ -820,7 +789,7 @@ export const CLIENT_SCRIPT = String.raw`
     wasPaid = paid;
     hero.classList.toggle("is-paid", paid);
     hero.classList.toggle("is-forgiven", !v.s.viewerIsPayer && forgivenWhole(v, v.s.viewer));
-    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId, zelle]), () => heroNodes(v));
+    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId]), () => heroNodes(v));
   }
 
   function mineNodes(v, id) {
@@ -1842,8 +1811,6 @@ export const CLIENT_SCRIPT = String.raw`
       render();
       return focusLines();
     }
-    const copy = target.closest("[data-copy]");
-    if (copy) return copyAddress(copy);
     const as = target.closest("[data-claim-as]");
     if (as) {
       claimFor = as.dataset.claimAs === state.viewer ? null : as.dataset.claimAs;

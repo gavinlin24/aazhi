@@ -92,14 +92,10 @@ function fittedNote(note: string, budget: number): string {
 // Venmo: the Payment Links format, venmo.com/<username>?txn=pay&amount=&note=,
 // which opens the app with both filled in. Cash App: cash.app/$<cashtag>/<amount>
 // prefills the amount, but no form of the link carries a note. Zelle has no
-// link at all; the network is closed to third parties, so the page offers the
-// address to copy into the bank's app instead.
-export function payLink(
-  method: PayMethod,
-  handle: string,
-  cents: Cents,
-  note: string,
-): { url: string } | { address: string } {
+// link at all, since the network is closed to third parties. A pay button is
+// only worth having if it lands in the app with the amount filled in, so Zelle
+// gets none rather than an address to copy and paste.
+export function payLink(method: PayMethod, handle: string, cents: Cents, note: string): { url: string } | null {
   if (normalizeHandle(method, handle) !== handle) throw new Error(`Not a stored ${METHOD_NAMES[method]} handle`);
   const amount = amountString(cents);
   switch (method) {
@@ -111,6 +107,6 @@ export function payLink(
     case "cashapp":
       return { url: `https://cash.app/$${encodeURIComponent(handle)}/${amount}` };
     case "zelle":
-      return { address: describeHandle(method, handle) };
+      return null;
   }
 }

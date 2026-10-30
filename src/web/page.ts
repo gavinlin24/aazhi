@@ -583,24 +583,25 @@ button.tile:active { background: var(--fill); }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .key { width: 9px; height: 9px; border-radius: 2px; }
 .legend .ic { width: 18px; height: 18px; }
-.pay-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.pay-row { display: flex; gap: 8px; margin-top: 16px; }
+/* Basis 0 splits the row equally among however many apps the payer has. */
 .pay {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 0;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-width: 0;
   min-height: 46px;
-  padding: 0 18px;
+  padding: 0 12px;
   border-radius: 23px;
   background: var(--seal);
   color: var(--seal-ink);
   font-weight: 600;
   text-decoration: none;
+  white-space: nowrap;
 }
 .pay .ic { width: 18px; height: 18px; }
-button.pay { border: 0; cursor: pointer; }
-/* Where the copy failed: the address itself, ready to select by hand. */
-.pay.is-address { border: 1.5px solid var(--seal); background: none; color: var(--ink); font-weight: 400; user-select: all; }
-.pay-note { flex-basis: 100%; color: var(--muted); font-size: 15px; }
 /* Whose shares one amount covers, when it covers guests too. */
 .whose { list-style: none; margin: 12px 0 0; padding: 0; }
 .whose li { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid var(--rule); }
@@ -611,11 +612,14 @@ button.pay { border: 0; cursor: pointer; }
 .hero .whose .stamp { position: static; font-size: 12px; padding: 2px 1px; border-width: 1.5px; letter-spacing: 1px; }
 /* Recording a payment is the person's own word, not a link out, so it is
    inked rather than sealed and sits under the ways to pay. */
-.sent-row { margin-top: 10px; }
+.sent-row { margin-top: 16px; }
+.pay-row + .sent-row { margin-top: 10px; }
 .sent {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  width: 100%;
   min-height: 46px;
   padding: 0 18px;
   border: 1.5px solid var(--ink);
@@ -824,7 +828,6 @@ const ICONS: Record<string, string> = {
   warn: '<path d="M12 4.5l8.5 15h-17zM12 10.5v4M12 17.3v.2"/>',
   // A calligraphy brush: handle, ferrule, and an inked tip that tapers to a point.
   brush: '<path d="M19.6 4.4l-6.2 6.2M10.9 10.3l2.8 2.8"/><path fill="currentColor" stroke="none" d="M10 10.8c-2.2.3-4.5 4.6-5.6 8.8 4.2-1.1 8.5-3.4 8.8-5.6z"/>',
-  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
 };
 
 function sprite(): string {
@@ -1235,22 +1238,13 @@ function pie(done: Cents, total: Cents): string {
     `${f > 0 ? `<circle class="done" cx="27" cy="27" r="22" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}"/>` : ""}</svg>`;
 }
 
-// With no handle on file there is no link to offer, so the person is told to
-// pay the way they usually would and record it here after.
+// With no app link to offer, "I sent it" stands alone: the person pays the
+// way they usually would and records it here after.
 function payRow(v: View): string {
-  const s = v.s;
-  if (s.pay.length === 0) {
-    return leftOf(v, s.viewer) > 0
-      ? `<div class="pay-row" data-pay><p class="pay-note">Pay ${escapeHtml(nameOf(v, s.payerId))} however you usually do.</p></div>`
-      : "";
-  }
-  const links = s.pay.map((o) =>
-    "url" in o
-      ? `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`
-      : `<button type="button" class="pay" data-copy="${escapeHtml(o.address)}">${escapeHtml(o.name)}${icon("copy")}` +
-        `<span class="sr">, copy ${escapeHtml(nameOf(v, s.payerId))}'s address</span></button>`,
+  const links = v.s.pay.map(
+    (o) => `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`,
   );
-  return `<div class="pay-row" data-pay>${links.join("")}</div>`;
+  return links.length > 0 ? `<div class="pay-row" data-pay>${links.join("")}</div>` : "";
 }
 
 // Only someone with something left to pay has anything to record. The

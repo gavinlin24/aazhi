@@ -634,27 +634,28 @@ describe("renderPage", () => {
       expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
     });
 
-    it("gives Zelle a button that copies the address, like the links beside it, and no paragraph", async () => {
-      const handles = [
-        { method: "venmo" as const, handle: "gavin-l" },
-        { method: "zelle" as const, handle: "gavin@example.com" },
-      ];
-      const html = view("theo", { handles });
+    it("offers only apps a link can open, so Zelle never shows", async () => {
+      const venmo = { method: "venmo" as const, handle: "gavin-l" };
+      const cashapp = { method: "cashapp" as const, handle: "GavinL" };
+      const zelle = { method: "zelle" as const, handle: "gavin@example.com" };
 
-      const zelle = await one(html, "[data-pay] button.pay");
-      expect(zelle.attrs["data-copy"]).toBe("gavin@example.com");
-      expect(zelle.text).toBe("Zelle, copy Gavin's address");
-      expect((await select(html, "[data-pay] .pay")).map((x) => x.text.slice(0, 5))).toEqual(["Venmo", "Zelle"]);
-      expect(await select(html, "[data-pay] .pay-note")).toEqual([]);
-      expect(html).not.toContain("from your bank");
+      const both = view("theo", { handles: [venmo, cashapp, zelle] });
+      expect((await select(both, "[data-pay] a.pay")).map((x) => x.text)).toEqual(["Venmo", "Cash App"]);
+      expect(both).not.toContain("Zelle");
+      expect(both).not.toContain("gavin@example.com");
+
+      const zelleOnly = view("theo", { handles: [zelle] });
+      expect(await select(zelleOnly, "[data-pay]")).toEqual([]);
+      expect(await textOf(zelleOnly, "[data-you] [data-sent] [data-ask=sent]")).toBe("I sent it");
+      expect(zelleOnly).not.toContain("Zelle");
     });
 
     it("lets someone with something left record that they sent it, or say something is wrong", async () => {
       const html = view("theo", { settled: [{ participant: "theo", cents: 100 }] });
 
       expect(await textOf(html, "[data-you] [data-sent] [data-ask=sent]")).toBe("I sent it");
-      // No handle on file, so no link: just who to pay.
-      expect(await textOf(html, "[data-you] [data-pay] .pay-note")).toBe("Pay Gavin however you usually do.");
+      // No handle on file, so no link: "I sent it" stands alone.
+      expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
       const actions = await one(html, "[data-actions]");
       expect(actions.text).toBe("Something&#39;s wrongPaying pauses until Gavin fixes it.");
       expect(await select(html, "[data-actions] [data-ask]")).toEqual([expect.objectContaining({ attrs: expect.objectContaining({ "data-ask": "wrong" }) })]);

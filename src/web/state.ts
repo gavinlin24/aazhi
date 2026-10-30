@@ -66,7 +66,7 @@ export interface GuestsPaid {
   paidToHost?: ParticipantId[];
 }
 
-export type PayOption = { method: PayMethod; name: string } & ({ url: string } | { address: string });
+export type PayOption = { method: PayMethod; name: string; url: string };
 
 // What the page needs beyond the server's state. For a confirmed bill: the
 // payments, for what is left, and the payer's handles, for links. For the
@@ -107,7 +107,10 @@ function owingOf(shares: Share[], participants: Participant[], payer: Participan
 function payOptions(bill: BillRow, handles: PaymentHandle[], leftCents: Cents): PayOption[] {
   if (leftCents <= 0) return [];
   const note = clip(billName(bill), MAX_NOTE);
-  return handles.map(({ method, handle }) => ({ method, name: METHOD_NAMES[method], ...payLink(method, handle, leftCents, note) }));
+  return handles.flatMap(({ method, handle }) => {
+    const link = payLink(method, handle, leftCents, note);
+    return link ? [{ method, name: METHOD_NAMES[method], url: link.url }] : [];
+  });
 }
 
 export function billState(

@@ -5,8 +5,8 @@ import { randomInt, seededRandom } from "../fixtures/random";
 const NOTE = "Saigon Kitchen, Oct 28, 2026";
 
 function urlOf(result: ReturnType<typeof payLink>): URL {
-  expect("url" in result).toBe(true);
-  return new URL((result as { url: string }).url);
+  expect(result).not.toBeNull();
+  return new URL(result!.url);
 }
 
 // The amount string turned back into cents by moving the decimal point, not by
@@ -65,12 +65,9 @@ describe("payLink", () => {
     expect(url.search).toBe("");
   });
 
-  it("gives the address to copy rather than a link for Zelle", () => {
-    expect(payLink("zelle", "gavin@example.com", 4446, NOTE)).toEqual({ address: "gavin@example.com" });
-  });
-
-  it("writes a Zelle phone number the way people read one", () => {
-    expect(payLink("zelle", "5551234567", 4446, NOTE)).toEqual({ address: "(555) 123-4567" });
+  it("has no link for Zelle, since none opens the bank's app with the amount filled in", () => {
+    expect(payLink("zelle", "gavin@example.com", 4446, NOTE)).toBeNull();
+    expect(payLink("zelle", "5551234567", 4446, NOTE)).toBeNull();
   });
 
   it("formats every amount from integer cents, never through a float", () => {
