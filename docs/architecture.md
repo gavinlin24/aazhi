@@ -194,8 +194,24 @@ nothing from other servers.
   same whether or not that person has bills elsewhere, so a link can't be walked
   to arbitrary accounts.
 
-**Known gap: one receipt split in two servers counts twice.** Nothing ties the
-two bills together, and they were the same outing. Nothing fixes this yet.
+**One receipt, one server.** Numbers add up across servers, so a receipt split
+in two would count one outing twice. `/split` is refused when the receipt is on
+a draft or confirmed bill in another server, and nothing is saved. Deleting that
+bill frees the receipt, and so does a newer split replacing it.
+
+A receipt is matched by `receipt_key` (`src/extract/receipt-key.ts`), a hash of
+the printed date, time and total and the sorted line prices. It is set at the
+read and never changes, so fixing a price can't dodge it. It compares money, not
+place names, because names read differently from one photo to the next. The
+check rides in the insert in `createBill`, so two servers at the same moment
+can't both get through.
+
+Without a printed date, time or total there is no key and the split goes
+through, since refusing an honest receipt is worse than counting one twice. Two
+tills can also print the same minute, total and prices, and the second is then
+refused. Bills from before the key have none, because the printed time was never
+stored. The same receipt twice in one server is still allowed, so a rescan can
+replace a draft, and it does count twice.
 
 **The link belongs to the viewer.** A viewer token holds the server and the
 viewer, not the person viewed, so one link can walk the whole server. It lasts

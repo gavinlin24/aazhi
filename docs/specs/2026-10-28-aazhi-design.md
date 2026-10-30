@@ -463,8 +463,11 @@ is too. So someone who only tapped Open the split counts for nothing. A new
 bill can't be confirmed alone, but older one-person bills exist, and they
 count on no statistic.
 
-One receipt split in two servers counts twice, as two outings. That gap is
-known and has no fix yet.
+A receipt can only sit on a bill in one server, since a second server would
+count one outing twice. `/split` refuses it there and saves nothing, and
+deleting the first bill frees it. A receipt with no printed date, time or total
+can't be matched and goes through. The same receipt twice in one server is
+still allowed, and counts twice.
 
 ## Stack
 
