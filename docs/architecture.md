@@ -104,14 +104,16 @@ the owe card.
 Once the bill is confirmed, the page shows Venmo or Cash App links for what
 you have left (`src/web/paylink.ts`).
 
-**8. Recording.** **I paid** on the page (`POST /b/:billId/payment`)
-inserts into `settlements` (`src/db/settlements.ts`). The checks run inside
-the insert, so racing taps cannot overpay, and the page's own id for the
-payment makes a retry land once. The payment is announced in the channel
-(`src/discord/notices.ts`), and `/ledger` totals who still owes the payer.
-The payer sees every payment on the page and can undo one that never arrived. A guest has no Discord account, so
-the payer marks them paid on the page instead; that is a settlement against
-the guest, and it counts toward whoever answers for them.
+**8. Recording.** Someone has paid or they haven't. **I paid** on the page
+(`POST /b/:billId/payment`) records everything they have left, guests they
+brought included, in `settlements` (`src/db/settlements.ts`). The checks run
+inside the insert, so a stale or part amount is refused, and the page's own
+id for the payment makes a retry land once. The payment is announced in the
+channel (`src/discord/notices.ts`), and `/ledger` totals who still owes the
+payer. The payer sees who paid on the page and can undo someone's paid if it
+never arrived (`DELETE /b/:billId/paid/:participantId`). A guest has no
+Discord account, so the payer marks them paid on the page instead; that is a
+settlement against the guest, and it counts toward whoever answers for them.
 
 **9. Corrections.** **Something's wrong** (anyone on the bill) or **Edit the
 bill** (the payer) on the page returns the bill to draft and pauses paying.

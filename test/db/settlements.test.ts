@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { confirmBill, editItem, getBill, reopenBill, setBillAmounts } from "../../src/db/bills";
+import { BillNotConfirmedError, confirmBill, editItem, getBill, reopenBill, setBillAmounts } from "../../src/db/bills";
 import {
   ledger,
   outstanding,
   recordSettlement,
+  SettlementGoneError,
   SettlementRefusedError,
-  undoSettlement,
+  undoPaid,
   listSettlements,
 } from "../../src/db/settlements";
 import { seedSaigon } from "../fixtures/seed";
@@ -72,18 +73,22 @@ describe("recording a payment", () => {
     expect(await settledAt("marcus")).toBeNull();
   });
 
-  it("lets the payer undo a settlement", async () => {
+  it("lets the payer undo someone's paid, every payment of theirs at once", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
-    await recordSettlement(db, BILL, "marcus", 4446, "marcus");
+    // Two rows, the way a part payment made before paid was yes or no left it.
+    await recordSettlement(db, BILL, "marcus", 4000, "marcus");
+    await recordSettlement(db, BILL, "marcus", 446, "marcus");
+    await recordSettlement(db, BILL, "jess", 100, "jess");
     const [payment] = await listSettlements(db, BILL);
-    expect(payment).toMatchObject({ billId: BILL, participant: "marcus", cents: 4446, recordedBy: "marcus" });
+    expect(payment).toMatchObject({ billId: BILL, participant: "jess", cents: 100, recordedBy: "jess" });
 
-    await undoSettlement(db, payment!.id);
+    expect(await undoPaid(db, BILL, "marcus")).toBe(4446);
 
     expect(await owing("marcus")).toEqual({ participant: "marcus", owedCents: 4446, settledCents: 0 });
-    expect(await settlementCount()).toBe(0);
+    expect(await settlementCount()).toBe(1);
     expect(await settledAt("marcus")).toBeNull();
+    await expect(undoPaid(db, BILL, "marcus")).rejects.toThrow(SettlementGoneError);
   });
 
   it("refuses a settlement recorded for someone else by a non-payer", async () => {
@@ -153,10 +158,9 @@ describe("recording a payment", () => {
     await seedSaigon(db, BILL);
     await confirmed();
     await recordSettlement(db, BILL, "marcus", 4446, "marcus");
-    const [payment] = await listSettlements(db, BILL);
     await reopenBill(db, BILL);
 
-    await expect(undoSettlement(db, payment!.id)).rejects.toThrow();
+    await expect(undoPaid(db, BILL, "marcus")).rejects.toThrow(BillNotConfirmedError);
     expect(await settlementCount()).toBe(1);
   });
 });
@@ -172,12 +176,10 @@ describe("settled_at", () => {
     const first = await settledAt("marcus");
     expect(first).not.toBeNull();
 
-    const payments = await listSettlements(db, BILL);
-    const small = payments.find((p) => p.cents === 446)!;
-    await undoSettlement(db, small.id);
+    await undoPaid(db, BILL, "marcus");
     expect(await settledAt("marcus")).toBeNull();
 
-    await recordSettlement(db, BILL, "marcus", 446, "marcus");
+    await recordSettlement(db, BILL, "marcus", 4446, "marcus");
     expect(await settledAt("marcus")).not.toBeNull();
     // Nobody else moved.
     expect(await settledAt("jess")).toBeNull();

@@ -188,10 +188,14 @@ export const CLIENT_SCRIPT = String.raw`
     return p.kind === "guest" && p.addedBy && p.addedBy !== payerId ? p.addedBy : p.id;
   }
 
-  // Paying the adder settles nothing with the payer, so only the adder sees
-  // that one as paid.
+  // Mirrors guestPaid on the server: a member who paid in full paid their
+  // guests' shares with it. Paying the adder settles nothing with the payer,
+  // so only the adder sees that one as paid.
   function guestPaid(v, p) {
-    return p.paidToPayer === true || (p.paidToHost === true && p.addedBy === v.s.viewer);
+    if (p.paidToPayer === true || (p.paidToHost === true && p.addedBy === v.s.viewer)) return true;
+    const debtor = debtorOf(p, v.s.payerId);
+    const share = v.shares.get(p.id);
+    return debtor !== p.id && paidUp(v, debtor) && !(share && share.pardoned);
   }
 
   // Each of the two may set only their own mark: the payer's is money that
@@ -715,10 +719,6 @@ export const CLIENT_SCRIPT = String.raw`
       el("a", { class: "pay", href: o.url, target: "_blank", rel: "noopener noreferrer" }, [o.name, icon("out")])));
   }
 
-  function fraction(done, total) {
-    return el("p", { class: "legend" }, el("span", null, [el("span", { class: "money" }, money(done)), " of ", el("span", { class: "money" }, money(total)), " paid"]));
-  }
-
   function collected(done, total) {
     return el("p", { class: "legend" }, el("span", null, [
       el("span", { class: "money" }, money(total)), " owed to you · ", el("span", { class: "money" }, money(done)), " paid",
@@ -741,8 +741,6 @@ export const CLIENT_SCRIPT = String.raw`
     const mine = [s.viewer].concat(guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id));
     const forgiven = forgivenWhole(v, s.viewer);
     const paid = paidUp(v, s.viewer);
-    const o = s.owing[s.viewer];
-    const partial = o && o.paidCents > 0 && !paid;
     return [
       el("div", { class: "flow" }, [stack(v, mine, 3), icon("arrow", "arrow"), av(v, s.payerId)]),
       forgiven ? el("p", { class: "was money" }, money(sharesOf(v, mine).reduce((n, x) => n + x.owedCents, 0))) : null,
@@ -751,7 +749,6 @@ export const CLIENT_SCRIPT = String.raw`
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
       whoNodes(v),
     ].concat(forgiven ? [] : splitNodes(counted(v, s.viewer)))
-      .concat(partial ? [fraction(o.paidCents, o.owedCents)] : [])
       .concat(paid ? [] : [payNodes(v)])
       .concat([sentNodes(v)]);
   }
@@ -772,19 +769,19 @@ export const CLIENT_SCRIPT = String.raw`
       ]);
     };
     return el("ul", { class: "whose", "data-who": true, "aria-label": "Whose share" }, [row(s.viewer, "You", false, false)].concat(guests.map((g) =>
-      row(g.id, g.displayName, g.paidToPayer === true || g.paidToHost === true, g.paidToPayer === true))));
+      row(g.id, g.displayName, guestPaid(v, g), g.paidToPayer === true))));
   }
 
   function sentNodes(v) {
     if (leftOf(v, v.s.viewer) <= 0) return null;
     return el("div", { class: "sent-row needs-js", "data-sent": true },
-      el("button", { type: "button", class: "sent", "data-ask": "sent", "aria-haspopup": "dialog" }, [icon("check"), "I paid"]));
+      el("button", { type: "button", class: "sent", "data-pay-all": true, "aria-busy": busy.has("sent") ? "true" : null }, [icon("check"), "I paid"]));
   }
 
   let wasPaid = null;
   let justPaid = false;
-  // Set before a payment that clears what is left is sent, because the hero
-  // redraws with the answer, before the big stamp is put down.
+  // Set before the payment is sent, because the hero redraws with the
+  // answer, before the big stamp is put down.
   let slamming = false;
   const SLAM_MS = 1000;
 
@@ -805,7 +802,7 @@ export const CLIENT_SCRIPT = String.raw`
     wasPaid = paid;
     hero.classList.toggle("is-paid", paid);
     hero.classList.toggle("is-forgiven", !v.s.viewerIsPayer && forgivenWhole(v, v.s.viewer));
-    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId]), () => heroNodes(v));
+    keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId, busy.has("sent")]), () => heroNodes(v));
   }
 
   function mineNodes(v, id) {
@@ -910,55 +907,35 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(card, JSON.stringify([s.status, s.items, s.printedTotalCents, s.reconciles, s.participants, s.payerId, Array.from(busy), stopped]), () => actionNodes(v));
   }
 
-  // Whose payments the payer has opened, kept across redraws so an undo
-  // leaves the row open on what is left.
-  const openPaid = new Set();
-
   // Mirrors paidBy on the server.
   function paidBy(v) {
-    const byId = new Map();
-    for (const p of v.s.payments) byId.set(p.participant, (byId.get(p.participant) || []).concat([p]));
-    const order = (id) => {
-      const at = v.s.participants.findIndex((p) => p.id === id);
-      return at < 0 ? Infinity : at;
-    };
-    return Array.from(byId.keys()).sort((a, b) => order(a) - order(b)).map((id) => {
-      const share = v.shares.get(id);
-      const payments = byId.get(id);
-      return {
-        id,
-        payments,
-        paidCents: payments.reduce((n, p) => n + p.cents, 0),
-        ofCents: id in v.s.owing ? owedOf(v, id) : share && !share.pardoned ? share.owedCents : 0,
-      };
+    const paid = new Map();
+    for (const p of v.s.payments) paid.set(p.participant, (paid.get(p.participant) || 0) + p.cents);
+    return v.s.participants.flatMap((p) => {
+      const share = v.shares.get(p.id);
+      const asked = p.id in v.s.owing ? owedOf(v, p.id) : share && !share.pardoned ? share.owedCents : 0;
+      return asked > 0 && (paid.get(p.id) || 0) >= asked ? [{ id: p.id, cents: asked }] : [];
     });
   }
 
-  function paymentNodes(v) {
-    if (v.s.payments.length === 0) return [];
+  function paymentNodes(rows, v) {
+    if (rows.length === 0) return [];
     return [
       el("h2", null, "Payments"),
-      el("ul", null, paidBy(v).map((r) => {
+      el("ul", null, rows.map((r) => {
         const name = nameOf(v, r.id);
-        const open = openPaid.has(r.id);
         return el("li", null, [
-          el("button", { type: "button", class: "paid-by", "data-paid-by": r.id, "aria-expanded": String(open), "aria-controls": "paid-" + r.id }, [
-            av(v, r.id),
-            el("span", { class: "name" }, name),
-            r.ofCents > 0 && r.paidCents >= r.ofCents ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
-            el("span", { class: "paid-of" }, [el("span", { class: "money" }, money(r.paidCents)), " of ", el("span", { class: "money" }, money(r.ofCents))]),
-            icon("chev"),
-          ]),
-          el("ul", { class: "paid-list", id: "paid-" + r.id, hidden: !open }, r.payments.map((p) => el("li", null, [
-            el("span", { class: "money" }, money(p.cents)),
-            el("button", {
-              type: "button",
-              class: "chip-btn",
-              "data-undo": p.id,
-              "aria-busy": busy.has("undo:" + p.id) ? "true" : null,
-              "aria-label": "Undo " + name + "'s " + money(p.cents) + " payment",
-            }, "Undo"),
-          ]))),
+          av(v, r.id),
+          el("span", { class: "name" }, name),
+          el("span", { class: "money" }, money(r.cents)),
+          el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫"),
+          el("button", {
+            type: "button",
+            class: "chip-btn",
+            "data-undo-paid": r.id,
+            "aria-busy": busy.has("undo:" + r.id) ? "true" : null,
+            "aria-label": "Undo " + name + "'s payment",
+          }, "Undo"),
         ]);
       })),
     ];
@@ -967,8 +944,9 @@ export const CLIENT_SCRIPT = String.raw`
   function renderPayments(v) {
     const card = root.querySelector("[data-payments]");
     if (!card) return;
-    card.hidden = v.s.payments.length === 0;
-    keyedInto(card, JSON.stringify([v.s.payments, v.s.participants, v.s.owing, Array.from(busy), Array.from(openPaid)]), () => paymentNodes(v));
+    const rows = paidBy(v);
+    card.hidden = rows.length === 0;
+    keyedInto(card, JSON.stringify([rows, v.s.participants, Array.from(busy)]), () => paymentNodes(rows, v));
   }
 
   // A confirmed bill has three views on one page: your share, the receipt
@@ -1234,24 +1212,6 @@ export const CLIENT_SCRIPT = String.raw`
     return el("button", { type: "button", class: "chip-btn sheet-go", "data-close-sheet": true, "data-autofocus": true }, label || "Cancel");
   }
 
-  function sentSheet(v) {
-    const left = leftOf(v, v.s.viewer);
-    const input = el("input", { id: "sent-amount", name: "amount", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-describedby": "sent-left" });
-    input.value = sheet.amount === undefined ? plain(left) : sheet.amount;
-    return [
-      askHead("How much did you pay?"),
-      el("p", { class: "sheet-body", id: "sent-left" }, "You have " + money(left) + " left to pay " + nameOf(v, v.s.payerId) + ". Paid part of it? Change the amount."),
-      el("form", { class: "sent-form", "data-sent-form": true, novalidate: true }, [
-        el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), input]),
-        el("p", { class: "field-msg", role: "status" }, sheet.msg || ""),
-        el("div", { class: "sheet-actions", style: "width: 100%" }, [
-          cancelButton(),
-          el("button", { type: "submit", class: "chip-btn sheet-go is-ink", disabled: stopped, "aria-busy": busy.has("sent") ? "true" : null }, [icon("check"), "I paid"]),
-        ]),
-      ]),
-    ];
-  }
-
   // Each ask says what happens in a plain sentence, then does it on a
   // second, deliberate tap. Delete and undo skip this: they act on one tap.
   function askSheet(v) {
@@ -1283,11 +1243,10 @@ export const CLIENT_SCRIPT = String.raw`
   function askStale(v) {
     const s = v.s;
     if (sheet.kind === "wrong") return s.status !== "confirmed";
-    if (sheet.kind === "sent") return s.status !== "confirmed" || leftOf(v, s.viewer) <= 0;
     return s.status !== "draft" || openLines(s).length === 0;
   }
 
-  const ASKS = ["wrong", "sent", "split"];
+  const ASKS = ["wrong", "split"];
 
   function renderSheet(v) {
     const dialog = root.querySelector("dialog[data-sheet]");
@@ -1305,11 +1264,9 @@ export const CLIENT_SCRIPT = String.raw`
       ? () => lineSheet(v, sheet.id)
       : sheet.kind === "payer"
         ? () => payerSheet(v)
-        : sheet.kind === "sent"
-          ? () => sentSheet(v)
-          : ASKS.includes(sheet.kind)
-            ? () => askSheet(v)
-            : () => personSheet(v, sheet.id);
+        : ASKS.includes(sheet.kind)
+          ? () => askSheet(v)
+          : () => personSheet(v, sheet.id);
     keyedInto(dialog, key, () => el("div", { class: "sheet-in" }, build()));
   }
 
@@ -1706,17 +1663,12 @@ export const CLIENT_SCRIPT = String.raw`
     location.reload();
   }
 
-  async function undoPayment(button) {
-    const id = button.dataset.undo;
-    // Read before the redraw, which takes this button out of the page.
-    const list = button.closest(".paid-list");
-    const person = list ? list.parentElement.querySelector("[data-paid-by]").dataset.paidBy : null;
-    if (!(await toggle("undo:" + id, "DELETE", "/payment/" + encodeURIComponent(id)))) return;
+  async function undoPaid(button) {
+    const id = button.dataset.undoPaid;
+    if (!(await toggle("undo:" + id, "DELETE", "/paid/" + encodeURIComponent(id)))) return;
     showNote("Payment undone", false);
-    // The payment's line went with it, the button included. Focus stays with
-    // the same person while they have payments left.
-    const row = person ? root.querySelector('[data-paid-by="' + CSS.escape(person) + '"]') : null;
-    const next = (row && row.parentElement.querySelector("[data-undo]")) || row || root.querySelector("[data-payments] [data-paid-by]");
+    // The row went with the payment, the button included.
+    const next = root.querySelector("[data-payments] [data-undo-paid]");
     if (next) next.focus();
   }
 
@@ -1741,39 +1693,24 @@ export const CLIENT_SCRIPT = String.raw`
     if (kind === "split") return doAsk("/confirm", "POST", { revision: state.revision, splitUnclaimed: true });
   }
 
-  async function sendPayment(form) {
-    const msg = form.querySelector(".field-msg");
-    const amount = decimal(form.elements.amount.value);
-    if (amount === null || hundredths(amount) === 0) {
-      msg.textContent = "Enter the amount you paid, like 12.50.";
-      form.elements.amount.focus();
-      return;
-    }
-    if (busy.has("sent")) return;
-    busy.add("sent");
-    setBusy(form, true);
+  // Paid is yes or no, so one tap records everything left. A second tap, or
+  // a retry after a lost answer, finds the person paid up and changes nothing.
+  async function payAll() {
     const left = leftOf(model(view()), state.viewer);
-    slamming = hundredths(amount) >= left;
-    // One id per sheet, so a retry after a dropped answer finds the payment
-    // it already made instead of making a second.
-    const failure = await write("POST", "/payment", { id: sheet.id, amount, left: plain(left) });
+    if (busy.has("sent") || left <= 0) return;
+    busy.add("sent");
+    slamming = true;
+    render();
+    const failure = await write("POST", "/payment", { id: newId(), amount: plain(left) });
     busy.delete("sent");
-    if (failure) {
+    // A 409 already put its reason in the note at the top.
+    if (failure && failure.status !== 409 && !stopped) showNote(failure.message, true);
+    if (failure || !paidUp(model(view()), state.viewer)) {
       slamming = false;
-      if (sheet && sheet.kind === "sent") sheet.msg = failure.message;
       render();
       return;
     }
-    closeSheet();
-    const recorded = money(hundredths(amount)) + " recorded";
-    if (!slamming || !paidUp(model(view()), state.viewer)) {
-      slamming = false;
-      showNote(recorded, false);
-      return;
-    }
     slam();
-    // The note says how much once the stamp has lifted, rather than under it.
-    setTimeout(() => showNote(recorded, false), SLAM_MS);
   }
 
   function confirmBill() {
@@ -1835,19 +1772,13 @@ export const CLIENT_SCRIPT = String.raw`
     const ask = target.closest("[data-ask]");
     if (ask) {
       const kind = ask.dataset.ask;
-      return openSheet(kind === "sent" ? { kind, id: newId() } : { kind }, ask);
+      return openSheet({ kind }, ask);
     }
     if (target.closest("[data-do]")) return runAsk();
     if (target.closest("[data-delete-bill]")) return deleteBill();
-    const undo = target.closest("[data-undo]");
-    if (undo) return undoPayment(undo);
-    const paidRow = target.closest("[data-paid-by]");
-    if (paidRow) {
-      const id = paidRow.dataset.paidBy;
-      if (openPaid.has(id)) openPaid.delete(id);
-      else openPaid.add(id);
-      return render();
-    }
+    if (target.closest("[data-pay-all]")) return payAll();
+    const undo = target.closest("[data-undo-paid]");
+    if (undo) return undoPaid(undo);
     const confirm = target.closest("[data-confirm]");
     if (confirm) return confirm.disabled ? null : confirmBill();
     if (target.closest("[data-reopen]")) return toggle("reopen", "POST", "/reopen");
@@ -1937,7 +1868,6 @@ export const CLIENT_SCRIPT = String.raw`
     else if (form.dataset.editLine || form.dataset.addLine !== undefined) submitLine(form);
     else if (form.dataset.guestForm !== undefined) addGuest(form);
     else if (form.dataset.rename) renameGuest(form);
-    else if (form.dataset.sentForm !== undefined) sendPayment(form);
   });
 
   root.addEventListener("input", (event) => {
@@ -1949,10 +1879,6 @@ export const CLIENT_SCRIPT = String.raw`
       msg.textContent = "";
     }
     if (form.dataset.field === "tip") tipPreview(view());
-    if (form.dataset.sentForm !== undefined && sheet) {
-      sheet.amount = form.elements.amount.value;
-      sheet.msg = "";
-    }
   });
 
   root.addEventListener("keydown", (event) => {

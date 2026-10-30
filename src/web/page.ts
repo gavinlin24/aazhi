@@ -701,9 +701,7 @@ button.tile:active { background: var(--fill); }
   cursor: pointer;
 }
 .sent .ic { width: 18px; height: 18px; stroke-width: 2.2; }
-.sent-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
-.sent-form .money-input { flex: 1; }
-.sent-form .money-input input, .sent-form .money-input span { font: 500 24px/1 var(--display); }
+.sent[aria-busy="true"] { cursor: progress; opacity: 0.6; }
 .collect { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pie { width: 54px; height: 54px; margin-top: 12px; transform: rotate(-90deg); }
 .pie circle { fill: none; stroke-width: 6; }
@@ -791,33 +789,12 @@ button.tile:active { background: var(--fill); }
 .payments { margin-top: 12px; padding: 0 16px 4px; }
 .payments h2 { padding: 14px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .payments ul { list-style: none; margin: 0; padding: 0; }
-.payments > ul > li { border-bottom: 1px solid var(--rule); }
-.payments > ul > li:last-child { border-bottom: 0; }
-.paid-by {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 56px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.paid-by .av { --s: 30px; }
-.paid-by .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.paid-of { color: var(--muted); font-size: 15px; white-space: nowrap; }
-.paid-of .money:first-child { color: var(--ink); font-size: 17px; }
-.paid-by > .ic { width: 18px; height: 18px; color: var(--muted); transition: transform 150ms ease; }
-.paid-by[aria-expanded="true"] > .ic { transform: rotate(90deg); }
-/* Indented to the name, so each payment reads as part of the row above. */
-.payments .paid-list { margin-bottom: 8px; }
-.paid-list li { display: flex; align-items: center; gap: 10px; min-height: 48px; padding-left: 40px; }
-.paid-list .money { flex: 1; }
-.paid-list .chip-btn { padding: 0 14px; font-size: 15px; }
+.payments li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-bottom: 1px solid var(--rule); }
+.payments li:last-child { border-bottom: 0; }
+.payments .av { --s: 30px; }
+.payments .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payments .stamp { margin-right: 4px; }
+.payments .chip-btn { padding: 0 14px; font-size: 15px; }
 
 .back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -6px 0 6px -8px; padding: 0 8px; color: var(--muted); text-decoration: none; }
 
@@ -1074,6 +1051,16 @@ function paidUp(v: View, id: ParticipantId): boolean {
   return v.bill.status === "confirmed" && id !== v.bill.payerId && !!o && o.owedCents > 0 && o.paidCents >= o.owedCents;
 }
 
+// A member who paid in full paid their guests' shares with it, so those
+// guests are paid too, until that is undone. A forgiven guest keeps the gift.
+// Paying the adder settles nothing with the payer, so only the adder sees
+// that one as paid.
+function guestPaid(v: View, g: StateParticipant): boolean {
+  if (g.paidToPayer === true || (g.paidToHost === true && g.addedBy === v.s.viewer)) return true;
+  const debtor = debtorOf(g, v.bill.payerId);
+  return debtor !== g.id && paidUp(v, debtor) && v.shares.get(g.id)?.pardoned !== true;
+}
+
 function forgivenWhole(v: View, id: ParticipantId): boolean {
   const shares = [id, ...guestsOf(v, id).map((g) => g.id)].map((x) => v.shares.get(x)).filter((x): x is Share => !!x);
   return shares.length > 0 && shares.every((x) => x.pardoned);
@@ -1303,8 +1290,8 @@ function bar(v: View): string {
 }
 
 // Food, tax and tip of what is asked for after pardons and after any guest
-// who paid the payer directly. Payments are not taken off: the paid-so-far
-// line under it says how much of this is done.
+// who paid the payer directly. Payments are not taken off: paid is yes or
+// no, and the stamp says which.
 function counted(v: View, id: ParticipantId): Share[] {
   const own = v.shares.get(id);
   const guests = guestsOf(v, id)
@@ -1342,11 +1329,11 @@ function payRow(v: View): string {
   return links.length > 0 ? `<div class="pay-row" data-pay>${links.join("")}</div>` : "";
 }
 
-// Only someone with something left to pay has anything to record. The
-// sheet it opens starts at all of it, and takes a smaller amount for part.
+// Only someone with something left to pay has anything to record. Paid is
+// yes or no, so the tap records all of it, with nothing to ask first.
 function sentRow(v: View): string {
   if (leftOf(v, v.s.viewer) <= 0) return "";
-  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I paid</button></div>`;
+  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-pay-all>${icon("check")}I paid</button></div>`;
 }
 
 // One amount for you and the guests you brought, then whose it is: you
@@ -1367,13 +1354,9 @@ function whoRows(v: View): string {
   };
   const rows = [
     row(s.viewer, "You", false, false),
-    ...guests.map((g) => row(g.id, g.displayName, g.paidToPayer === true || g.paidToHost === true, g.paidToPayer === true)),
+    ...guests.map((g) => row(g.id, g.displayName, guestPaid(v, g), g.paidToPayer === true)),
   ];
   return `<ul class="whose" data-who aria-label="Whose share">${rows.join("")}</ul>`;
-}
-
-function paidOf(done: number, total: number): string {
-  return `<p class="legend"><span><span class="money">${formatCents(done)}</span> of <span class="money">${formatCents(total)}</span> paid</span></p>`;
 }
 
 // The bill's whole debt to the payer next to what has come in, so the big
@@ -1400,8 +1383,6 @@ ${collectedOf(total - left, total)}
   const mine = [s.viewer, ...guestsOf(v, s.viewer).filter((g) => g.paidToPayer !== true).map((g) => g.id)];
   const forgiven = forgivenWhole(v, s.viewer);
   const paid = paidUp(v, s.viewer);
-  const o = s.owing[s.viewer];
-  const partial = o && o.paidCents > 0 && !paid;
   const was = forgiven
     ? `<p class="was money">${formatCents(mine.reduce((n, id) => n + (v.shares.get(id)?.owedCents ?? 0), 0))}</p>`
     : "";
@@ -1416,7 +1397,6 @@ ${collectedOf(total - left, total)}
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${whoRows(v)}
 ${forgiven ? "" : splitBar(parts)}
-${partial ? paidOf(o.paidCents, o.owedCents) : ""}
 ${paid ? "" : payRow(v)}
 ${sentRow(v)}
 </section>`;
@@ -1512,63 +1492,40 @@ function actions(v: View): string {
 
 interface PaidBy {
   id: ParticipantId;
-  payments: BillState["payments"];
-  paidCents: Cents;
-  ofCents: Cents;
+  cents: Cents;
 }
 
-// One entry per person who has paid, in roster order, newest payment first
-// within it. A payment against a guest is the guest paying the payer
-// directly, so it is measured against the guest's own share rather than
-// what their member is asked for.
+// Everyone who has paid, in roster order: paid is yes or no, so only those
+// whose payments cover what they were asked for. A payment against a guest is
+// the guest paying the payer directly, so it is measured against the guest's
+// own share rather than what their member is asked for. A part payment made
+// before that rule leaves the person unpaid, and off this list.
 function paidBy(v: View): PaidBy[] {
-  const byId = new Map<ParticipantId, BillState["payments"]>();
-  for (const p of v.s.payments) byId.set(p.participant, [...(byId.get(p.participant) ?? []), p]);
-  const order = (id: ParticipantId) => {
-    const at = v.s.participants.findIndex((p) => p.id === id);
-    return at < 0 ? Infinity : at;
-  };
-  return [...byId.keys()]
-    .sort((a, b) => order(a) - order(b))
-    .map((id) => {
-      const share = v.shares.get(id);
-      const payments = byId.get(id) ?? [];
-      return {
-        id,
-        payments,
-        paidCents: payments.reduce((n, p) => n + p.cents, 0),
-        ofCents: id in v.s.owing ? owedOf(v, id) : share && !share.pardoned ? share.owedCents : 0,
-      };
-    });
+  const paid = new Map<ParticipantId, Cents>();
+  for (const p of v.s.payments) paid.set(p.participant, (paid.get(p.participant) ?? 0) + p.cents);
+  return v.s.participants.flatMap((p) => {
+    const share = v.shares.get(p.id);
+    const asked = p.id in v.s.owing ? owedOf(v, p.id) : share && !share.pardoned ? share.owedCents : 0;
+    return asked > 0 && (paid.get(p.id) ?? 0) >= asked ? [{ id: p.id, cents: asked }] : [];
+  });
 }
 
-// A row per person says how far along they are. Their payments, each with
-// its Undo, open under the row, so a list of small payments never buries
-// who has paid.
 function paymentRows(v: View): string {
-  if (v.s.payments.length === 0) return "";
   const rows = paidBy(v).map((r) => {
     const name = escapeHtml(nameOf(v, r.id));
-    const list = `paid-${escapeHtml(r.id)}`;
-    const stamp = r.ofCents > 0 && r.paidCents >= r.ofCents ? `<span class="stamp" role="img" aria-label="Paid">付讫</span>` : "";
-    const undos = r.payments.map(
-      (p) =>
-        `<li><span class="money">${formatCents(p.cents)}</span><button type="button" class="chip-btn" data-undo="${escapeHtml(p.id)}" ` +
-        `aria-label="Undo ${name}'s ${formatCents(p.cents)} payment">Undo</button></li>`,
-    );
-    return `<li><button type="button" class="paid-by" data-paid-by="${escapeHtml(r.id)}" aria-expanded="false" aria-controls="${list}">` +
-      `${av(v, r.id)}<span class="name">${name}</span>${stamp}` +
-      `<span class="paid-of"><span class="money">${formatCents(r.paidCents)}</span> of <span class="money">${formatCents(r.ofCents)}</span></span>${icon("chev")}</button>` +
-      `<ul class="paid-list" id="${list}" hidden>${undos.join("")}</ul></li>`;
+    return `<li>${av(v, r.id)}<span class="name">${name}</span><span class="money">${formatCents(r.cents)}</span>` +
+      `<span class="stamp" role="img" aria-label="Paid">付讫</span>` +
+      `<button type="button" class="chip-btn" data-undo-paid="${escapeHtml(r.id)}" aria-label="Undo ${name}'s payment">Undo</button></li>`;
   });
-  return `<h2>Payments</h2><ul>${rows.join("")}</ul>`;
+  return rows.length > 0 ? `<h2>Payments</h2><ul>${rows.join("")}</ul>` : "";
 }
 
 // Always drawn for the payer of a confirmed bill, hidden while empty, so the
 // first payment has somewhere to appear without a reload.
 function payments(v: View): string {
   if (!v.s.viewerIsPayer || v.bill.status !== "confirmed") return "";
-  return `<section class="card payments needs-js" data-payments aria-label="Payments"${v.s.payments.length === 0 ? " hidden" : ""}>${paymentRows(v)}</section>`;
+  const rows = paymentRows(v);
+  return `<section class="card payments needs-js" data-payments aria-label="Payments"${rows ? "" : " hidden"}>${rows}</section>`;
 }
 
 function back(): string {

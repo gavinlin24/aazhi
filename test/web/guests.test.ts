@@ -232,8 +232,8 @@ function plain(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-function payment(as: string, cents: number, left?: number) {
-  return send("POST", `/b/${BILL}/payment`, as, { id: crypto.randomUUID(), amount: plain(cents), ...(left === undefined ? {} : { left: plain(left) }) });
+function payment(as: string, cents: number) {
+  return send("POST", `/b/${BILL}/payment`, as, { id: crypto.randomUUID(), amount: plain(cents) });
 }
 
 async function confirmOnPage(): Promise<Reply> {
@@ -502,16 +502,14 @@ describe("a guest another member added", () => {
       .prepare("INSERT INTO payment_handles (user_id, method, handle, updated_at) VALUES ('gavin', 'venmo', 'gavin-lin', '2026-10-28')")
       .run();
     const together = (await owedOf("dani")) + (await owedOf(sam));
-    await recordSettlement(db, BILL, "dani", 1000, "dani");
-    const left = together - 1000;
 
     const state = await stateFor("dani");
-    expect(state.owing.dani).toEqual({ owedCents: together, paidCents: 1000 });
+    expect(state.owing.dani).toEqual({ owedCents: together, paidCents: 0 });
     const venmo = state.pay.find((o: any) => o.method === "venmo");
-    expect(new URL(venmo.url).searchParams.get("amount")).toBe(plain(left));
+    expect(new URL(venmo.url).searchParams.get("amount")).toBe(plain(together));
 
-    expect((await payment("dani", left, left)).status).toBe(200);
-    expect(lastPost()).toBe(`Dani paid Gavin ${formatCents(left)} for ${SAIGON_KITCHEN}, and is all paid up.`);
+    expect((await payment("dani", together)).status).toBe(200);
+    expect(lastPost()).toBe(`Dani paid Gavin ${formatCents(together)} for ${SAIGON_KITCHEN}, and is all paid up.`);
     expect((await listSettlements(db, BILL)).every((s) => s.participant === "dani")).toBe(true);
     // Clear is the pair's: both rows settle when Dani's payments cover both.
     expect(await settledAt("dani")).not.toBeNull();
@@ -705,7 +703,7 @@ describe("marking a guest paid", () => {
     expect((await stateFor("dani")).owing.dani).toEqual({ owedCents: daniOwes, paidCents: 0 });
     expect(await textOf(await page("dani"), "[data-you-owed]")).toBe(formatCents(daniOwes));
 
-    expect((await payment("dani", daniOwes, daniOwes)).status).toBe(200);
+    expect((await payment("dani", daniOwes)).status).toBe(200);
     expect(await settledAt("dani")).not.toBeNull();
     expect(await settledAt(sam)).not.toBeNull();
   });
@@ -865,7 +863,7 @@ describe("marking a guest paid", () => {
     const [listed] = (await stateFor("gavin")).payments;
     expect(listed).toMatchObject({ participant: sam, cents: await owedOf(sam) });
 
-    expect((await send("DELETE", `/b/${BILL}/payment/${encodeURIComponent(listed.id)}`, "gavin")).status).toBe(200);
+    expect((await send("DELETE", `/b/${BILL}/paid/${sam}`, "gavin")).status).toBe(200);
     expect(lastPost()).toBe(`Gavin removed Sam's ${samOwes} payment on ${SAIGON_KITCHEN}. Dani has ${together} left to pay.`);
     expect(inState(await stateFor("dani"), sam)).toMatchObject({ paidToPayer: false });
   });

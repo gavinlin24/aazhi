@@ -107,12 +107,8 @@ async function confirm(as = "gavin", extra: Record<string, unknown> = {}): Promi
   return send("POST", "/confirm", as, { revision: await revision(), ...extra });
 }
 
-function pay(as: string, cents: number, options: { id?: string; left?: number } = {}): Promise<Reply> {
-  return send("POST", "/payment", as, {
-    id: options.id ?? crypto.randomUUID(),
-    amount: plain(cents),
-    ...(options.left === undefined ? {} : { left: plain(options.left) }),
-  });
+function pay(as: string, cents: number, options: { id?: string } = {}): Promise<Reply> {
+  return send("POST", "/payment", as, { id: options.id ?? crypto.randomUUID(), amount: plain(cents) });
 }
 
 // Message edits are coalesced on D1's real clock, which fake timers do not
@@ -324,7 +320,7 @@ describe("recording a payment", () => {
     await seedSaigon(db, BILL);
     await confirmed();
 
-    const reply = await pay("marcus", 4446, { left: 4446 });
+    const reply = await pay("marcus", 4446);
 
     expect(reply.status).toBe(200);
     expect(reply.body.owing.marcus).toEqual({ owedCents: 4446, paidCents: 4446 });
@@ -333,13 +329,16 @@ describe("recording a payment", () => {
     expect(channelPosts()).toEqual([`Marcus paid Gavin $44.46 for ${SAIGON_KITCHEN}, and is all paid up.`]);
   });
 
-  it("records part of it and says what is left", async () => {
+  it("refuses part of it, since someone has paid or they haven't", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
 
-    await pay("marcus", 2000, { left: 4446 });
+    const reply = await pay("marcus", 2000);
 
-    expect(channelPosts()).toEqual([`Marcus paid Gavin $20.00 for ${SAIGON_KITCHEN}, and has $24.46 left to pay.`]);
+    expect(reply.status).toBe(409);
+    expect(reply.body.error).toBe("What you owe changed. You have $44.46 left to pay.");
+    expect(await listSettlements(db, BILL)).toEqual([]);
+    expect(channelPosts()).toEqual([]);
   });
 
   it("records a retried send once", async () => {
@@ -347,11 +346,11 @@ describe("recording a payment", () => {
     await confirmed();
     const id = crypto.randomUUID();
 
-    expect((await pay("marcus", 2000, { id, left: 4446 })).status).toBe(200);
-    const again = await pay("marcus", 2000, { id, left: 4446 });
+    expect((await pay("marcus", 4446, { id })).status).toBe(200);
+    const again = await pay("marcus", 4446, { id });
 
     expect(again.status).toBe(200);
-    expect(again.body.owing.marcus.paidCents).toBe(2000);
+    expect(again.body.owing.marcus.paidCents).toBe(4446);
     expect(await listSettlements(db, BILL)).toHaveLength(1);
     expect(channelPosts()).toHaveLength(1);
   });
@@ -361,11 +360,11 @@ describe("recording a payment", () => {
     await confirmed();
 
     const over = await pay("marcus", 5000);
-    expect(over.status).toBe(400);
-    expect(over.body.error).toBe("That's more than you have left to pay, which is $44.46.");
+    expect(over.status).toBe(409);
+    expect(over.body.error).toBe("What you owe changed. You have $44.46 left to pay.");
     const zero = await pay("marcus", 0);
     expect(zero.status).toBe(400);
-    expect(zero.body.error).toBe("Enter the amount you paid, more than $0.00.");
+    expect(zero.body.error).toBe("That amount is $0.00, so there's nothing to record.");
     expect(await listSettlements(db, BILL)).toEqual([]);
   });
 
@@ -374,22 +373,26 @@ describe("recording a payment", () => {
     await confirmed();
     await recordSettlement(db, BILL, "marcus", 1000, "marcus");
 
-    const reply = await pay("marcus", 4446, { left: 4446 });
+    const reply = await pay("marcus", 4446);
 
     expect(reply.status).toBe(409);
     expect(reply.body.error).toBe("What you owe changed. You have $34.46 left to pay.");
     expect(await listSettlements(db, BILL)).toHaveLength(1);
   });
 
-  it("says the person is paid up when nothing is left", async () => {
+  it("changes nothing when someone already paid taps I paid again", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
-    await recordSettlement(db, BILL, "marcus", 4446, "marcus");
+    await pay("marcus", 4446);
+    await freshEdits();
 
-    const reply = await pay("marcus", 100);
+    const reply = await pay("marcus", 4446);
 
-    expect(reply.status).toBe(409);
-    expect(reply.body.error).toBe("You're all paid up on this bill.");
+    expect(reply.status).toBe(200);
+    expect(reply.body.owing.marcus).toEqual({ owedCents: 4446, paidCents: 4446 });
+    expect(await listSettlements(db, BILL)).toHaveLength(1);
+    expect(messageEdits()).toEqual([]);
+    expect(channelPosts()).toEqual([]);
   });
 
   it("refuses the payer, someone not on the bill, and a reopened bill", async () => {
@@ -421,8 +424,8 @@ describe("undoing a payment", () => {
   it("lists payments for the payer alone, newest first", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
-    await pay("marcus", 1000);
-    await pay("dani", 2000);
+    await recordSettlement(db, BILL, "marcus", 1000, "marcus");
+    await recordSettlement(db, BILL, "dani", 2000, "dani");
 
     const payer = (await send("GET", "/state", "gavin")).body;
     expect(payer.payments.map((p: any) => [p.participant, p.cents])).toEqual([
@@ -432,14 +435,13 @@ describe("undoing a payment", () => {
     expect((await send("GET", "/state", "marcus")).body.payments).toEqual([]);
   });
 
-  it("lets the payer take one back, out loud", async () => {
+  it("lets the payer take someone's paid back, out loud", async () => {
     await seedSaigon(db, BILL);
     await confirmed();
     await pay("marcus", 4446);
-    const [payment] = await listSettlements(db, BILL);
     await freshEdits();
 
-    const reply = await send("DELETE", `/payment/${encodeURIComponent(payment!.id)}`, "gavin");
+    const reply = await send("DELETE", "/paid/marcus", "gavin");
 
     expect(reply.status).toBe(200);
     expect(reply.body.payments).toEqual([]);
@@ -448,23 +450,23 @@ describe("undoing a payment", () => {
     expect(channelPosts()).toEqual([`Gavin removed Marcus's $44.46 payment on ${SAIGON_KITCHEN}. Marcus has $44.46 left to pay.`]);
   });
 
-  it("refuses anyone but the payer, a payment from another bill, and a reopened bill", async () => {
+  it("refuses anyone but the payer, someone paid only on another bill, and a reopened bill", async () => {
     await seedSaigon(db, BILL);
     await seedSaigon(db, "bill-2", { bill: { channelId: "chan-2", messageId: "msg-2" } });
     await confirmed();
     expect(await confirmBill(db, "bill-2", (await getBill(db, "bill-2"))!.revision, "gavin")).toMatchObject({ ok: true });
     await pay("marcus", 4446);
-    await recordSettlement(db, "bill-2", "marcus", 100, "marcus");
-    const mine = (await listSettlements(db, BILL))[0]!;
-    const other = (await listSettlements(db, "bill-2"))[0]!;
+    await recordSettlement(db, "bill-2", "dani", 100, "dani");
 
-    const diner = await send("DELETE", `/payment/${encodeURIComponent(mine.id)}`, "marcus");
+    const diner = await send("DELETE", "/paid/marcus", "marcus");
     expect(diner.status).toBe(403);
     expect(diner.body.error).toBe("Only Gavin can undo a payment, because it was paid to them.");
-    expect((await send("DELETE", `/payment/${encodeURIComponent(other.id)}`, "gavin")).status).toBe(404);
+    const gone = await send("DELETE", "/paid/dani", "gavin");
+    expect(gone.status).toBe(404);
+    expect(gone.body.error).toBe("That payment isn't on this bill any more.");
 
     await send("POST", "/reopen", "gavin");
-    const reopened = await send("DELETE", `/payment/${encodeURIComponent(mine.id)}`, "gavin");
+    const reopened = await send("DELETE", "/paid/marcus", "gavin");
     expect(reopened.status).toBe(409);
     expect(await listSettlements(db, BILL)).toHaveLength(1);
     expect(await listSettlements(db, "bill-2")).toHaveLength(1);
@@ -476,7 +478,7 @@ describe("deleting", () => {
     await seedSaigon(db, BILL);
     await confirmed();
     await pay("marcus", 4446);
-    await pay("dani", 2000);
+    await recordSettlement(db, BILL, "dani", 2000, "dani");
     await freshEdits();
 
     const reply = await send("DELETE", "", "gavin", { paid: "64.46" });

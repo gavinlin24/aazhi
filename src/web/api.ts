@@ -34,7 +34,6 @@ import {
   type Participant,
 } from "../db/bills";
 import {
-  getSettlement,
   GuestPaidRefusedError,
   outstanding,
   recordSettlement,
@@ -42,7 +41,7 @@ import {
   SettlementRefusedError,
   setGuestPaidToHost,
   setGuestPaidToPayer,
-  undoSettlement,
+  undoPaid,
 } from "../db/settlements";
 import { guestPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
@@ -725,7 +724,7 @@ function paymentRefused(error: SettlementRefusedError, snapshot: BillSnapshot): 
     case "no-share":
       return refuse(409, "You have no share on this bill, so there's nothing for you to pay.");
     case "not-positive":
-      return refuse(400, "Enter the amount you paid, more than $0.00.");
+      return refuse(400, "That amount is $0.00, so there's nothing to record.");
     case "clear":
       return refuse(409, "You're all paid up on this bill.");
     case "stale":
@@ -735,20 +734,19 @@ function paymentRefused(error: SettlementRefusedError, snapshot: BillSnapshot): 
   }
 }
 
-// The person records what they sent. `id` comes from the page, one per tap,
-// so a retried request finds its own payment instead of recording a second.
-// `left` is what the page said was left when the person sent all of it; if
-// that has changed, the payment is refused rather than recorded against an
-// amount they never saw.
+// The person paid, all of it: someone has paid or they haven't. `amount` is
+// what the page showed as left, and it must still be what is left, so a
+// part payment is refused and so is a payment against an amount they never
+// saw. `id` comes from the page, one per tap, so a retried request finds its
+// own payment. A tap from someone already paid up changes nothing.
 api.post(
   "/:billId/payment",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, ["id", "amount"], ["left"]);
+    expectKeys(body, ["id", "amount"]);
     const id = text(body.id, "id");
     if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) bad('"id" must be 8 to 64 letters, digits or dashes.');
     const amount = cents(body.amount, "amount", { signed: false });
-    const left = "left" in body ? cents(body.left, "amount left", { signed: false }) : undefined;
 
     const snapshot = await loadLive(c, grant);
     if (snapshot instanceof Response) return snapshot;
@@ -759,9 +757,10 @@ api.post(
     try {
       recorded = await recordSettlement(c.env.DB, grant.billId, grant.participantId, amount, grant.participantId, {
         id: `${grant.participantId}:${id}`,
-        remainingCents: left,
+        remainingCents: amount,
       });
     } catch (error) {
+      if (error instanceof SettlementRefusedError && error.reason === "clear") return currentState(c, grant);
       if (error instanceof SettlementRefusedError) return paymentRefused(error, snapshot);
       throw error;
     }
@@ -777,9 +776,9 @@ api.post(
 const PAYMENT_GONE = "That payment isn't on this bill any more.";
 
 // Only the payer takes a payment back: it was paid to them, so they are the
-// one who knows it never arrived.
+// one who knows it never arrived. It takes back the person's paid, whole.
 api.delete(
-  "/:billId/payment/:paymentId",
+  "/:billId/paid/:participantId",
   route(async (c, grant) => {
     const snapshot = await loadLive(c, grant);
     if (snapshot instanceof Response) return snapshot;
@@ -787,11 +786,11 @@ api.delete(
     if (grant.participantId !== bill.payerId) {
       return refuse(403, `Only ${payerName(snapshot)} can undo a payment, because it was paid to them.`);
     }
-    const payment = await getSettlement(c.env.DB, c.req.param("paymentId") ?? "");
-    if (!payment || payment.billId !== grant.billId) return refuse(404, PAYMENT_GONE);
+    const who = c.req.param("participantId") ?? "";
 
+    let taken: Cents;
     try {
-      await undoSettlement(c.env.DB, payment.id);
+      taken = await undoPaid(c.env.DB, grant.billId, who);
     } catch (error) {
       if (error instanceof SettlementGoneError) return refuse(404, PAYMENT_GONE);
       // A reopened bill's payments are what its re-confirm reports against.
@@ -801,9 +800,9 @@ api.delete(
       throw error;
     }
     refreshMessage(c, bill);
-    const paidBy = participants.find((p) => p.id === payment.participant);
-    const after = await leftFor(c.env, grant.billId, paidBy ? debtorOf(paidBy, bill.payerId) : payment.participant);
-    announce(c, bill, undoNotice(bill, participants, payment.participant, payment.cents, after));
+    const paidBy = participants.find((p) => p.id === who);
+    const after = await leftFor(c.env, grant.billId, paidBy ? debtorOf(paidBy, bill.payerId) : who);
+    announce(c, bill, undoNotice(bill, participants, who, taken, after));
     return currentState(c, grant);
   }),
 );
