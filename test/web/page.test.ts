@@ -591,6 +591,22 @@ describe("renderPage", () => {
       expect(await select(view("theo"), "[data-you] .split-bar")).toHaveLength(1);
     });
 
+    // The share is split off the line's total, so a dish shared with an extra
+    // patty on it still adds up, with the odd cent landing on one of the two.
+    it("counts a dish with add-ons at its full price in each person's lines", async () => {
+      const sum = (text: string) => [...text.matchAll(/\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + Number(m[1]) * 100 + Number(m[2]), 0);
+      const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }];
+      const burger = { id: "burger", label: "Burger", addons, cents: 1951, claimedBy: ["dani", "theo"] };
+      const withBurger = { ...input, items: [...input.items, burger] };
+      const split = splitBill(withBurger);
+      const html = renderPage(confirmedBill, split, withBurger.items, people, "dani", { paid: [] }, NOW);
+
+      const own = (await select(html, "[data-mine] .mine-group"))[0]!;
+      expect(own.text).toContain("Burger÷2$9.76");
+      expect(sum(own.text)).toBe(split.shares.find((x) => x.participant === "dani")!.owedCents);
+      expect((await select(html, '#receipt li.item[data-item="burger"] .addon-line')).map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions"]);
+    });
+
     it("breaks nothing down for someone who brought nobody", async () => {
       const html = view("theo");
       expect(await select(html, "[data-who], [data-mine] .mine-guest")).toEqual([]);
