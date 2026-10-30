@@ -723,11 +723,11 @@ export const CLIENT_SCRIPT = String.raw`
     return [
       el("div", { class: "split-bar", role: "img", "aria-label": label },
         [seg("food", parts.food - parts.discount), seg("tax", parts.tax), seg("tip", parts.tip)]),
-      el("p", { class: "legend", "data-you-detail": true }, [
-        el("span", null, [el("span", { class: "key food", "aria-hidden": "true" }), icon("bowl"), sr("Food"), el("span", { class: "money" }, money(parts.food))]),
-        off ? el("span", null, ["Discount ", el("span", { class: "money" }, money(-parts.discount))]) : null,
-        el("span", null, [el("span", { class: "key tax", "aria-hidden": "true" }), "Tax ", el("span", { class: "money" }, money(parts.tax))]),
-        el("span", null, [el("span", { class: "key tip", "aria-hidden": "true" }), "Tip ", el("span", { class: "money" }, money(parts.tip))]),
+      el("p", { class: "legend parts", "data-you-detail": true }, [
+        el("span", null, [el("span", { class: "part-name" }, [el("span", { class: "key food", "aria-hidden": "true" }), icon("bowl"), sr("Food")]), el("span", { class: "money" }, money(parts.food))]),
+        off ? el("span", null, [el("span", { class: "part-name" }, "Discount "), el("span", { class: "money" }, money(-parts.discount))]) : null,
+        el("span", null, [el("span", { class: "part-name" }, [el("span", { class: "key tax", "aria-hidden": "true" }), "Tax "]), el("span", { class: "money" }, money(parts.tax))]),
+        el("span", null, [el("span", { class: "part-name" }, [el("span", { class: "key tip", "aria-hidden": "true" }), "Tip "]), el("span", { class: "money" }, money(parts.tip))]),
       ]),
     ];
   }

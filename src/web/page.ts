@@ -685,6 +685,12 @@ button.tile:active { background: var(--fill); }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .key { width: 9px; height: 9px; border-radius: 2px; }
 .legend .ic { width: 18px; height: 18px; }
+/* Name over amount, so four parts with a discount still fit one line at
+   phone width and keep fitting as the amounts grow. */
+.legend.parts { gap: 4px 28px; }
+.legend.parts > span { flex-direction: column; align-items: flex-start; gap: 1px; }
+.part-name { display: inline-flex; align-items: center; gap: 5px; height: 18px; font-size: 14px; }
+.legend.parts .money { color: var(--ink); }
 .pay-row { display: flex; gap: 8px; margin-top: 16px; }
 /* Basis 0 splits the row equally among however many apps the payer has. */
 .pay {
@@ -1372,10 +1378,10 @@ function splitBar(parts: Parts): string {
   const off = parts.discount !== 0;
   const label = `Food ${formatCents(parts.food)}, ${off ? `Discount ${formatCents(-parts.discount)}, ` : ""}Tax ${formatCents(parts.tax)}, Tip ${formatCents(parts.tip)}`;
   return `<div class="split-bar" role="img" aria-label="${label}">${seg("food", parts.food - parts.discount)}${seg("tax", parts.tax)}${seg("tip", parts.tip)}</div>
-<p class="legend" data-you-detail><span><span class="key food" aria-hidden="true"></span>${icon("bowl")}<span class="sr">Food</span><span class="money">${formatCents(parts.food)}</span></span>` +
-    (off ? `<span>Discount <span class="money">${formatCents(-parts.discount)}</span></span>` : "") +
-    `<span><span class="key tax" aria-hidden="true"></span>Tax <span class="money">${formatCents(parts.tax)}</span></span>` +
-    `<span><span class="key tip" aria-hidden="true"></span>Tip <span class="money">${formatCents(parts.tip)}</span></span></p>`;
+<p class="legend parts" data-you-detail><span><span class="part-name"><span class="key food" aria-hidden="true"></span>${icon("bowl")}<span class="sr">Food</span></span><span class="money">${formatCents(parts.food)}</span></span>` +
+    (off ? `<span><span class="part-name">Discount </span><span class="money">${formatCents(-parts.discount)}</span></span>` : "") +
+    `<span><span class="part-name"><span class="key tax" aria-hidden="true"></span>Tax </span><span class="money">${formatCents(parts.tax)}</span></span>` +
+    `<span><span class="part-name"><span class="key tip" aria-hidden="true"></span>Tip </span><span class="money">${formatCents(parts.tip)}</span></span></p>`;
 }
 
 function pie(done: Cents, total: Cents): string {

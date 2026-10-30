@@ -672,6 +672,11 @@ describe("renderPage", () => {
       const detail = await textOf(html, "[data-you-detail]");
       expect(detail).toContain(`Discount -${money(theo.discountCents)}`);
       expect(theo.discountCents).toBeGreaterThan(0);
+      // Each part stacks its name over its amount, so four still fit one line.
+      const cells = await select(html, "[data-you-detail] > span");
+      expect(cells).toHaveLength(4);
+      expect(await select(html, "[data-you-detail] > span > .part-name")).toHaveLength(4);
+      expect(await select(html, "[data-you-detail] > span > .money")).toHaveLength(4);
       const bar = await one(html, "[data-you] .split-bar");
       expect(bar.attrs["aria-label"]).toContain(`Discount -${money(theo.discountCents)}`);
     });
