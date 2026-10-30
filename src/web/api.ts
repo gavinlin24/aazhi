@@ -49,7 +49,7 @@ import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
 import { formatCents } from "../format";
 import { debtorOf } from "../money/debtors";
-import type { Cents, ParticipantId } from "../money/types";
+import type { Addon, Cents, ParticipantId } from "../money/types";
 import { stateOf } from "./state";
 import { readToken } from "./token";
 
@@ -69,6 +69,8 @@ const GONE: Partial<Record<BillRow["status"], string>> = {
 // inside the range where integer arithmetic stays exact.
 const MAX_CENTS = 99_999_999;
 const MAX_LABEL = 120;
+const MAX_ADDON_LABEL = 80;
+const MAX_ADDONS = 20;
 const MAX_GUEST_NAME = 40;
 
 class BadRequest extends Error {}
@@ -132,6 +134,21 @@ function label(value: unknown): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (trimmed.length === 0 || trimmed.length > MAX_LABEL) bad(`Give the line a name of 1 to ${MAX_LABEL} characters.`);
   return trimmed;
+}
+
+// The whole list, replacing what the line had. An empty list clears it.
+function addons(value: unknown): Addon[] {
+  if (!Array.isArray(value)) bad('"addons" must be a list.');
+  if (value.length > MAX_ADDONS) bad(`A dish takes up to ${MAX_ADDONS} add-ons.`);
+  return value.map((raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) bad("Each add-on needs a name and a price.");
+    const addon = raw as Record<string, unknown>;
+    expectKeys(addon, ["label", "price"]);
+    // One line, so a newline never reaches the Discord message.
+    const name = typeof addon.label === "string" ? addon.label.replace(/\s+/g, " ").trim() : "";
+    if (name.length === 0 || name.length > MAX_ADDON_LABEL) bad(`Give each add-on a name of 1 to ${MAX_ADDON_LABEL} characters.`);
+    return { label: name, cents: cents(addon.price, "add-on price", { signed: true }) };
+  });
 }
 
 // Decimal strings through the extraction's own strict parser: "12.50" becomes
@@ -271,12 +288,14 @@ api.post(
         break;
       }
       case "edit": {
-        expectKeys(body, ["op", "itemId"], ["label", "price"]);
-        if (!("label" in body) && !("price" in body)) bad("Change the line's name, its price, or both.");
+        // "price" is the dish's own price. The line's total adds its add-ons.
+        expectKeys(body, ["op", "itemId"], ["label", "price", "addons"]);
+        if (!("label" in body) && !("price" in body) && !("addons" in body)) bad("Change the line's name, price or add-ons.");
         const id = (itemId = text(body.itemId, "itemId"));
         const change = {
           label: "label" in body ? label(body.label) : undefined,
-          cents: "price" in body ? cents(body.price, "price", { signed: true }) : undefined,
+          baseCents: "price" in body ? cents(body.price, "price", { signed: true }) : undefined,
+          addons: "addons" in body ? addons(body.addons) : undefined,
         };
         write = (db) => editItem(db, grant.billId, id, change);
         break;

@@ -1,8 +1,8 @@
 import type { BillRow, Participant } from "../db/bills";
-import { formatCents, formatDate } from "../format";
+import { formatAddons, formatCents, formatDate } from "../format";
 import { debtorOf } from "../money/debtors";
 import { itemPieces } from "../money/split";
-import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Addon, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { CLIENT_SCRIPT } from "./client";
 import { FONT_FACES } from "./fonts";
 import { billState, type BillState, type StateParticipant, type StateExtras } from "./state";
@@ -258,6 +258,25 @@ button.row:active { background: var(--fill); }
 .is-bare .who, .is-bare .piece { display: none; }
 .item-label { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
 .item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
+/* A dish's add-ons hang off a dashed rule under its name, the same dash that
+   ties a guest's lines to them, so they read as part of the dish and not as
+   lines of their own. Each price sits under the dish's. A long name wraps
+   rather than clipping, since the add-ons explain the price, and its wrapped
+   lines step in so they can't be read as the next add-on. */
+.item-addons { grid-area: addons; display: block; min-width: 0; margin: 4px 0 2px 3px; padding-left: 11px; border-left: 1.5px dashed var(--ring); font-size: 14px; line-height: 18px; color: var(--muted); }
+/* Clear of the avatars below, so the rule doesn't seem to run into a face. */
+.has-addons:not(.is-bare) .item-addons { margin-bottom: 7px; }
+.addon-line { display: flex; align-items: baseline; gap: 10px; padding: 1px 0; }
+.addon-name { flex: 1; min-width: 0; padding-left: 10px; text-indent: -10px; overflow-wrap: anywhere; }
+.addon-price { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums lining-nums; }
+/* The tick stays beside the dish's name, not halfway down its add-ons. The
+   payer's tick is a full-height button outside the grid, so it is pinned to
+   the same spot by hand: the row's 8px padding plus the 26px tick centred in
+   the name's row. */
+.has-addons .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" ". addons addons" ". who piece"; }
+.is-bare.has-addons .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" ". addons addons"; }
+.has-addons .tick-btn { align-items: start; padding-top: 6.5px; }
+.is-bare.has-addons .tick-btn { padding-top: 10px; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
@@ -428,6 +447,18 @@ button.row:active { background: var(--fill); }
 .line-form .actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .line-form .actions .go { margin-left: auto; }
 .line-form .field-msg { grid-column: 1 / -1; }
+/* Editing a dish lays it out like the receipt: its own price, then one row
+   per add-on, every price in one column so the sum reads down. */
+.dish-form { grid-template-columns: minmax(0, 1fr) 112px 44px; }
+.dish-form > [name="label"] { grid-column: 1 / -1; }
+.dish-form .money-input { grid-column: 2; }
+.dish-form .field-label { grid-column: 1; align-self: center; color: var(--muted); }
+.dish-form .addons-head { grid-column: 1 / -1; margin-top: 6px; color: var(--muted); font-size: 15px; }
+.addon { display: contents; }
+.addon .text-input { grid-column: 1; }
+.addon .icon-btn { border-color: transparent; background: none; color: var(--muted); }
+.dish-form .add-row { grid-column: 1 / 3; gap: 6px; font-size: 16px; }
+.dish-form [hidden] { display: none; }
 
 .people { list-style: none; margin: 14px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 4px; }
 .tile {
@@ -1106,7 +1137,7 @@ function notOnBill(v: View): string {
 
 function rowLabel(v: View, item: LineItem): string {
   const others = item.claimedBy.filter((id) => id !== v.s.viewer).map((id) => nameOf(v, id));
-  return `${item.label}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
+  return `${item.label}${item.addons ? ` (${formatAddons(item.addons)})` : ""}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
 }
 
 function piece(v: View, item: LineItem): string {
@@ -1118,6 +1149,18 @@ function piece(v: View, item: LineItem): string {
 
 const CHECK_TICK = `<span class="tick" aria-hidden="true">${icon("check")}</span>`;
 
+// Each add-on on its own line under the dish, its price under the dish's. The
+// price is plain even for the payer: the dish's brush already opens the editor
+// with every add-on in it.
+function addonLines(addons: Addon[]): string {
+  return addons
+    .map((a) => {
+      const price = a.cents === 0 ? "" : `<span class="addon-price">${a.cents > 0 ? "+" : ""}${formatCents(a.cents)}</span>`;
+      return `<span class="addon-line"><span class="addon-name">${escapeHtml(a.label)}</span>${price}</span>`;
+    })
+    .join("");
+}
+
 // Three shapes: the payer can tap the tick (their own claim) apart from the
 // rest of the line (who had it, and fixing it); a member taps the whole line
 // for their own claim; anyone else sees it locked.
@@ -1128,9 +1171,10 @@ function itemRow(v: View, item: LineItem): string {
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
     `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
+    (item.addons ? `<span class="item-addons">${addonLines(item.addons)}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
-  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
+  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.addons ? "has-addons" : ""];
   const claim = `data-claim data-item="${id}" data-participant="${escapeHtml(v.s.viewer)}" aria-pressed="${mine}"`;
   if (v.s.editable === "all") {
     classes.push("has-picker");

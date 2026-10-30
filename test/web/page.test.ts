@@ -311,6 +311,40 @@ describe("renderPage", () => {
     expect(await select(page("marcus", bill, input, outsider), "[data-add-guest]")).toEqual([]);
   });
 
+  it("shows each add-on on its own line under the dish, and reads them out with it", async () => {
+    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }, { label: "No cheese", cents: -50 }];
+    const note = "Extra patty +$3.00, No onions, No cheese -$0.50";
+    const input = withItem(withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: ["marcus"] }), {
+      id: "odd",
+      label: "Odd",
+      addons: [{ label: "<b>bold</b>", cents: 0 }],
+      cents: 100,
+      claimedBy: [],
+    });
+    const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "marcus", {}, NOW);
+
+    const row = await one(html, 'li.item[data-item="burger"]');
+    expect(row.attrs.class.split(" ")).toContain("has-addons");
+    const lines = await select(html, 'li.item[data-item="burger"] .item-addons .addon-line');
+    expect(lines.map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions", "No cheese-$0.50"]);
+    expect((await select(html, 'li.item[data-item="burger"] .addon-price')).map((p) => p.text)).toEqual(["+$3.00", "-$0.50"]);
+    expect(html).not.toContain("<b>bold");
+    expect(html).toContain("&lt;b&gt;bold&lt;/b&gt;");
+    expect((await one(html, 'li.item[data-item="burger"] [aria-label]')).attrs["aria-label"]).toBe(`Burger (${note}), $19.50`);
+    expect(await select(html, 'li.item[data-item="bun"] .item-addons')).toEqual([]);
+    expect(stateOf(html).items.find((i: any) => i.id === "burger").addons).toEqual(addons);
+  });
+
+  it("keeps add-on prices plain for the payer, whose brush is on the dish's price", async () => {
+    const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }];
+    const input = withItem(draft, { id: "burger", label: "Burger", addons, cents: 1950, claimedBy: [] });
+    const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "gavin", {}, NOW);
+
+    expect((await select(html, 'li.item[data-item="burger"] .addon-line')).map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions"]);
+    expect(await select(html, 'li.item[data-item="burger"] .item-addons svg')).toEqual([]);
+    expect(await select(html, 'li.item[data-item="burger"] .item-price svg')).toHaveLength(1);
+  });
+
   it("escapes text that came from the receipt or from people", async () => {
     const place = `<img src=x onerror="alert(1)">`;
     const label = `</script><script>alert("label")</script> & 'friends'`;
@@ -555,6 +589,22 @@ describe("renderPage", () => {
       // Alone, the bar up top already breaks the one amount down.
       expect(await select(view("theo"), "[data-mine] .tax-tip")).toEqual([]);
       expect(await select(view("theo"), "[data-you] .split-bar")).toHaveLength(1);
+    });
+
+    // The share is split off the line's total, so a dish shared with an extra
+    // patty on it still adds up, with the odd cent landing on one of the two.
+    it("counts a dish with add-ons at its full price in each person's lines", async () => {
+      const sum = (text: string) => [...text.matchAll(/\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + Number(m[1]) * 100 + Number(m[2]), 0);
+      const addons = [{ label: "Extra patty", cents: 300 }, { label: "No onions", cents: 0 }];
+      const burger = { id: "burger", label: "Burger", addons, cents: 1951, claimedBy: ["dani", "theo"] };
+      const withBurger = { ...input, items: [...input.items, burger] };
+      const split = splitBill(withBurger);
+      const html = renderPage(confirmedBill, split, withBurger.items, people, "dani", { paid: [] }, NOW);
+
+      const own = (await select(html, "[data-mine] .mine-group"))[0]!;
+      expect(own.text).toContain("Burger÷2$9.76");
+      expect(sum(own.text)).toBe(split.shares.find((x) => x.participant === "dani")!.owedCents);
+      expect((await select(html, '#receipt li.item[data-item="burger"] .addon-line')).map((l) => l.text)).toEqual(["Extra patty+$3.00", "No onions"]);
     });
 
     it("breaks nothing down for someone who brought nobody", async () => {

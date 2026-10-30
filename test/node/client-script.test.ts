@@ -23,16 +23,38 @@ describe("the page script", () => {
     expect(() => new Script(CLIENT_SCRIPT, { filename: "client.js" })).not.toThrow();
   });
 
-  it("reads a typed minus on a new line's price as money off", () => {
-    const { linePrice } = helpers<{ linePrice: (text: string) => string | null }>("decimal", "hundredths", "linePrice");
-    expect(linePrice("-5")).toBe("-5");
-    expect(linePrice(" -5.50 ")).toBe("-5.50");
-    expect(linePrice("−5")).toBe("-5");
-    expect(linePrice("-$1,012.50")).toBe("-1012.50");
-    expect(linePrice("12.50")).toBe("12.50");
-    expect(linePrice("-0")).toBe("0");
-    expect(linePrice("--5")).toBeNull();
-    expect(linePrice("-")).toBeNull();
-    expect(linePrice("5-")).toBeNull();
+});
+
+describe("a price typed into the line editor", () => {
+  type Input = { value: string; dataset: { off?: string } };
+  const { amountOf, addonPrice } = helpers<{
+    amountOf: (input: Input) => string | null;
+    addonPrice: (input: Input) => string | null;
+  }>("decimal", "hundredths", "amountOf", "addonPrice");
+  const charge = (value: string): Input => ({ value, dataset: {} });
+  const moneyOff = (value: string): Input => ({ value, dataset: { off: "" } });
+
+  it("reads the server's strict shape out of what a person types", () => {
+    expect(amountOf(charge("12"))).toBe("12");
+    expect(amountOf(charge("$1,012.50"))).toBe("1012.50");
+    expect(amountOf(charge(".5"))).toBe("0.5");
+  });
+
+  it("keeps money off as money off while the payer retypes the amount, since the number pad has no minus", () => {
+    expect(amountOf(moneyOff("5"))).toBe("-5");
+    expect(amountOf(moneyOff("4.50"))).toBe("-4.50");
+    expect(amountOf(moneyOff("0"))).toBe("0");
+    expect(addonPrice(moneyOff("0.75"))).toBe("-0.75");
+  });
+
+  it("charges for anything the payer adds, and refuses a typed minus", () => {
+    for (const text of ["-5", "-$5.00", "", "$", "12.345", "1e3", "five"]) expect(amountOf(charge(text)), text).toBeNull();
+    expect(amountOf(moneyOff("-5"))).toBeNull();
+  });
+
+  it("counts an add-on left without a price as unpriced", () => {
+    expect(addonPrice(charge(""))).toBe("0.00");
+    expect(addonPrice(moneyOff("  "))).toBe("0.00");
+    expect(addonPrice(charge("-0.50"))).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractReceipt, reconciles, type Extraction } from "../../src/extract/claude";
-import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
+import { EXTRACT_TOOL_NAME, parseToolInput } from "../../src/extract/schema";
+import { LA_PALMA, MENSHO, PATTY_SHACK } from "../fixtures/modifiers";
 import { SAIGON } from "../fixtures/saigon";
 
 const SAIGON_EXTRACTION: Extraction = {
@@ -404,5 +405,136 @@ describe("extractReceipt", () => {
     const logged = logSpy.mock.calls.flat().join(" ");
     expect(logged).not.toContain("sk-secret-key");
     expect(logged).not.toContain(URL_ONE);
+  });
+});
+
+describe("modifiers", () => {
+  async function read(input: unknown) {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(input));
+    const result = await extractReceipt([URL_ONE], "k");
+    if (!result.ok) throw new Error(`read failed: ${result.reason}`);
+    return result;
+  }
+
+  const lines = (result: Awaited<ReturnType<typeof read>>) =>
+    result.extraction.items.map((i) => [i.label, i.cents, i.addons]);
+  const addon = (label: string, cents = 0) => ({ label, cents });
+
+  it("keeps a dish and its charged add-ons one line, priced together, each add-on with its own price", async () => {
+    const result = await read(PATTY_SHACK);
+
+    expect(lines(result)).toEqual([
+      ["Classic Burger", 1950, [addon("Medium Rare"), addon("Extra Patty", 300), addon("Add Bacon", 250), addon("No Onions")]],
+      ["Veggie Burger", 1500, [addon("Gluten Free Bun", 200), addon("No Pickles")]],
+      ["Fries", 650, [addon("Truffle Oil", 150)]],
+      ["Soda", 600, undefined],
+    ]);
+    expect(result).toMatchObject({ reconciles: true, discrepancyCents: null });
+  });
+
+  it("reads + and - marked modifiers the same way", async () => {
+    const result = await read(LA_PALMA);
+
+    expect(lines(result)).toEqual([
+      ["Burrito Bowl", 1825, [addon("Guacamole", 225), addon("Extra Chicken", 350), addon("No rice")]],
+      ["Tacos (3)", 1150, [addon("Cheese", 100)]],
+      ["Horchata", 400, undefined],
+      ["Chips & Salsa", 450, undefined],
+    ]);
+    expect(result.reconciles).toBe(true);
+  });
+
+  it("keeps an already included add-on's amount and takes it out of the dish's own price, so the total stays as printed", async () => {
+    const result = await read(MENSHO);
+
+    expect(lines(result)).toEqual([
+      ["Tonkotsu Ramen", 1900, [addon("Extra Chashu"), addon("Soft Egg"), addon("Spicy")]],
+      ["Gyoza", 800, undefined],
+      ["Shoyu Ramen", 1600, [addon("Add Corn", 100)]],
+      ["Sapporo", 700, undefined],
+    ]);
+    expect(result).toMatchObject({ reconciles: true, discrepancyCents: null });
+  });
+
+  it("keeps included add-ons as names only when their amounts are more than the dish they are part of", () => {
+    const input = {
+      ...PATTY_SHACK,
+      items: [{ label: "Milk tea", price: "1.00", modifiers: [{ label: "Boba", price: "5.00" }], confidence: 1 }],
+      tax: "0.00",
+      printed_total: "1.00",
+    };
+
+    const parsed = parseToolInput(input);
+
+    expect(parsed).toMatchObject({ modifiersIncluded: { items: [{ cents: 100, addons: [addon("Boba")] }] } });
+  });
+
+  it("keeps the charged reading, and its gap, when neither reading matches the printed total", async () => {
+    const result = await read({ ...MENSHO, printed_total: "60.00" });
+
+    expect(result.extraction.items.find((i) => i.label === "Shoyu Ramen")).toMatchObject({ cents: 1700, addons: [addon("Add Corn", 100)] });
+    expect(result).toMatchObject({ reconciles: false, discrepancyCents: -456 });
+  });
+
+  it("does not fail the whole receipt over an unpriced modifier read as an empty price", async () => {
+    const items = PATTY_SHACK.items.map((item, i) =>
+      i === 0 ? { ...item, modifiers: item.modifiers.map((m) => (m.price === null ? { ...m, price: "" } : m)) } : item,
+    );
+    const result = await read({ ...PATTY_SHACK, items });
+
+    expect(result.extraction.items[0]).toMatchObject({
+      cents: 1950,
+      addons: [addon("Medium Rare"), addon("Extra Patty", 300), addon("Add Bacon", 250), addon("No Onions")],
+    });
+    expect(result.reconciles).toBe(true);
+  });
+
+  it("takes a negative modifier off the line", () => {
+    const input = {
+      ...PATTY_SHACK,
+      items: [{ label: "Steak", price: "30.00", modifiers: [{ label: "Sub salad", price: "-1.00" }], confidence: 1 }],
+    };
+
+    const parsed = parseToolInput(input);
+
+    expect(parsed).toMatchObject({ kind: "extraction", extraction: { items: [{ cents: 2900, addons: [addon("Sub salad", -100)] }] } });
+  });
+
+  it("names a priced modifier read without a name, so the line still adds up to its add-ons", () => {
+    const input = {
+      ...PATTY_SHACK,
+      items: [{ label: "Burger", price: "14.00", modifiers: [{ label: " ", price: "3.00" }, { label: "", price: null }], confidence: 1 }],
+    };
+
+    const parsed = parseToolInput(input);
+
+    expect(parsed).toMatchObject({ extraction: { items: [{ cents: 1700, addons: [addon("Add-on", 300)] }] } });
+  });
+
+  it.each([
+    ["a modifier price that is not a decimal string", [{ label: "Extra patty", price: "three" }]],
+    ["a modifier price sent as a number", [{ label: "Extra patty", price: 3 }]],
+    ["a modifier with no label", [{ price: "3.00" }]],
+    ["modifiers that are not a list", "Extra patty"],
+  ])("rejects %s", (_, modifiers) => {
+    const input = { ...PATTY_SHACK, items: [{ label: "Burger", price: "14.00", modifiers, confidence: 1 }] };
+
+    expect(parseToolInput(input)).toEqual({ kind: "invalid" });
+  });
+
+  it("offers the included reading only when some modifier carries a price", () => {
+    expect(parseToolInput(SAIGON_TOOL_INPUT)).not.toHaveProperty("modifiersIncluded");
+    expect(parseToolInput(MENSHO)).toHaveProperty("modifiersIncluded");
+  });
+
+  it("asks the model for modifiers under their dish rather than as lines of their own", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
+
+    await extractReceipt([URL_ONE], "k");
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const item = body.tools[0].input_schema.properties.items.items;
+    expect(item.required).toContain("modifiers");
+    expect(item.properties.modifiers.items.required).toEqual(["label", "price"]);
   });
 });
