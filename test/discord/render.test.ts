@@ -24,6 +24,7 @@ const bill: BillRow = {
   payerId: "gavin",
   place: "Saigon Kitchen",
   billDate: "2026-10-28",
+  discountCents: 0,
   taxCents: 2232,
   tipCents: 5030,
   printedTotalCents: 27382,
@@ -106,6 +107,16 @@ describe("renderBill", () => {
     ]);
     expect(embed.footer?.text).toBe("Draft");
     expect(embed.color).toBe(0x2d4b66);
+  });
+
+  it("takes a whole-bill discount off the total, and counts it in the receipt check", () => {
+    const discounted = { ...draftState, discountCents: 2515 };
+    const adds = embedOf(render({ ...bill, discountCents: 2515, printedTotalCents: 27382 - 2515 }, discounted));
+    expect(adds.description!.split("\n")[0]).toBe("**Total $298.97**");
+
+    // The receipt printed the discount but the bill has none yet.
+    const missed = embedOf(render({ ...bill, printedTotalCents: 27382 - 2515 }, draftState));
+    expect(missed.description).toContain("Line items do not add up to total!");
   });
 
   it("titles the message with the place and the date", () => {

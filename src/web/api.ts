@@ -352,12 +352,13 @@ api.patch(
   "/:billId",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, [], ["tax", "tip", "tipPercent", "printedTotal", "payer"]);
+    expectKeys(body, [], ["discount", "tax", "tip", "tipPercent", "printedTotal", "payer"]);
     if (Object.keys(body).length === 0) bad("Nothing to change.");
     if ("payer" in body) return changePayer(c, grant, body);
     if ("tip" in body && "tipPercent" in body) bad("Enter the tip as dollars or as a percentage, not both.");
 
     const amounts: BillAmounts = {};
+    if ("discount" in body) amounts.discountCents = cents(body.discount, "discount", { signed: false });
     if ("tax" in body) amounts.taxCents = cents(body.tax, "tax", { signed: false });
     if ("tip" in body) amounts.tipCents = cents(body.tip, "tip", { signed: false });
     if ("tipPercent" in body) amounts.tipBasisPoints = basisPoints(body.tipPercent);
@@ -368,7 +369,13 @@ api.patch(
     const snapshot = await loadDraft(c, grant);
     if (snapshot instanceof Response) return snapshot;
     if (grant.participantId !== snapshot.bill.payerId) {
-      return refuse(403, `Only ${payerName(snapshot)} can change the tax, tip and total, because they paid.`);
+      return refuse(403, `Only ${payerName(snapshot)} can change the discount, tax, tip and total, because they paid.`);
+    }
+    // Checked against the lines as they stand. A line removed later can still
+    // leave it larger, and the split copes, but nobody should type it that way.
+    const subtotal = snapshot.input.items.reduce((sum, item) => sum + item.cents, 0);
+    if (amounts.discountCents !== undefined && amounts.discountCents > Math.max(0, subtotal)) {
+      return refuse(400, "Discount is more than the subtotal.");
     }
     return commit(c, grant, snapshot.bill, () => setBillAmounts(c.env.DB, grant.billId, amounts));
   }),

@@ -116,6 +116,7 @@ async function saveDraft(e: Extraction, guildId: string, channelId: string, paye
     payerId: payer.id,
     place: e.place,
     billDate: e.billDate,
+    discountCents: e.discountCents,
     taxCents: e.taxCents ?? 0,
     tipCents: 0,
     printedTotalCents: e.printedTotalCents,

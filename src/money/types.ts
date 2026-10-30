@@ -18,6 +18,8 @@ export interface LineItem {
 
 export interface BillInput {
   items: LineItem[];
+  // Money off the whole bill, like a promo printed under the subtotal. Positive.
+  discountCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
   payer: ParticipantId;
@@ -28,15 +30,16 @@ export interface BillInput {
 export interface Share {
   participant: ParticipantId;
   subtotalCents: Cents;         // what this person ordered
+  discountCents: Cents;         // displayed slice of the bill discount, positive
   taxCents: Cents;              // displayed tax slice
   tipCents: Cents;              // displayed tip slice, absorbs the stray cent
-  owedCents: Cents;             // === subtotalCents + taxCents + tipCents
+  owedCents: Cents;             // === subtotalCents - discountCents + taxCents + tipCents
   pardoned: boolean;
 }
 
 export interface SplitResult {
   billSubtotalCents: Cents;
-  distributableCents: Cents;    // billSubtotal + tax + tip
+  distributableCents: Cents;    // billSubtotal - discount + tax + tip
   claimedSubtotalCents: Cents;
   unclaimedCents: Cents;        // distributable share of unclaimed lines
   shares: Share[];

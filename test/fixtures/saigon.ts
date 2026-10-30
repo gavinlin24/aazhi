@@ -20,6 +20,7 @@ export const SAIGON: BillInput = {
     { id: "comtam", label: "Com tam", cents: 950, claimedBy: ["omar"] },
     { id: "coconut", label: "Fresh coconut", cents: 400, claimedBy: ["omar"] },
   ],
+  discountCents: 0,
   taxCents: 2232,
   tipCents: 5030,
   payer: "gavin",
@@ -30,6 +31,7 @@ export const SAIGON: BillInput = {
 export function oneItem(cents: number, claimedBy: ParticipantId[]): BillInput {
   return {
     items: [{ id: "item", label: "Item", cents, claimedBy }],
+    discountCents: 0,
     taxCents: 0,
     tipCents: 0,
     payer: claimedBy[0],

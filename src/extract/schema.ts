@@ -5,6 +5,9 @@ export interface Extraction {
   billDate: string | null;
   // `cents` is the dish with its add-ons, so whoever claims it pays for both.
   items: { label: string; cents: Cents; confidence: number; addons?: Addon[] }[];
+  // Money off the whole bill, kept out of items because nobody claims it.
+  // Positive, and 0 when there is none.
+  discountCents: Cents;
   taxCents: Cents | null;
   printedTotalCents: Cents | null;
 }
@@ -32,7 +35,8 @@ export const EXTRACT_TOOL = {
       bill_date: { type: ["string", "null"], description: "Date on the receipt as YYYY-MM-DD, or null." },
       items: {
         type: "array",
-        description: "Every charged line, in printed order. Discounts, comps and service charges are lines too, with a negative price for money taken off.",
+        description:
+          "Every charged line, in printed order. Service charges are lines too, and so is a discount or comp printed directly under one item, with a negative price. Whole-bill discounts go in discount, not here.",
         items: {
           type: "object",
           properties: {
@@ -59,17 +63,25 @@ export const EXTRACT_TOOL = {
           required: ["label", "price", "modifiers", "confidence"],
         },
       },
+      discount: {
+        ...NULLABLE_PRICE,
+        description:
+          "Total of every discount, comp, promo or coupon printed for the whole bill rather than under one item, as printed, e.g. \"-8.00\". " +
+          NULLABLE_PRICE.description,
+      },
       tax: NULLABLE_PRICE,
       printed_total: { ...NULLABLE_PRICE, description: "The grand total printed on the receipt before any tip is added. " + NULLABLE_PRICE.description },
     },
-    required: ["is_receipt", "readable", "place", "bill_date", "items", "tax", "printed_total"],
+    required: ["is_receipt", "readable", "place", "bill_date", "items", "discount", "tax", "printed_total"],
   },
 } as const;
 
 export const EXTRACT_PROMPT = [
   "Read the attached receipt photo(s) and record them with the record_receipt tool. Multiple photos are parts of the same receipt.",
   "Copy every price exactly as printed. Do not round, correct, or infer an amount.",
-  "Items are charged lines only. Include discounts, comps and service charges as signed items (negative when money comes off).",
+  "Items are charged lines only. Include service charges as items.",
+  "A discount or comp printed directly under one item belongs to that item: record it as a negative item right after it.",
+  "A discount, comp, promo or coupon for the whole bill (for example \"Happy hour 10% off\" or \"Promo -8.00\" near the subtotal) is not an item. Put the total of all of them in discount.",
   "Leave subtotal, tax, total, tip and payment lines out of items.",
   "A modifier, add-on or special request printed under an item (indented, or marked with +, -, ADD, NO or SUB) belongs to that item. Put it in the item's modifiers, never in items.",
   "Give a modifier a price only when it has its own charge in the price column. Use null when it has no price, or when its amount is printed beside its name (for example \"Soft egg ($2.00)\") rather than in the price column, because the item's price already includes it.",
@@ -167,9 +179,10 @@ export function parseToolInput(input: unknown): ParsedToolInput {
 
   const place = parseNullableString(input.place);
   const billDate = parseNullableString(input.bill_date);
+  const discount = parseNullablePrice(input.discount ?? null);
   const taxCents = parseNullablePrice(input.tax);
   const printedTotalCents = parseNullablePrice(input.printed_total);
-  if (place === undefined || billDate === undefined || taxCents === undefined || printedTotalCents === undefined) {
+  if (place === undefined || billDate === undefined || discount === undefined || taxCents === undefined || printedTotalCents === undefined) {
     return { kind: "invalid" };
   }
   if (!Array.isArray(input.items)) return { kind: "invalid" };
@@ -186,10 +199,14 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   }
 
   if (lines.length === 0) return { kind: "not-a-receipt" };
+  // Receipts print money off either way round, "-8.00" or "8.00" under a
+  // Discount label. It is money off whichever sign it came with.
+  const discountCents = Math.abs(discount ?? 0);
   const read = (charged: boolean): Extraction => ({
     place,
     billDate,
     items: lines.map((l) => line(l.label, l.printed, l.confidence, l.modifiers, charged)),
+    discountCents,
     taxCents,
     printedTotalCents,
   });

@@ -187,8 +187,8 @@ it that way is one interface.
 Worth stating, because it is the load-bearing part of the design and it is
 easy to mistake for optimism about the model.
 
-A receipt prints its own total. The extracted line items plus the
-extracted tax are reconciled against that printed total before a bill can
+A receipt prints its own total. The extracted line items, less any
+whole-bill discount, plus the extracted tax are reconciled against that printed total before a bill can
 be confirmed, and they have to match to the cent. A misread price
 therefore produces a visible "this does not add up, fix this line" rather
 than a wrong number that quietly becomes somebody's debt.

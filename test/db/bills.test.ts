@@ -39,6 +39,7 @@ function newBill(id: string, overrides: Partial<NewBill> = {}): NewBill {
     payerId: "gavin",
     place: null,
     billDate: null,
+    discountCents: 0,
     taxCents: 0,
     tipCents: 0,
     printedTotalCents: null,

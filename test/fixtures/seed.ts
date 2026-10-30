@@ -32,6 +32,7 @@ export async function seedSaigon(db: D1Database, billId: string, options: SeedOp
     payerId: SAIGON.payer,
     place: "Saigon Kitchen",
     billDate: "2026-10-28",
+    discountCents: 0,
     taxCents: SAIGON.taxCents,
     tipCents: SAIGON.tipCents,
     printedTotalCents: 27382,

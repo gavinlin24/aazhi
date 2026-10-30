@@ -51,6 +51,7 @@ function saigonToolInput(overrides: Record<string, unknown> = {}) {
     place: "Saigon Kitchen",
     bill_date: "2026-10-28",
     items: SAIGON.items.map((item) => ({ label: item.label, price: price(item.cents), confidence: 0.95 })),
+    discount: null,
     tax: "22.32",
     printed_total: "273.82",
     ...overrides,
@@ -250,6 +251,7 @@ function newBill(id: string, overrides: Partial<NewBill> = {}): NewBill {
     payerId: "dani",
     place: "Pho Place",
     billDate: "2026-10-20",
+    discountCents: 0,
     taxCents: 100,
     tipCents: 0,
     printedTotalCents: 1100,
@@ -297,6 +299,7 @@ describe("/split", () => {
       payerId: "gavin",
       place: "Saigon Kitchen",
       billDate: "2026-10-28",
+      discountCents: 0,
       taxCents: 2232,
       tipCents: 0,
       printedTotalCents: 27382,
@@ -355,6 +358,20 @@ describe("/split", () => {
       ["Soda", 600, undefined],
     ]);
     expect(shown(originalEdits()[0]!.body)).toContain("Total $51.17");
+  });
+
+  it("puts a whole-bill discount on the bill rather than among the lines", async () => {
+    anthropic = () => toolUse(saigonToolInput({ discount: "-25.15", printed_total: "248.67" }));
+    await run(slashSplit());
+
+    const bill = await openDraftInChannel(db, "chan-1");
+    expect(bill).toMatchObject({ discountCents: 2515, printedTotalCents: 24867 });
+    const items = await getBillItems(db, bill!.id);
+    expect(items.map((i) => i.cents)).toEqual(SAIGON.items.map((i) => i.cents));
+
+    const text = shown(originalEdits()[0]!.body);
+    expect(text).toMatch(/Total \$248\.67/);
+    expect(text).not.toMatch(/do not add up/);
   });
 
   it("supersedes an existing open draft in the same channel", async () => {

@@ -45,7 +45,7 @@ async function revision(billId = BILL): Promise<number> {
 async function frozenShares(billId = BILL): Promise<Share[]> {
   const { results } = await db
     .prepare(
-      `SELECT participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents, pardoned
+      `SELECT participant_id, subtotal_cents, discount_cents, tax_cents, tip_cents, owed_cents, pardoned
        FROM shares WHERE bill_id = ? ORDER BY participant_id`,
     )
     .bind(billId)
@@ -53,6 +53,7 @@ async function frozenShares(billId = BILL): Promise<Share[]> {
   return results.map((r) => ({
     participant: r.participant_id,
     subtotalCents: r.subtotal_cents,
+    discountCents: r.discount_cents,
     taxCents: r.tax_cents,
     tipCents: r.tip_cents,
     owedCents: r.owed_cents,

@@ -11,8 +11,8 @@ what they had. No accounts or installs: Discord already knows who everyone is.
 2. The bot reads the line items and checks they add up to the printed total.
 3. Everyone taps **Open the split** and claims their dishes on a private web
    page. Shared plates split between whoever claims them.
-4. The payer confirms on the page. Each share includes proportional tax and
-   tip, in exact integer cents that sum to the total.
+4. The payer confirms on the page. Each share includes proportional tax, tip
+   and any whole-bill discount, in exact integer cents that sum to the total.
 5. The page links to Venmo or Cash App with your amount filled in. **I paid**
    records the payment, and the bot tells the channel.
 

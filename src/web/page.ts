@@ -685,6 +685,12 @@ button.tile:active { background: var(--fill); }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
 .legend .key { width: 9px; height: 9px; border-radius: 2px; }
 .legend .ic { width: 18px; height: 18px; }
+/* Name over amount, so four parts with a discount still fit one line at
+   phone width and keep fitting as the amounts grow. */
+.legend.parts { gap: 4px 28px; }
+.legend.parts > span { flex-direction: column; align-items: flex-start; gap: 1px; }
+.part-name { display: inline-flex; align-items: center; gap: 5px; height: 18px; font-size: 14px; }
+.legend.parts .money { color: var(--ink); }
 .pay-row { display: flex; gap: 8px; margin-top: 16px; }
 /* Basis 0 splits the row equally among however many apps the payer has. */
 .pay {
@@ -1218,10 +1224,18 @@ function totals(v: View): string {
   const r = s.result;
   const rows = [
     `<div class="trow"><dt>Subtotal</dt><dd data-total="subtotal">${formatCents(r.billSubtotalCents)}</dd></div>`,
-    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   ];
+  // The payer sees it at $0.00 too, since that row is where they add one.
+  if (s.discountCents !== 0 || s.editable === "all") {
+    rows.push(`<div class="trow" data-field-row="discount"><dt>${withPercent("Discount", s.discountCents, r.billSubtotalCents)}</dt><dd>${amount(v, "discount", "discount", -s.discountCents, "Discount")}</dd></div>`);
+  }
+  rows.push(
+    // Tax is charged on what's left after the discount, so that is the base
+    // a diner would check their local rate against.
+    `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
+  );
   // Between tax and tip, because the printed total is what the restaurant
-  // charged before anyone added a tip: it reads as the sum of the two above.
+  // charged before anyone added a tip: it reads as the sum of the rows above.
   if (v.s.viewerIsPayer && v.bill.status === "draft") {
     rows.push(
       `<div class="trow receipt-row ${s.reconciles.ok ? "is-ok" : "is-off"}" data-reconcile data-field-row="printedTotal">` +
@@ -1345,17 +1359,31 @@ function counted(v: View, id: ParticipantId): Share[] {
   return [own, ...guests].filter((x): x is Share => !!x && !x.pardoned);
 }
 
-function splitParts(shares: Share[]): { food: Cents; tax: Cents; tip: Cents } {
-  return shares.reduce((n, x) => ({ food: n.food + x.subtotalCents, tax: n.tax + x.taxCents, tip: n.tip + x.tipCents }), { food: 0, tax: 0, tip: 0 });
+interface Parts {
+  food: Cents;
+  discount: Cents;
+  tax: Cents;
+  tip: Cents;
 }
 
-function splitBar(parts: { food: Cents; tax: Cents; tip: Cents }): string {
+function splitParts(shares: Share[]): Parts {
+  return shares.reduce(
+    (n, x) => ({ food: n.food + x.subtotalCents, discount: n.discount + x.discountCents, tax: n.tax + x.taxCents, tip: n.tip + x.tipCents }),
+    { food: 0, discount: 0, tax: 0, tip: 0 },
+  );
+}
+
+// The bar draws what is paid, so the discount comes out of the food it was
+// taken off rather than getting a segment of its own.
+function splitBar(parts: Parts): string {
   const seg = (cls: string, cents: Cents) => (cents > 0 ? `<span class="${cls}" style="flex:${cents}"></span>` : "");
-  const label = `Food ${formatCents(parts.food)}, Tax ${formatCents(parts.tax)}, Tip ${formatCents(parts.tip)}`;
-  return `<div class="split-bar" role="img" aria-label="${label}">${seg("food", parts.food)}${seg("tax", parts.tax)}${seg("tip", parts.tip)}</div>
-<p class="legend" data-you-detail><span><span class="key food" aria-hidden="true"></span>${icon("bowl")}<span class="sr">Food</span><span class="money">${formatCents(parts.food)}</span></span>` +
-    `<span><span class="key tax" aria-hidden="true"></span>Tax <span class="money">${formatCents(parts.tax)}</span></span>` +
-    `<span><span class="key tip" aria-hidden="true"></span>Tip <span class="money">${formatCents(parts.tip)}</span></span></p>`;
+  const off = parts.discount !== 0;
+  const label = `Food ${formatCents(parts.food)}, ${off ? `Discount ${formatCents(-parts.discount)}, ` : ""}Tax ${formatCents(parts.tax)}, Tip ${formatCents(parts.tip)}`;
+  return `<div class="split-bar" role="img" aria-label="${label}">${seg("food", parts.food - parts.discount)}${seg("tax", parts.tax)}${seg("tip", parts.tip)}</div>
+<p class="legend parts" data-you-detail><span><span class="part-name"><span class="key food" aria-hidden="true"></span>${icon("bowl")}<span class="sr">Food</span></span><span class="money">${formatCents(parts.food)}</span></span>` +
+    (off ? `<span><span class="part-name">Discount </span><span class="money">${formatCents(-parts.discount)}</span></span>` : "") +
+    `<span><span class="part-name"><span class="key tax" aria-hidden="true"></span>Tax </span><span class="money">${formatCents(parts.tax)}</span></span>` +
+    `<span><span class="part-name"><span class="key tip" aria-hidden="true"></span>Tip </span><span class="money">${formatCents(parts.tip)}</span></span></p>`;
 }
 
 function pie(done: Cents, total: Cents): string {
@@ -1449,13 +1477,13 @@ ${sentRow(v)}
 </section>`;
 }
 
-// Tax and tip are the share's own, from the split, so the lines add up to
-// that person's amount to the cent.
+// Discount, tax and tip are the share's own, from the split, so the lines add
+// up to that person's amount to the cent.
 function taxTipRows(v: View, id: ParticipantId): string {
   const share = v.shares.get(id);
   if (!share) return "";
   const row = (label: string, cents: Cents) => `<li class="tax-tip"><span class="item-label">${label}</span><span class="money">${formatCents(cents)}</span></li>`;
-  return row("Tax", share.taxCents) + row("Tip", share.tipCents);
+  return (share.discountCents !== 0 ? row("Discount", -share.discountCents) : "") + row("Tax", share.taxCents) + row("Tip", share.tipCents);
 }
 
 function mineList(v: View, id: ParticipantId, withTaxTip: boolean): string {

@@ -62,9 +62,10 @@ handler to call. Reading takes longer than 3 s, so
 **2. Reading the receipt.** `src/extract/claude.ts` sends the photo's Discord
 URL to Claude with a forced tool call (a fixed JSON schema in
 `src/extract/schema.ts`), so the photo never passes through the Worker or gets
-stored. Prices arrive as strings and are parsed into integer cents. Then the
-items plus tax are checked against the printed total. A bill that doesn't
-match can be fixed but not confirmed.
+stored. Prices arrive as strings and are parsed into integer cents. A
+discount for the whole bill is kept apart from the lines, since nobody claims
+it. Then the items, less that discount, plus tax are checked against the
+printed total. A bill that doesn't match can be fixed but not confirmed.
 
 **3. Saving and posting.** `src/db/bills.ts` writes the draft to D1. Each
 change bumps the bill's `revision`, so a confirm sent from an older version
@@ -85,7 +86,7 @@ serves `src/web/page.ts` with the client script from `src/web/client.ts`. The
 script calls `src/web/api.ts` with the token as a Bearer header. People claim
 their own lines and can add guests, whom they tap onto lines and answer for
 (`src/money/debtors.ts` decides who owes for whom). The payer can also edit
-lines, tax, tip and anyone's guests. Writes
+lines, the discount, tax, tip and anyone's guests. Writes
 only land while the SQL `WHERE` still sees a draft. The page polls every
 5 s. The Discord message updates at most every 3 s per bill, through a lease
 stored in D1, since Worker instances share no memory.
@@ -94,8 +95,9 @@ stored in D1, since Worker instances share no memory.
 /b/:billId/confirm`). `confirmBill` (`src/db/bills.ts`) requires the payer, a
 current revision, a matching total and every line claimed. Unclaimed lines
 can instead be split evenly between everyone who claimed something.
-`src/money/split.ts` splits each line between its claimants and gives tax and
-tip in proportion to subtotal. Largest-remainder rounding (round everyone
+`src/money/split.ts` splits each line between its claimants and gives the
+whole-bill discount, tax and tip in proportion to subtotal.
+Largest-remainder rounding (round everyone
 down, then give spare cents to the largest fractions) makes shares sum to the
 cent. The shares are frozen in the `shares` table, and the message becomes
 the owe card.

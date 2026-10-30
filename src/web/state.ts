@@ -29,6 +29,7 @@ export interface BillState {
   paid: ParticipantId[];
   // What the payer is owed by everyone else, a guest the payer added included.
   payerCollectsCents: Cents;
+  discountCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
   printedTotalCents: Cents | null;
@@ -140,10 +141,11 @@ export function billState(
     hasPayments,
     paid,
     payerCollectsCents: result.payerCollectsCents,
+    discountCents: bill.discountCents,
     taxCents: bill.taxCents,
     tipCents: bill.tipCents,
     printedTotalCents: bill.printedTotalCents,
-    reconciles: reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents }),
+    reconciles: reconciles({ ...bill, items }),
     items,
     participants: participants.map((p) => {
       const base = { id: p.id, kind: p.kind, displayName: p.displayName, addedBy: p.addedBy };

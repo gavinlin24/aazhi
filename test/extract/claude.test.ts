@@ -8,6 +8,7 @@ const SAIGON_EXTRACTION: Extraction = {
   place: "Saigon Kitchen",
   billDate: "2026-10-28",
   items: SAIGON.items.map((item) => ({ label: item.label, cents: item.cents, confidence: 0.95 })),
+  discountCents: 0,
   taxCents: 2232,
   printedTotalCents: 27382,
 };
@@ -30,6 +31,7 @@ const SAIGON_TOOL_INPUT = {
     price: cents(item.cents),
     confidence: item.confidence,
   })),
+  discount: null,
   tax: "22.32",
   printed_total: "273.82",
 };
@@ -102,6 +104,7 @@ describe("reconciles", () => {
       place: null,
       billDate: null,
       items: [{ label: "Tea", cents: 500, confidence: 1 }],
+      discountCents: 0,
       taxCents: null,
       printedTotalCents: 500,
     };
@@ -116,10 +119,20 @@ describe("reconciles", () => {
         { label: "Pho", cents: 2100, confidence: 1 },
         { label: "Comp", cents: -800, confidence: 1 },
       ],
+      discountCents: 0,
       taxCents: 130,
       printedTotalCents: 1430,
     };
     expect(reconciles(comped)).toEqual({ ok: true, discrepancyCents: null });
+  });
+
+  it("takes a whole-bill discount off the items before checking the total", () => {
+    expect(reconciles({ ...SAIGON_EXTRACTION, discountCents: 2515, printedTotalCents: 27382 - 2515 })).toEqual({
+      ok: true,
+      discrepancyCents: null,
+    });
+    // The same discount missed by the read shows as the gap.
+    expect(reconciles({ ...SAIGON_EXTRACTION, printedTotalCents: 27382 - 2515 })).toEqual({ ok: false, discrepancyCents: 2515 });
   });
 });
 
@@ -209,6 +222,40 @@ describe("extractReceipt", () => {
     });
   });
 
+  it("keeps a whole-bill discount out of the items, as money off", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ discount: "-25.15", printed_total: "248.67" })));
+
+    const result = await extractReceipt([URL_ONE], "k");
+
+    expect(result).toEqual({
+      ok: true,
+      extraction: { ...SAIGON_EXTRACTION, discountCents: 2515, printedTotalCents: 24867 },
+      reconciles: true,
+      discrepancyCents: null,
+    });
+  });
+
+  it("reads a discount printed without a minus sign as money off too", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ discount: "25.15", printed_total: "248.67" })));
+    await expect(extractReceipt([URL_ONE], "k")).resolves.toMatchObject({ extraction: { discountCents: 2515 }, reconciles: true });
+  });
+
+  it("takes a missing discount as none", async () => {
+    const { discount: _discount, ...withoutDiscount } = SAIGON_TOOL_INPUT;
+    fetchMock.mockResolvedValueOnce(toolUseResponse(withoutDiscount));
+    await expect(extractReceipt([URL_ONE], "k")).resolves.toMatchObject({ extraction: { discountCents: 0 }, reconciles: true });
+  });
+
+  it("asks for whole-bill discounts apart from the items, and a dish's own discount under it", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
+    await extractReceipt([URL_ONE], "k");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.tools[0].input_schema.required).toContain("discount");
+    const prompt = body.messages[0].content.at(-1).text;
+    expect(prompt).toMatch(/whole bill .* is not an item\. Put the total of all of them in discount/);
+    expect(prompt).toMatch(/directly under one item belongs to that item/);
+  });
+
   it("reports a photo that is not a receipt rather than inventing a bill", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ items: [], tax: null, printed_total: null })));
 
@@ -285,11 +332,14 @@ describe("extractReceipt", () => {
     await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
   });
 
-  it("rejects an unparseable tax or printed total", async () => {
+  it("rejects an unparseable tax, discount or printed total", async () => {
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ tax: "twenty" })));
     await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
 
     fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ printed_total: "$273.82" })));
+    await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
+
+    fetchMock.mockImplementation(async () => toolUseResponse(withOverrides({ discount: "10%" })));
     await expect(extractReceipt([URL_ONE], "k")).resolves.toEqual({ ok: false, reason: "model-error" });
   });
 
