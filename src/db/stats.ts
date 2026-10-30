@@ -12,13 +12,31 @@ const MAX_MONTHS = 12;
 
 // One person on one confirmed bill: the row every number here is counted from.
 const OUTING_COLUMNS = `b.id AS bill_id, b.guild_id, b.place, b.bill_date, b.created_at, b.payer_id,
-  p.id AS person, p.display_name, s.owed_cents, s.pardoned,
-  EXISTS (SELECT 1 FROM participants o WHERE o.bill_id = b.id AND o.id <> p.id) AS shared`;
+  p.id AS person, p.display_name, s.owed_cents, s.pardoned`;
 const OUTINGS_FROM = `participants p JOIN bills b ON b.id = p.bill_id
-  LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = p.id`;
-const CONFIRMED_MEMBER = `p.kind = 'member' AND b.status = 'confirmed'`;
+  JOIN shares s ON s.bill_id = b.id AND s.participant_id = p.id`;
+
+// Tapping Open the split puts anyone on a bill, so being on it proves nothing.
+// A share above zero is what shows they were there. A forgiven share still
+// counts here: forgiving changes who pays, not who ate.
+function hasShare(person: string, bill: string): string {
+  return `EXISTS (SELECT 1 FROM shares x WHERE x.bill_id = ${bill}.id AND x.participant_id = ${person}.id AND x.owed_cents > 0)`;
+}
+
+// A receipt with nobody else on it isn't an outing with anyone, so no stat
+// takes it. A guest with a share is somebody else. This is a clause of its own
+// so that a kind of bill made to count alone can be let through with an OR.
+function sharedWithSomeone(person: string, bill: string): string {
+  return `EXISTS (SELECT 1 FROM shares x WHERE x.bill_id = ${bill}.id AND x.participant_id <> ${person}.id AND x.owed_cents > 0)`;
+}
+
+function confirmedMember(person: string, bill: string): string {
+  return `${person}.kind = 'member' AND ${bill}.status = 'confirmed' AND ${hasShare(person, bill)} AND (${sharedWithSomeone(person, bill)})`;
+}
+
+const CONFIRMED_MEMBER = confirmedMember("p", "b");
 const LATEST_NAME = `SELECT n.display_name FROM participants n JOIN bills nb ON nb.id = n.bill_id
-  WHERE n.id = o.id AND n.kind = 'member' AND nb.status = 'confirmed'`;
+  WHERE n.id = o.id AND ${confirmedMember("n", "nb")}`;
 
 interface OutingDbRow {
   bill_id: string;
@@ -29,9 +47,8 @@ interface OutingDbRow {
   payer_id: string;
   person: string;
   display_name: string;
-  owed_cents: number | null;
-  pardoned: number | null;
-  shared: number;
+  owed_cents: number;
+  pardoned: number;
 }
 
 interface CompanionDbRow {
@@ -154,11 +171,7 @@ function mostUsed(names: string[]): Named | null {
 }
 
 function spentOn(row: OutingDbRow): Cents {
-  return row.pardoned === 1 ? 0 : (row.owed_cents ?? 0);
-}
-
-function hostedBy(row: OutingDbRow, who: ParticipantId): boolean {
-  return row.payer_id === who && row.shared === 1;
+  return row.pardoned === 1 ? 0 : row.owed_cents;
 }
 
 // Rows run oldest first, so the last one from a server has the latest name there.
@@ -170,7 +183,7 @@ function summarize(rows: OutingDbRow[], guildId: string): Summary | null {
     name: (rows.filter((r) => r.guild_id === guildId).at(-1) ?? last).display_name,
     outings: rows.length,
     spentCents: rows.reduce((sum, r) => sum + spentOn(r), 0),
-    hosted: rows.filter((r) => hostedBy(r, last.person)).length,
+    hosted: rows.filter((r) => r.payer_id === last.person).length,
   };
 }
 
@@ -235,7 +248,7 @@ function companionsStatement(db: D1Database, guildId: string, who: ParticipantId
          (${LATEST_NAME} ORDER BY nb.created_at DESC, nb.id DESC LIMIT 1) AS name_anywhere
        FROM participants p JOIN bills b ON b.id = p.bill_id
        JOIN participants o ON o.bill_id = p.bill_id AND o.id <> p.id AND o.kind = 'member'
-       WHERE p.id = ?2 AND ${CONFIRMED_MEMBER}
+       WHERE p.id = ?2 AND ${CONFIRMED_MEMBER} AND ${hasShare("o", "b")}
        GROUP BY o.id ORDER BY outings DESC, latest DESC, o.id`,
     )
     .bind(guildId, who);
@@ -256,7 +269,7 @@ export async function personProfile(db: D1Database, guildId: string, who: Partic
   const firstMonth = monthsOf.reduce((a, b) => (b < a ? b : a));
   const end = [monthAt(nowMs), ...monthsOf].reduce((a, b) => (b > a ? b : a));
 
-  const hosted = rows.filter((r) => hostedBy(r, who));
+  const hosted = rows.filter((r) => r.payer_id === who);
   const places = rows.flatMap((r) => (r.place ? [r.place] : []));
   const biggest = rows.reduce((a, b) => (b.total_cents >= a.total_cents ? b : a));
   return {
@@ -296,7 +309,7 @@ function boardLists(rows: OutingDbRow[], names: Map<ParticipantId, string>): [Ra
   const spent = new Map<ParticipantId, number>();
   const places = new Map<ParticipantId, Set<string>>();
   for (const row of rows) {
-    if (hostedBy(row, row.person)) hosted.set(row.person, (hosted.get(row.person) ?? 0) + 1);
+    if (row.payer_id === row.person) hosted.set(row.person, (hosted.get(row.person) ?? 0) + 1);
     spent.set(row.person, (spent.get(row.person) ?? 0) + spentOn(row));
     const key = foldName(row.place ?? "");
     if (key) places.set(row.person, (places.get(row.person) ?? new Set()).add(key));
@@ -311,7 +324,7 @@ function boardLists(rows: OutingDbRow[], names: Map<ParticipantId, string>): [Ra
 // total, so a board compares friends here on everything they've done.
 export async function serverBoards(db: D1Database, guildId: string, nowMs: number): Promise<Boards> {
   const peopleHere = `SELECT h.id FROM participants h JOIN bills hb ON hb.id = h.bill_id
-    WHERE h.kind = 'member' AND hb.status = 'confirmed' AND hb.guild_id = ?`;
+    WHERE hb.guild_id = ? AND ${confirmedMember("h", "hb")}`;
   const { results: rows } = await db
     .prepare(`SELECT ${OUTING_COLUMNS} FROM ${OUTINGS_FROM} WHERE ${CONFIRMED_MEMBER} AND p.id IN (${peopleHere}) ORDER BY b.created_at, b.id`)
     .bind(guildId)

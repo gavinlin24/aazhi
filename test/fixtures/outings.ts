@@ -6,6 +6,9 @@ export interface Outing {
   channel?: string;
   // The first person listed is the payer.
   people: [id: string, name: string][];
+  // Someone else with a $1 line of their own, because no stat counts a bill
+  // with nobody else on it.
+  alongside?: [id: string, name: string];
   place?: string | null;
   billDate?: string | null;
   createdAt?: string;
@@ -19,7 +22,11 @@ export interface Outing {
 
 // One outing the way the app leaves it in D1: rows through the same writes the
 // app uses, frozen by the real confirm, then dated, since tests need the past.
-export async function seedOuting(db: D1Database, o: Outing): Promise<void> {
+export async function seedOuting(db: D1Database, outing: Outing): Promise<void> {
+  const { alongside } = outing;
+  const o: Outing = alongside
+    ? { ...outing, people: [...outing.people, alongside], items: [...outing.items, ["Tea", 100, [alongside[0]]]] }
+    : outing;
   const payer = o.people[0]![0];
   const guestCents = o.guest?.item[1] ?? 0;
   await createBill(db, {

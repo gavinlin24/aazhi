@@ -64,3 +64,22 @@ describe("a price typed into the line editor", () => {
     expect(addonPrice(charge("-0.50"))).toBeNull();
   });
 });
+
+describe("the Venmo sheet at Confirm", () => {
+  const { asksForVenmo } = helpers<{
+    asksForVenmo: (s: { viewer: string; viewerVenmo: string | null; participants: { id: string }[] }) => boolean;
+  }>("asksForVenmo");
+  const onBill = (...ids: string[]) => ids.map((id) => ({ id }));
+
+  it("asks a payer with no Venmo when anyone else is on the bill", () => {
+    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: null, participants: onBill("gavin", "marcus") })).toBe(true);
+  });
+
+  it("skips it for a payer alone on the bill", () => {
+    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: null, participants: onBill("gavin") })).toBe(false);
+  });
+
+  it("skips it once a Venmo is saved", () => {
+    expect(asksForVenmo({ viewer: "gavin", viewerVenmo: "gavin-l", participants: onBill("gavin", "marcus") })).toBe(false);
+  });
+});

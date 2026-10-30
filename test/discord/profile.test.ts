@@ -98,7 +98,7 @@ async function twoBills() {
     people: [["gavin", "Gavin"], ["marcus", "Marcus"]],
     items: [["Pho", 2000, ["gavin"]], ["Bun", 1500, ["marcus"]]],
   });
-  await seedOuting(db, { id: "b2", people: [["gavin", "Gavin"]], items: [["Pho", 1800, ["gavin"]]] });
+  await seedOuting(db, { id: "b2", people: [["gavin", "Gavin"]], alongside: ["priya", "Priya"], items: [["Pho", 1800, ["gavin"]]] });
 }
 
 describe("/profile", () => {
@@ -114,7 +114,7 @@ describe("/profile", () => {
 
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBe(EPHEMERAL);
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted once.");
+    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times.");
     const [link, post] = reply.data.components[0].components;
     expect(link.label).toBe("Open profile");
     expect(link.url).toMatch(/\/g\/guild-1\?t=[\w-]+\.[\w-]+$/);
@@ -134,9 +134,9 @@ describe("/profile", () => {
 
   it("uses the name from this server's bills rather than the option's or another server's", async () => {
     await twoBills();
-    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["marcus", "Marc the Belayer"]], items: [["Eggs", 900, ["marcus"]]] });
+    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["marcus", "Marc the Belayer"]], alongside: ["theo", "Theo"], items: [["Eggs", 900, ["marcus"]]] });
     const reply = await send(profileBody({ id: "marcus", nick: "Some Other Nick" }));
-    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted 0 times.");
+    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted once.");
   });
 
   it("still answers when Discord will not say the server's name", async () => {
@@ -152,7 +152,7 @@ describe("/profile", () => {
     await twoBills();
     serverReply = () => Response.json({ name: "朋友们的周五晚餐俱乐部".repeat(9) });
     const reply = await send(profileBody({ id: "1234567890123456789" }));
-    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["1234567890123456789", "Theo"]], items: [["Eggs", 900, ["1234567890123456789"]]] });
+    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["1234567890123456789", "Theo"]], alongside: ["marcus", "Marcus"], items: [["Eggs", 900, ["1234567890123456789"]]] });
     const longest = await send(profileBody({ id: "1234567890123456789" }));
     expect(reply.data.components).toBeUndefined();
     const { url } = longest.data.components[0].components[0];
@@ -161,7 +161,7 @@ describe("/profile", () => {
   });
 
   it("escapes Markdown in a name", async () => {
-    await seedOuting(db, { id: "b1", people: [["marcus", "m_a*rcus"]], items: [["Pho", 2000, ["marcus"]]] });
+    await seedOuting(db, { id: "b1", people: [["marcus", "m_a*rcus"]], alongside: ["gavin", "Gavin"], items: [["Pho", 2000, ["marcus"]]] });
     const reply = await send(profileBody({ id: "marcus" }));
     expect(reply.data.content).toContain("**m\\_a\\*rcus**");
   });
@@ -184,10 +184,11 @@ describe("/profile", () => {
       id: "elsewhere",
       guild: "guild-2",
       people: [["theo", "Theo Elsewhere"]],
+      alongside: ["noor", "Noor"],
       items: [["Eggs", 900, ["theo"]]],
     });
     const reply = await send(profileBody({ id: "theo", nick: "Theo" }));
-    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted 0 times.");
+    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted once.");
 
     const url = new URL(reply.data.components[0].components[0].url);
     expect(await checkMemberProof(url.searchParams.get("m")!, url.searchParams.get("t")!, "theo", "k")).toBe(true);
@@ -203,13 +204,18 @@ describe("/profile", () => {
   });
 
   it("will not open someone else from a link for the plain command", async () => {
-    await seedOuting(db, { id: "elsewhere", guild: "guild-2", people: [["theo", "Theo"]], items: [["Eggs", 900, ["theo"]]] });
+    await seedOuting(db, { id: "elsewhere", guild: "guild-2", people: [["theo", "Theo"]], alongside: ["noor", "Noor"], items: [["Eggs", 900, ["theo"]]] });
     const token = await mintViewerToken(GUILD, "gavin", null, "k", Date.now());
     expect((await app.request(`/g/${GUILD}/u/theo?t=${token}`, {}, env())).status).toBe(403);
   });
 
   it("counts only drafts as no bills", async () => {
-    await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]], draft: true });
+    await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], alongside: ["priya", "Priya"], items: [["Pho", 2000, ["gavin"]]], draft: true });
+    expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
+  });
+
+  it("counts a bill with nobody else on it as no bills", async () => {
+    await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]] });
     expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
   });
 
@@ -231,7 +237,7 @@ describe("Post it here", () => {
     const reply = await send(postBody("gavin"));
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBeUndefined();
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted once.");
+    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times.");
     expect(reply.data.allowed_mentions).toEqual({ parse: [] });
   });
 

@@ -269,6 +269,7 @@ describe("the boards page", () => {
       await seedOuting(db, {
         id: `r${i}`,
         people: [[id, id.toUpperCase()]],
+        alongside: ["gavin", "Gavin"],
         items: [["A", 1000 * (10 - i), [id]]],
         billDate: new Date().toISOString().slice(0, 10),
       });

@@ -1954,11 +1954,17 @@ export const CLIENT_SCRIPT = String.raw`
     slam(el("span", { class: "stamp" }, "付讫"));
   }
 
+  // The sheet's pitch is friends paying you back, which means nothing with
+  // nobody else on the bill.
+  function asksForVenmo(s) {
+    return !s.viewerVenmo && s.participants.some((p) => p.id !== s.viewer);
+  }
+
   // Each sheet hands to the next in place. Closing first would land its close
   // event on the sheet that follows.
   function confirmBill(skipVenmo) {
     const from = root.querySelector("[data-confirm]");
-    if (!skipVenmo && !state.viewerVenmo) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
+    if (!skipVenmo && asksForVenmo(state)) return openSheet({ kind: "nudge", form: venmoForm(true) }, from);
     if (openLines(state).length > 0) return openSheet({ kind: "split" }, from);
     closeSheet();
     return toggle("confirm", "POST", "/confirm", { revision: state.revision });

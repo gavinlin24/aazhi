@@ -668,7 +668,7 @@ describe("a bill with one person", () => {
     return response;
   }
 
-  it("goes from /split through Confirm and counts on Spent and Unique visits, not Hosted", async () => {
+  it("goes from /split through Confirm and counts on no stat", async () => {
     anthropic = () =>
       toolUse(saigonToolInput({ items: [{ label: "Pho dac biet", price: "18.00", confidence: 0.95 }], tax: "2.00", printed_total: "20.00" }));
     await run(slashSplit());
@@ -700,10 +700,10 @@ describe("a bill with one person", () => {
     expect(confirmed.status).toBe(200);
 
     expect((await getBill(db, id))!.status).toBe("confirmed");
-    expect(await personSummary(db, "guild-1", "gavin")).toMatchObject({ outings: 1, spentCents: 2000, hosted: 0 });
+    expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
     const { lists } = await serverBoards(db, "guild-1", Date.UTC(2026, 9, 30));
-    expect(lists["spent:all"].map((r) => [r.id, r.value])).toEqual([["gavin", 2000]]);
-    expect(lists["visits:all"].map((r) => [r.id, r.value])).toEqual([["gavin", 1]]);
+    expect(lists["spent:all"]).toEqual([]);
+    expect(lists["visits:all"]).toEqual([]);
     expect(lists["hosted:all"]).toEqual([]);
   });
 });
