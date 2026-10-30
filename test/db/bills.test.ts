@@ -1,13 +1,11 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  addClaim,
   addGuest,
   addItem,
   addParticipant,
   addParticipants,
   BillNotDraftError,
-  bumpRevision,
   createBill,
   deleteItem,
   editItem,
@@ -18,9 +16,7 @@ import {
   insertItems,
   MemberRefusedError,
   NotOnRosterError,
-  openDraftInChannel,
   reassignPayer,
-  removeClaim,
   removeMember,
   setBillAmounts,
   setClaim,
@@ -32,6 +28,7 @@ import {
 } from "../../src/db/bills";
 import { splitBill } from "../../src/money/split";
 import { SAIGON } from "../fixtures/saigon";
+import { openDraftInChannel } from "../fixtures/seed";
 
 const db = env.DB;
 
@@ -69,7 +66,7 @@ async function seedSaigon(billId: string) {
     SAIGON.items.map(({ id, label, cents }) => ({ id, label, cents, source: "ocr", confidence: 0.9 })),
   );
   for (const item of SAIGON.items) {
-    for (const who of item.claimedBy) await addClaim(db, billId, item.id, who);
+    for (const who of item.claimedBy) await setClaim(db, billId, item.id, who, true);
   }
 }
 
@@ -120,7 +117,7 @@ describe("bill repository", () => {
     // "B" sorts before "a" by code unit; a locale-aware sort would flip them.
     for (const who of ["a", "B", "_", "1"]) {
       await addParticipant(db, { billId: "b-order", id: who, kind: "member", displayName: who, addedBy: null });
-      await addClaim(db, "b-order", "o-late", who);
+      await setClaim(db, "b-order", "o-late", who, true);
     }
 
     const items = await getBillItems(db, "b-order");
@@ -176,10 +173,10 @@ describe("bill repository", () => {
     expect((await openDraftInChannel(db, "chan-2"))?.id).toBe("b-other-chan");
   });
 
-  it("treats a bill still being read as open, newest first, and skips closed statuses", async () => {
-    await createBill(db, newBill("b-draft", { status: "draft" }));
-    await createBill(db, newBill("b-reading", { status: "reading" }));
-    expect((await openDraftInChannel(db, "chan-1"))?.id).toBe("b-reading");
+  it("takes the newest of two open drafts and skips closed statuses", async () => {
+    await createBill(db, newBill("b-draft"));
+    await createBill(db, newBill("b-newer"));
+    expect((await openDraftInChannel(db, "chan-1"))?.id).toBe("b-newer");
 
     for (const status of ["confirmed", "superseded", "deleted"] as BillStatus[]) {
       await db.prepare("UPDATE bills SET status = ? WHERE channel_id = 'chan-1'").bind(status).run();
@@ -203,15 +200,14 @@ describe("bill repository", () => {
     await createBill(db, newBill("b-rev"));
     const seen: number[] = [1];
 
-    seen.push(await bumpRevision(db, "b-rev"));
     seen.push(await addParticipant(db, { billId: "b-rev", id: "dani", kind: "member", displayName: "Dani", addedBy: null }));
     seen.push(await insertItems(db, "b-rev", [{ id: "r-1", label: "Rolls", cents: 900, source: "ocr" }]));
-    seen.push(await addClaim(db, "b-rev", "r-1", "dani"));
-    seen.push(await removeClaim(db, "b-rev", "r-1", "dani"));
+    seen.push(await setClaim(db, "b-rev", "r-1", "dani", true));
+    seen.push(await setClaim(db, "b-rev", "r-1", "dani", false));
 
-    expect(seen).toEqual([1, 2, 3, 4, 5, 6]);
-    expect((await getBill(db, "b-rev"))?.revision).toBe(6);
-    await expect(bumpRevision(db, "missing")).rejects.toThrow(/missing/);
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    expect((await getBill(db, "b-rev"))?.revision).toBe(5);
+    await expect(insertItems(db, "missing", [])).rejects.toThrow(/missing/);
   });
 
   it("treats claiming twice as one claim and unclaiming as the inverse", async () => {
@@ -219,11 +215,11 @@ describe("bill repository", () => {
     await addParticipant(db, { billId: "b-claim", id: "dani", kind: "member", displayName: "Dani", addedBy: null });
     await insertItems(db, "b-claim", [{ id: "k-1", label: "Rolls", cents: 900, source: "ocr" }]);
 
-    await addClaim(db, "b-claim", "k-1", "dani");
-    await addClaim(db, "b-claim", "k-1", "dani");
+    await setClaim(db, "b-claim", "k-1", "dani", true);
+    await setClaim(db, "b-claim", "k-1", "dani", true);
     expect((await getBillItems(db, "b-claim"))[0].claimedBy).toEqual(["dani"]);
 
-    await removeClaim(db, "b-claim", "k-1", "dani");
+    await setClaim(db, "b-claim", "k-1", "dani", false);
     expect((await getBillItems(db, "b-claim"))[0].claimedBy).toEqual([]);
   });
 
@@ -246,42 +242,44 @@ describe("bill repository", () => {
     it("refuses a claim on an unknown bill without writing it", async () => {
       await twoBills();
 
-      await expect(addClaim(db, "ghost", "x-a", "dani")).rejects.toThrow(/ghost/);
+      await expect(setClaim(db, "ghost", "x-a", "dani", true)).rejects.toThrow(/ghost/);
       expect(await claimCount()).toBe(0);
     });
 
-    it("refuses an item that belongs to another bill and leaves both revisions alone", async () => {
+    // Past the page's own checks a stale id isn't an error, it just matches no
+    // row. The revision still moves on the bill named, as it does on any write.
+    it("claims nothing for an item that belongs to another bill and leaves that bill alone", async () => {
       await twoBills();
 
-      await expect(addClaim(db, "b-a", "x-b", "dani")).rejects.toThrow(/x-b/);
+      await setClaim(db, "b-a", "x-b", "dani", true);
       expect(await claimCount()).toBe(0);
-      expect((await getBill(db, "b-a"))?.revision).toBe(3);
+      expect((await getBill(db, "b-a"))?.revision).toBe(4);
       expect((await getBill(db, "b-b"))?.revision).toBe(4);
     });
 
-    it("refuses a claimant who is not a participant of that bill", async () => {
+    it("claims nothing for someone who is not a participant of that bill", async () => {
       await twoBills();
 
-      await expect(addClaim(db, "b-a", "x-a", "marcus")).rejects.toThrow(/marcus/);
+      await setClaim(db, "b-a", "x-a", "marcus", true);
       expect(await claimCount()).toBe(0);
       expect((await toSplitInput(db, "b-a")).items[0].claimedBy).toEqual([]);
     });
 
-    it("refuses to remove a claim through the wrong bill or an unknown one", async () => {
+    it("won't remove a claim through the wrong bill or an unknown one", async () => {
       await twoBills();
-      await addClaim(db, "b-b", "x-b", "dani");
+      await setClaim(db, "b-b", "x-b", "dani", true);
 
-      await expect(removeClaim(db, "b-a", "x-b", "dani")).rejects.toThrow(/x-b/);
-      await expect(removeClaim(db, "ghost", "x-b", "dani")).rejects.toThrow(/ghost/);
+      await setClaim(db, "b-a", "x-b", "dani", false);
+      await expect(setClaim(db, "ghost", "x-b", "dani", false)).rejects.toThrow(/ghost/);
       expect(await claimCount()).toBe(1);
     });
 
     it("still removes a stale claim by someone no longer on the bill", async () => {
       await twoBills();
-      await addClaim(db, "b-b", "x-b", "marcus");
+      await setClaim(db, "b-b", "x-b", "marcus", true);
       await db.prepare("DELETE FROM participants WHERE bill_id = 'b-b' AND id = 'marcus'").run();
 
-      await removeClaim(db, "b-b", "x-b", "marcus");
+      await setClaim(db, "b-b", "x-b", "marcus", false);
       expect(await claimCount()).toBe(0);
     });
   });
@@ -316,6 +314,7 @@ describe("bill repository", () => {
 
   it("rejects a status outside the lifecycle", async () => {
     await expect(createBill(db, newBill("b-status", { status: "reopened" as BillStatus }))).rejects.toThrow();
+    await expect(createBill(db, newBill("b-status", { status: "reading" as BillStatus }))).rejects.toThrow();
   });
 
   it("derives pardons from frozen share rows and has none while drafting", async () => {
@@ -369,17 +368,18 @@ describe("bill repository", () => {
     ];
 
     async function lockedBill(status: BillStatus) {
-      await createBill(db, newBill("b-lock", { status, taxCents: 100, tipCents: 0, printedTotalCents: 1000 }));
+      await createBill(db, newBill("b-lock", { taxCents: 100, tipCents: 0, printedTotalCents: 1000 }));
       await addParticipant(db, dani);
       await insertItems(db, "b-lock", [
         { id: "l-1", label: "Rolls", cents: 900, source: "ocr" },
         { id: "l-2", label: "Pho", cents: 1200, source: "ocr" },
       ]);
-      await addClaim(db, "b-lock", "l-2", "dani");
+      await setClaim(db, "b-lock", "l-2", "dani", true);
+      await db.prepare("UPDATE bills SET status = ? WHERE id = 'b-lock'").bind(status).run();
       return getBillSnapshot(db, "b-lock");
     }
 
-    for (const status of ["confirmed", "superseded", "deleted", "reading"] as const) {
+    for (const status of ["confirmed", "superseded", "deleted"] as const) {
       it(`refuses every page write to a ${status} bill inside the write itself`, async () => {
         for (const [what, write] of writes) {
           await db.prepare("DELETE FROM bills").run();

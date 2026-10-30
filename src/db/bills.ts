@@ -4,7 +4,7 @@ import { splitBill } from "../money/split";
 import type { Addon, BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
 import { debtorOfSql, debtorSql, groupPaidSql } from "./debt";
 
-export type BillStatus = "reading" | "draft" | "confirmed" | "superseded" | "deleted";
+export type BillStatus = "draft" | "confirmed" | "superseded" | "deleted";
 
 export interface Participant {
   billId: string;
@@ -252,19 +252,6 @@ export async function getParticipants(db: D1Database, billId: string): Promise<P
   return results.map(toParticipant);
 }
 
-// A bill still being read is open too: a new /split supersedes it.
-export async function openDraftInChannel(db: D1Database, channelId: string): Promise<BillRow | null> {
-  const row = await db
-    .prepare(
-      `SELECT ${BILL_COLUMNS} FROM bills
-       WHERE channel_id = ? AND status IN ('reading', 'draft')
-       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
-    )
-    .bind(channelId)
-    .first<BillDbRow>();
-  return row ? toBill(row) : null;
-}
-
 // A /split replaces its own payer's rescan of the same receipt. Someone else's
 // draft in the channel is a different bill, and every message's buttons carry
 // their own bill id, so two payers' drafts sit side by side without confusion.
@@ -276,7 +263,7 @@ export async function supersedeOlderDrafts(db: D1Database, channelId: string, ne
   const { results } = await db
     .prepare(
       `UPDATE bills SET status = 'superseded', revision = revision + 1
-       WHERE channel_id = ?1 AND status IN ('reading', 'draft') AND confirmed_at IS NULL
+       WHERE channel_id = ?1 AND status = 'draft' AND confirmed_at IS NULL
          AND payer_id = (SELECT payer_id FROM bills WHERE id = ?2)
          AND rowid < (SELECT rowid FROM bills WHERE id = ?2)
        RETURNING ${BILL_COLUMNS}`,
@@ -402,10 +389,6 @@ export async function toSplitInput(db: D1Database, billId: string): Promise<Bill
   return snapshot.input;
 }
 
-export async function bumpRevision(db: D1Database, billId: string): Promise<number> {
-  return mutate(db, billId, []);
-}
-
 export async function insertItems(db: D1Database, billId: string, items: NewItem[]): Promise<number> {
   const insert = db.prepare(
     `INSERT INTO bill_items (id, bill_id, label, addons, cents, position, source, confidence)
@@ -454,67 +437,6 @@ export async function addParticipants(
   );
 }
 
-// Checks run before the batch because a batch commits whatever it contains: a
-// bad id must be refused up front, not discovered after a stray row landed.
-async function assertItemInBill(
-  db: D1Database,
-  billId: string,
-  itemId: string,
-  participantId: ParticipantId | null,
-): Promise<void> {
-  const row = await db
-    .prepare(
-      `SELECT
-         EXISTS (SELECT 1 FROM bills WHERE id = ?1) AS bill,
-         EXISTS (SELECT 1 FROM bill_items WHERE id = ?2 AND bill_id = ?1) AS item,
-         ?3 IS NULL OR EXISTS (SELECT 1 FROM participants WHERE bill_id = ?1 AND id = ?3) AS who`,
-    )
-    .bind(billId, itemId, participantId)
-    .first<{ bill: number; item: number; who: number }>();
-  if (!row?.bill) throw new Error(`bill ${billId} not found`);
-  if (!row.item) throw new Error(`item ${itemId} is not on bill ${billId}`);
-  if (!row.who) throw new Error(`${participantId} is not a participant of bill ${billId}`);
-}
-
-export async function addClaim(
-  db: D1Database,
-  billId: string,
-  itemId: string,
-  participantId: ParticipantId,
-): Promise<number> {
-  await assertItemInBill(db, billId, itemId, participantId);
-  return mutate(db, billId, [
-    db
-      .prepare(
-        `INSERT INTO item_claims (bill_item_id, participant_id)
-         SELECT i.id, p.id FROM bill_items i JOIN participants p ON p.bill_id = i.bill_id
-         WHERE i.id = ? AND i.bill_id = ? AND p.id = ?
-         ON CONFLICT DO NOTHING`,
-      )
-      .bind(itemId, billId, participantId),
-  ]);
-}
-
-// The claimant is deliberately not checked: removing a stale claim by someone
-// who is no longer on the bill must stay possible.
-export async function removeClaim(
-  db: D1Database,
-  billId: string,
-  itemId: string,
-  participantId: ParticipantId,
-): Promise<number> {
-  await assertItemInBill(db, billId, itemId, null);
-  return mutate(db, billId, [
-    db
-      .prepare(
-        `DELETE FROM item_claims
-         WHERE bill_item_id = ? AND participant_id = ?
-           AND bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)`,
-      )
-      .bind(itemId, participantId, billId),
-  ]);
-}
-
 // The page's writes. Each is one row-level statement scoped to its bill, so
 // two people claiming the same line at once both land, and an id that went
 // stale between the caller's check and the write changes nothing. All of them
@@ -527,6 +449,8 @@ export async function setClaim(
   participantId: ParticipantId,
   claimed: boolean,
 ): Promise<number> {
+  // Taking a claim off deliberately doesn't check the claimant: a stale claim by
+  // someone who is no longer on the bill must stay removable.
   const write = claimed
     ? db.prepare(
         `INSERT INTO item_claims (bill_item_id, participant_id)

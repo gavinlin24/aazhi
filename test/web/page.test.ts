@@ -453,9 +453,6 @@ describe("renderPage", () => {
     expect(await textOf(confirmed, "[data-status-label] .word")).toBe("Confirmed");
     expect(await textOf(confirmed, "[data-status-label] .seal")).toBe("定");
     expect(await select(confirmed, "[data-status-label] .is-draft")).toEqual([]);
-    const reading = page("marcus", { ...bill, status: "reading" }, SAIGON);
-    expect(await textOf(reading, "[data-status-label] .word")).toBe("Reading");
-    expect(await select(reading, "[data-status-label] .seal")).toEqual([]);
   });
 
   it("asks the payer for the receipt total only when the lines don't add up to it, beside Confirm", async () => {

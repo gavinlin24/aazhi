@@ -1,4 +1,4 @@
-import { addClaim, addParticipant, createBill, getBill, insertItems, type BillRow, type NewBill } from "../../src/db/bills";
+import { addParticipant, createBill, getBill, insertItems, setClaim, type BillRow, type NewBill } from "../../src/db/bills";
 import { SAIGON } from "./saigon";
 
 export const SAIGON_NAMES: Record<string, string> = {
@@ -50,8 +50,18 @@ export async function seedSaigon(db: D1Database, billId: string, options: SeedOp
   for (const item of SAIGON.items) {
     if (options.unclaimed?.includes(item.id)) continue;
     for (const who of item.claimedBy.filter((p) => roster.includes(p))) {
-      await addClaim(db, billId, `${billId}-${item.id}`, who);
+      await setClaim(db, billId, `${billId}-${item.id}`, who, true);
     }
   }
   return (await getBill(db, billId))!;
+}
+
+// Nothing in the app looks a bill up by channel, but tests of /split don't know
+// the id it generated, so they find the bill they just made this way.
+export async function openDraftInChannel(db: D1Database, channelId: string): Promise<BillRow | null> {
+  const row = await db
+    .prepare("SELECT id FROM bills WHERE channel_id = ? AND status = 'draft' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .bind(channelId)
+    .first<{ id: string }>();
+  return row ? getBill(db, row.id) : null;
 }

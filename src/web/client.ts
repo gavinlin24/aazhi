@@ -32,7 +32,7 @@ export const CLIENT_SCRIPT = String.raw`
   const MAX_ADDONS = 20;
   const MAX_GUEST_NAME = 40;
   const SVG = "http://www.w3.org/2000/svg";
-  const STATUS_WORD = { reading: "Reading", draft: "Draft", confirmed: "Confirmed", superseded: "Replaced", deleted: "Deleted" };
+  const STATUS_WORD = { draft: "Draft", confirmed: "Confirmed", superseded: "Replaced", deleted: "Deleted" };
   const layout = root.dataset.layout;
 
   // Claims tapped but not yet answered. They are drawn over whatever state the

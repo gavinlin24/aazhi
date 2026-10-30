@@ -3,7 +3,6 @@ import { env as workerEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
 import {
-  addClaim,
   addParticipant,
   createBill,
   deleteBill,
@@ -11,16 +10,17 @@ import {
   getBillItems,
   getParticipants,
   insertItems,
-  openDraftInChannel,
+  setClaim,
   type BillRow,
   type NewBill,
 } from "../../src/db/bills";
 import type { Env } from "../../src/env";
 import { personSummary, serverBoards } from "../../src/db/stats";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
-import { editBillMessage, ephemeral, followUp } from "../../src/discord/rest";
+import { editBillMessage, editOriginal, ephemeral } from "../../src/discord/rest";
 import { PATTY_SHACK } from "../fixtures/modifiers";
 import { SAIGON } from "../fixtures/saigon";
+import { openDraftInChannel } from "../fixtures/seed";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
 
 const db = workerEnv.DB;
@@ -599,7 +599,7 @@ describe("editBillMessage", () => {
 
     const first = editBillMessage(bill, env());
     await vi.advanceTimersByTimeAsync(1000);
-    await addClaim(db, "b1", "b1-pho", "marcus");
+    await setClaim(db, "b1", "b1-pho", "marcus", true);
     const second = editBillMessage(bill, env());
     await settle(Promise.all([first, second]));
 
@@ -641,12 +641,12 @@ describe("editBillMessage", () => {
   });
 });
 
-describe("followUp and ephemeral", () => {
-  it("posts a follow-up message through the interaction webhook", async () => {
-    await followUp(TOKEN, { content: "hello" }, env());
+describe("editOriginal and ephemeral", () => {
+  it("edits the original reply through the interaction webhook", async () => {
+    await editOriginal(TOKEN, { content: "hello" }, env());
 
     expect(calls).toEqual([
-      { url: `${API}/webhooks/${APP_ID}/${TOKEN}`, method: "POST", auth: null, body: { content: "hello" } },
+      { url: `${API}/webhooks/${APP_ID}/${TOKEN}/messages/@original`, method: "PATCH", auth: null, body: { content: "hello" } },
     ]);
   });
 

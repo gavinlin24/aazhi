@@ -518,7 +518,7 @@ Indicative, not prescriptive; the builder owns the final schema.
 - `people` — Discord user id, display name. Global, not per group.
 - `bills` — group, channel, Discord message id, payer, place, date,
   subtotal, tax, tip, printed total, status
-  (`reading` | `draft` | `confirmed` | `superseded` | `deleted`),
+  (`draft` | `confirmed` | `superseded` | `deleted`),
   timestamps.
 - `bill_items` — bill, label, cents, position, source (`ocr` | `manual`),
   extraction confidence.
