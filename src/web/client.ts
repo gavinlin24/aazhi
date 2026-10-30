@@ -806,13 +806,12 @@ export const CLIENT_SCRIPT = String.raw`
     keyedInto(hero, JSON.stringify([v.s.owing, v.s.pay, v.s.result.shares, v.s.participants, v.s.payerId, busy.has("sent")]), () => heroNodes(v));
   }
 
-  // Mirrors taxTipRow on the server.
-  function taxTipNode(v, id) {
+  // Mirrors taxTipRows on the server.
+  function taxTipNodes(v, id) {
     const share = v.shares.get(id);
-    return share ? el("li", { class: "tax-tip" }, [
-      el("span", { class: "item-label" }, "Tax + tip"),
-      el("span", { class: "money" }, money(share.taxCents + share.tipCents)),
-    ]) : null;
+    if (!share) return [];
+    const row = (label, cents) => el("li", { class: "tax-tip" }, [el("span", { class: "item-label" }, label), el("span", { class: "money" }, money(cents))]);
+    return [row("Tax", share.taxCents), row("Tip", share.tipCents)];
   }
 
   function mineNodes(v, id, withTaxTip) {
@@ -824,7 +823,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return rows.length > 0 ? el("ul", null, rows.concat(withTaxTip ? [taxTipNode(v, id)] : [])) : null;
+    return rows.length > 0 ? el("ul", null, rows.concat(withTaxTip ? taxTipNodes(v, id) : [])) : null;
   }
 
   function renderMine(v) {
@@ -1030,7 +1029,7 @@ export const CLIENT_SCRIPT = String.raw`
         el("span", { class: "money" }, money(piecesOf(item).get(id) || 0)),
       ]);
     });
-    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(withTaxTip ? [taxTipNode(v, id)] : []) : [el("li", { class: "empty" }, el("span", { class: "dash-ring", "aria-hidden": "true" }))]);
+    return el("ul", { class: "sheet-lines" }, rows.length > 0 ? rows.concat(withTaxTip ? taxTipNodes(v, id) : []) : [el("li", { class: "empty" }, el("span", { class: "dash-ring", "aria-hidden": "true" }))]);
   }
 
   function forgiveButton(v, p) {

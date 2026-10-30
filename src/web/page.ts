@@ -1407,9 +1407,11 @@ ${sentRow(v)}
 
 // Tax and tip are the share's own, from the split, so the lines add up to
 // that person's amount to the cent.
-function taxTipRow(v: View, id: ParticipantId): string {
+function taxTipRows(v: View, id: ParticipantId): string {
   const share = v.shares.get(id);
-  return share ? `<li class="tax-tip"><span class="item-label">Tax + tip</span><span class="money">${formatCents(share.taxCents + share.tipCents)}</span></li>` : "";
+  if (!share) return "";
+  const row = (label: string, cents: Cents) => `<li class="tax-tip"><span class="item-label">${label}</span><span class="money">${formatCents(cents)}</span></li>`;
+  return row("Tax", share.taxCents) + row("Tip", share.tipCents);
 }
 
 function mineList(v: View, id: ParticipantId, withTaxTip: boolean): string {
@@ -1420,7 +1422,7 @@ function mineList(v: View, id: ParticipantId, withTaxTip: boolean): string {
       const cents = itemPieces(item).get(id) ?? 0;
       return `<li><span class="item-label">${escapeHtml(item.label)}</span>${n > 1 ? `<span class="piece">÷${n}</span>` : ""}<span class="money">${formatCents(cents)}</span></li>`;
     });
-  return rows.length > 0 ? `<ul>${rows.join("")}${withTaxTip ? taxTipRow(v, id) : ""}</ul>` : "";
+  return rows.length > 0 ? `<ul>${rows.join("")}${withTaxTip ? taxTipRows(v, id) : ""}</ul>` : "";
 }
 
 // Grouped the way the amount is broken down: yours, then each guest's, each

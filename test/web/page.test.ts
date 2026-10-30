@@ -542,13 +542,15 @@ describe("renderPage", () => {
         expect(groups).toHaveLength(ids.length);
         groups.forEach((group, i) => {
           const x = share(ids[i]!);
-          expect(group.text).toContain(`Tax + tip${money(x.taxCents + x.tipCents)}`);
+          expect(group.text).toContain(`Tax${money(x.taxCents)}Tip${money(x.tipCents)}`);
           expect(sum(group.text), ids[i]).toBe(x.owedCents);
         });
       }
       expect((await select(view("dani"), "[data-mine] .tax-tip")).map((r) => r.text)).toEqual([
-        `Tax + tip${money(share("dani").taxCents + share("dani").tipCents)}`,
-        `Tax + tip${money(share("guest-sam").taxCents + share("guest-sam").tipCents)}`,
+        `Tax${money(share("dani").taxCents)}`,
+        `Tip${money(share("dani").tipCents)}`,
+        `Tax${money(share("guest-sam").taxCents)}`,
+        `Tip${money(share("guest-sam").tipCents)}`,
       ]);
       // Alone, the bar up top already breaks the one amount down.
       expect(await select(view("theo"), "[data-mine] .tax-tip")).toEqual([]);
