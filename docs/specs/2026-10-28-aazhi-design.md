@@ -433,7 +433,7 @@ not captured is gone permanently; storing it costs nothing.
 
 Worth building:
 
-- Times any two people have eaten together, in this server.
+- Times any two people have eaten together, across every server.
 - Who fronts the bill most often.
 - Most-ordered item per person.
 - Most-visited restaurant; most expensive night.
@@ -442,10 +442,18 @@ Worth building:
 These are what make the bot something to open rather than something to
 endure.
 
-**Everything is visible to everyone in one server**, money included. No
-statistic looks across servers: people use different names in different
-groups, and what they spend with one group is not the other's business.
+**A person's numbers count every server**, money included. Spending doesn't
+depend on which friend group you ate with: the fact is you ate out. Anyone
+in a server can see those totals for anyone in it, including who someone
+went out with most, even if that person is a stranger to the viewer. People
+use different names in different groups, so a name comes from the viewing
+server when it can. Boards list the people with a bill in that server, each
+with their full total. Bills stay separate, and the monthly recap stays per
+server: that recap is where a group sees only itself.
 Guests appear in no statistic, because no guest record survives its bill.
+
+One receipt split in two servers counts twice, as two outings. That gap is
+known and has no fix yet.
 
 ## Stack
 

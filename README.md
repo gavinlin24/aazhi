@@ -17,8 +17,9 @@ what they had. No accounts or installs: Discord already knows who everyone is.
    **I paid** records the payment, and the bot tells the channel.
 
 Run `/profile` to see your months, your favorite place and who you go out with.
-`/profile @someone` shows theirs. The boards rank the server by Hosted, Spent
-and Unique visits. Every stat stays inside one server.
+`/profile @someone` shows theirs. Your numbers count every server you eat with.
+The boards rank the people in this server by Hosted, Spent and Unique visits,
+using those same totals. Bills stay in the server they were made in.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">

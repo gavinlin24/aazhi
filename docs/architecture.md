@@ -171,18 +171,43 @@ sequenceDiagram
 as a mountain range, a few tiles, and three boards: Hosted, Spent and Unique
 visits. Nothing here writes to the database. `src/db/stats.ts` holds every rule.
 
-**One server only.** Every query is scoped to the server. A person's name is
-the latest one from this server's bills, because the same person can go by a
-nickname in another group. Someone with bills only elsewhere gets the same
-"no bills" reply as someone with none, so the bot never reveals other servers.
+**Numbers count every server.** Eating out is one life, so a profile adds up
+every confirmed bill a person is on, wherever it was made: spent, outings, the
+Range, tiles, hosted and fronted. "No bills" means none anywhere, and the reply
+names no server. The per-server view is the monthly recap the bot will post in
+the server, not these pages. Bills themselves stay separate: a bill page shows
+nothing from other servers.
+
+**The viewing server still matters in three places.**
+
+- **Names.** People go by different names in different groups, so a name comes
+  from the viewing server when the person has one there, and otherwise from
+  their latest bill anywhere.
+- **Boards.** The rows are people with a confirmed bill in this server. Each
+  number is that person's total from every server, for Month as well as All
+  time.
+- **Who opens.** A page opens for yourself, for someone with a confirmed bill in
+  this server, or for someone `/profile @name` just named, because Discord only
+  offers people in the server. A tile or pair card can name someone from another
+  server, but with no link. Any other id is refused, and the refusal looks the
+  same whether or not that person has bills elsewhere, so a link can't be walked
+  to arbitrary accounts.
+
+**Known gap: one receipt split in two servers counts twice.** Nothing ties the
+two bills together, and they were the same outing. Nothing fixes this yet.
 
 **The link belongs to the viewer.** A viewer token holds the server and the
 viewer, not the person viewed, so one link can walk the whole server. It lasts
 30 minutes, like a bill link. Its fields differ from a bill token's, so neither
-can be read as the other. It also carries the server's name, because Discord
-leaves that out of interactions. The name is clipped to 40 characters to stay
-under Discord's 512-character limit on button links. If the lookup fails, the
-page leaves the name out.
+can be read as the other. It also carries the server's name for the Boards
+header, because Discord leaves that out of interactions. The name is clipped to
+40 characters to stay under Discord's 512-character limit on button links. If
+the lookup fails, the page leaves the name out.
+
+The link from `/profile @name` also carries `m`, a signature over that viewer
+token and the person named. It is what lets the page open someone with no bill
+in this server. It is a bare signature rather than a third token because that
+button is close to Discord's limit, and it expires with the token it signs.
 
 **What counts.**
 
@@ -209,9 +234,8 @@ shows the current month, or last month until this month has a bill, so the 1st
 is never empty. All six lists come down in one page and the tabs only choose
 which one shows.
 
-**The Range page.** The axis uses the server's months, up to the last 12, so two
-people's mountains line up. A quiet month is a low swell and not a gap, so the
-ridge never breaks.
+**The Range page.** The axis starts at the person's first month, up to the last
+12. A quiet month is a low swell and not a gap, so the ridge never breaks.
 
 **Fonts.** The rank numerals 一 二 三 are a separate face in the profile styles.
 The bill page inlines its fonts on every load and has a size budget, so it does
