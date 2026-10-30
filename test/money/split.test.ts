@@ -21,9 +21,9 @@ it("tax and tip ride each person's own subtotal", () => {
   expect(byId.lena.owedCents).toBe(3093);
 });
 
-it("a displayed share's three lines always sum to its total", () => {
-  for (const s of splitBill(SAIGON).shares) {
-    expect(s.subtotalCents + s.taxCents + s.tipCents).toBe(s.owedCents);
+it("a displayed share's lines always sum to its total", () => {
+  for (const s of splitBill({ ...SAIGON, discountCents: 1999 }).shares) {
+    expect(s.subtotalCents - s.discountCents + s.taxCents + s.tipCents).toBe(s.owedCents);
   }
 });
 
@@ -47,6 +47,7 @@ const TIED: BillInput = {
     { id: "b-dish", label: "Dish", cents: 100, claimedBy: ["b"] },
     { id: "a-dish", label: "Dish", cents: 100, claimedBy: ["a"] },
   ],
+  discountCents: 0,
   taxCents: 1,
   tipCents: 0,
   payer: "b",
@@ -78,6 +79,7 @@ it("lets a person whose own lines net negative owe a negative share", () => {
       { id: "dish-b", label: "Dish", cents: 300, claimedBy: ["b"] },
       { id: "coupon", label: "Coupon", cents: -1000, claimedBy: ["b"] },
     ],
+    discountCents: 0,
     taxCents: 400,
     tipCents: 800,
     payer: "a",
@@ -117,7 +119,7 @@ it("handles a bill nobody has claimed yet", () => {           // Review Focus
 it("returns all-zero shares when the bill subtotal is zero rather than dividing", () => {
   const r = splitBill(withItem(oneItem(500, ["a"]), { id: "comp", label: "Comp", cents: -500, claimedBy: ["a"] }));
   expect(r.billSubtotalCents).toBe(0);
-  expect(r.shares).toEqual([{ participant: "a", subtotalCents: 0, taxCents: 0, tipCents: 0, owedCents: 0, pardoned: false }]);
+  expect(r.shares).toEqual([{ participant: "a", subtotalCents: 0, discountCents: 0, taxCents: 0, tipCents: 0, owedCents: 0, pardoned: false }]);
 });
 
 it("absorbs a pardon into the payer and moves nobody else", () => {
@@ -134,6 +136,7 @@ it("has the payer collect only what claimants owe while lines are unclaimed", ()
       { id: "a", label: "Dish", cents: 3000, claimedBy: ["bob"] },
       { id: "b", label: "Dish", cents: 7000, claimedBy: [] },
     ],
+    discountCents: 0,
     taxCents: 0,
     tipCents: 0,
     payer: "gavin",
@@ -147,6 +150,57 @@ it("prorates a negative line item like any other", () => {
   const r = splitBill(withItem(SAIGON, { id: "comp", label: "Comped dessert", cents: -800, claimedBy: ["theo"] }));
   expect(r.shares.reduce((s, x) => s + x.owedCents, 0)).toBe(r.distributableCents);
   expect(r.shares.every(s => s.owedCents >= 0)).toBe(true);
+});
+
+describe("a whole-bill discount", () => {
+  it("comes off the total and is spread by what each person ordered, the way tax is", () => {
+    // 10% of the 25150 subtotal.
+    const r = splitBill({ ...SAIGON, discountCents: 2515 });
+    expect(r.distributableCents).toBe(32412 - 2515);
+    expect(r.shares.reduce((n, s) => n + s.owedCents, 0)).toBe(r.distributableCents);
+    const byId = Object.fromEntries(r.shares.map(s => [s.participant, s]));
+    expect(byId.marcus.subtotalCents).toBe(3450);
+    expect(byId.marcus.discountCents).toBe(345);
+    expect(byId.marcus.taxCents).toBe(306);
+    expect(byId.marcus.owedCents).toBe(4446 - 345);
+    expect(byId.lena.subtotalCents).toBe(2400);
+    expect(byId.lena.discountCents).toBe(240);
+  });
+
+  it("changes nothing when it is zero", () => {
+    expect(splitBill({ ...SAIGON, discountCents: 0 })).toEqual(splitBill(SAIGON));
+  });
+
+  it("can take the whole subtotal, leaving only tax and tip", () => {
+    const r = splitBill({ ...SAIGON, discountCents: 25150 });
+    expect(r.distributableCents).toBe(2232 + 5030);
+    expect(r.shares.reduce((n, s) => n + s.owedCents, 0)).toBe(2232 + 5030);
+    for (const s of r.shares) expect(s.discountCents).toBe(s.subtotalCents);
+
+    const free = splitBill({ ...oneItem(1000, ["a", "b", "c"]), discountCents: 1000 });
+    expect(free.shares.map(s => [s.owedCents, s.discountCents])).toEqual([[0, 334], [0, 333], [0, 333]]);
+  });
+
+  it("rounds so the shares, and the discount slices, still add up exactly", () => {
+    // 100 off three 1000 dishes is 33.33 each: one person takes the extra cent.
+    const r = splitBill({
+      items: ["a", "b", "c"].map(p => ({ id: p, label: "Dish", cents: 1000, claimedBy: [p] })),
+      discountCents: 100,
+      taxCents: 0,
+      tipCents: 0,
+      payer: "a",
+      participants: ["a", "b", "c"],
+      pardoned: [],
+    });
+    expect(r.shares.map(s => s.owedCents)).toEqual([967, 967, 966]);
+    expect(r.shares.map(s => s.discountCents)).toEqual([33, 33, 34]);
+    // No tax or tip on this bill, so neither line may carry the stray cent.
+    expect(r.shares.every(s => s.taxCents === 0 && s.tipCents === 0)).toBe(true);
+  });
+
+  it("rejects a negative discount", () => {
+    expect(() => splitBill({ ...SAIGON, discountCents: -100 })).toThrow(RangeError);
+  });
 });
 
 it("accepts a zero tip and rejects a negative one", () => {
@@ -184,7 +238,7 @@ describe("on 1,000 generated bills", () => {
       for (const item of items) if (random() < 0.4) item.claimedBy = [];
     }
 
-    return {
+    const bill = {
       items,
       taxCents: randomInt(random, 0, 3000),
       // A no-tip bill is common and is where a stray cent could show as a -$0.01 tip.
@@ -193,6 +247,10 @@ describe("on 1,000 generated bills", () => {
       participants,
       pardoned: participants.filter(() => random() < 0.2),
     };
+    // Drawn last so the bills generated before discounts existed stay the same.
+    // Up to the whole subtotal, which is as much as the page lets anyone enter.
+    const subtotal = items.reduce((n, item) => n + item.cents, 0);
+    return { ...bill, discountCents: random() < 0.3 ? randomInt(random, 0, subtotal) : 0 };
   }
 
   const seeds = Array.from({ length: 1000 }, (_, i) => i + 1);
@@ -212,7 +270,7 @@ describe("on 1,000 generated bills", () => {
       }
       for (const s of r.shares) {
         expect(Number.isInteger(s.owedCents), why).toBe(true);
-        expect(s.subtotalCents + s.taxCents + s.tipCents, why).toBe(s.owedCents);
+        expect(s.subtotalCents - s.discountCents + s.taxCents + s.tipCents, why).toBe(s.owedCents);
         // A share can only go negative when that person's own lines net negative.
         if (s.subtotalCents >= 0) expect(s.owedCents, why).toBeGreaterThanOrEqual(0);
         if (s.subtotalCents <= 0) expect(s.owedCents, why).toBeLessThanOrEqual(0);
@@ -220,6 +278,9 @@ describe("on 1,000 generated bills", () => {
         // tip * subtotal / billSubtotal, and is zero when that slice is zero.
         const exactTipSign = Math.sign(bill.tipCents) * Math.sign(s.subtotalCents) * Math.sign(r.billSubtotalCents);
         expect(s.tipCents === 0 || Math.sign(s.tipCents) === exactTipSign, why).toBe(true);
+        // Nor does the discount, so it never shows as money added.
+        const exactDiscountSign = Math.sign(bill.discountCents) * Math.sign(s.subtotalCents) * Math.sign(r.billSubtotalCents);
+        expect(s.discountCents === 0 || Math.sign(s.discountCents) === exactDiscountSign, why).toBe(true);
       }
       expect(splitBill(shuffleClaims(bill, random)), why).toEqual(r);
     }

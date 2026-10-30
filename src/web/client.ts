@@ -479,11 +479,11 @@ export const CLIENT_SCRIPT = String.raw`
     return el("button", { type: "button", class: "amt", "data-edit-field": field, "aria-label": label + ", " + (cents === null ? "not entered" : money(cents)) }, [shown, icon("brush", "brush")]);
   }
 
-  const FIELD_LABEL = { tax: "Tax", tip: "Tip", printedTotal: "Receipt" };
+  const FIELD_LABEL = { discount: "Discount", tax: "Tax", tip: "Tip", printedTotal: "Receipt" };
 
   function fieldForm(s, field) {
     const id = "edit-" + field;
-    const cents = field === "tax" ? s.taxCents : field === "tip" ? s.tipCents : s.printedTotalCents;
+    const cents = { discount: s.discountCents, tax: s.taxCents, tip: s.tipCents, printedTotal: s.printedTotalCents }[field];
     const percent = field === "tip" && tipMode === "percent";
     const input = el("input", {
       id,
@@ -491,12 +491,12 @@ export const CLIENT_SCRIPT = String.raw`
       inputmode: "decimal",
       autocomplete: "off",
       enterkeyhint: "done",
-      placeholder: percent ? "20" : field === "printedTotal" ? "0.00" : null,
+      placeholder: percent ? "20" : field === "printedTotal" || field === "discount" ? "0.00" : null,
     });
-    input.value = percent || cents === null ? "" : plain(cents);
+    input.value = percent || cents === null || (field === "discount" && cents === 0) ? "" : plain(cents);
     const parts = [
       el("label", { for: id }, FIELD_LABEL[field]),
-      el("div", { class: "money-input" + (percent ? " is-percent" : "") }, [el("span", { "data-unit": true, "aria-hidden": "true" }, percent ? "%" : "$"), input]),
+      el("div", { class: "money-input" + (percent ? " is-percent" : "") }, [el("span", { "data-unit": true, "aria-hidden": "true" }, percent ? "%" : field === "discount" ? "−$" : "$"), input]),
     ];
     if (field === "tip") {
       parts.push(el("div", { class: "seg", role: "group", "aria-label": "Enter the tip as" }, [
@@ -534,6 +534,8 @@ export const CLIENT_SCRIPT = String.raw`
       });
     };
     row("subtotal", [r.billSubtotalCents], "", () => [el("dt", null, "Subtotal"), el("dd", { "data-total": "subtotal" }, money(r.billSubtotalCents))]);
+    // The payer sees it at $0.00 too, since that row is where they add one.
+    if (s.discountCents !== 0 || mode === "all") field("discount", "discount", -s.discountCents, "Discount", { shown: withPercent("Discount", s.discountCents, r.billSubtotalCents) });
     field("tax", "tax", s.taxCents, "Tax", { shown: withPercent("Tax", s.taxCents, r.billSubtotalCents) });
     if (s.viewerIsPayer && s.status === "draft") {
       const cls = "receipt-row " + (s.reconciles.ok ? "is-ok" : "is-off");
@@ -706,14 +708,24 @@ export const CLIENT_SCRIPT = String.raw`
     return sharesOf(v, [id].concat(guests)).filter((x) => !x.pardoned);
   }
 
+  // The bar draws what is paid, so the discount comes out of the food it was
+  // taken off rather than getting a segment of its own.
   function splitNodes(shares) {
-    const parts = shares.reduce((n, x) => ({ food: n.food + x.subtotalCents, tax: n.tax + x.taxCents, tip: n.tip + x.tipCents }), { food: 0, tax: 0, tip: 0 });
+    const parts = shares.reduce((n, x) => ({
+      food: n.food + x.subtotalCents,
+      discount: n.discount + x.discountCents,
+      tax: n.tax + x.taxCents,
+      tip: n.tip + x.tipCents,
+    }), { food: 0, discount: 0, tax: 0, tip: 0 });
+    const off = parts.discount !== 0;
     const seg = (cls, cents) => (cents > 0 ? el("span", { class: cls, style: "flex:" + cents }) : null);
+    const label = "Food " + money(parts.food) + ", " + (off ? "Discount " + money(-parts.discount) + ", " : "") + "Tax " + money(parts.tax) + ", Tip " + money(parts.tip);
     return [
-      el("div", { class: "split-bar", role: "img", "aria-label": "Food " + money(parts.food) + ", Tax " + money(parts.tax) + ", Tip " + money(parts.tip) },
-        [seg("food", parts.food), seg("tax", parts.tax), seg("tip", parts.tip)]),
+      el("div", { class: "split-bar", role: "img", "aria-label": label },
+        [seg("food", parts.food - parts.discount), seg("tax", parts.tax), seg("tip", parts.tip)]),
       el("p", { class: "legend", "data-you-detail": true }, [
         el("span", null, [el("span", { class: "key food", "aria-hidden": "true" }), icon("bowl"), sr("Food"), el("span", { class: "money" }, money(parts.food))]),
+        off ? el("span", null, ["Discount ", el("span", { class: "money" }, money(-parts.discount))]) : null,
         el("span", null, [el("span", { class: "key tax", "aria-hidden": "true" }), "Tax ", el("span", { class: "money" }, money(parts.tax))]),
         el("span", null, [el("span", { class: "key tip", "aria-hidden": "true" }), "Tip ", el("span", { class: "money" }, money(parts.tip))]),
       ]),
@@ -839,7 +851,7 @@ export const CLIENT_SCRIPT = String.raw`
     const share = v.shares.get(id);
     if (!share) return [];
     const row = (label, cents) => el("li", { class: "tax-tip" }, [el("span", { class: "item-label" }, label), el("span", { class: "money" }, money(cents))]);
-    return [row("Tax", share.taxCents), row("Tip", share.tipCents)];
+    return (share.discountCents !== 0 ? [row("Discount", -share.discountCents)] : []).concat([row("Tax", share.taxCents), row("Tip", share.tipCents)]);
   }
 
   function mineNodes(v, id, withTaxTip) {
@@ -1641,12 +1653,15 @@ export const CLIENT_SCRIPT = String.raw`
     let body;
     if (name === "printedTotal" && raw === "") {
       body = { printedTotal: null };
+    } else if (name === "discount" && raw === "") {
+      body = { discount: "0" };
     } else if (name === "tip" && tipMode === "percent") {
       const percent = decimal(raw.replace(/%\s*$/, ""));
       if (percent === null || hundredths(percent) > 10000) return fail("Enter a percentage like 18 or 18.5.");
       body = { tipPercent: percent };
     } else {
-      const value = decimal(raw);
+      // The unit already says money off, so a typed minus means the same.
+      const value = decimal(name === "discount" ? raw.replace(/^[-−]\s*/, "") : raw);
       if (value === null) return fail("Enter an amount like 12.50.");
       body = {};
       body[name] = value;

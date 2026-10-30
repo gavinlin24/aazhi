@@ -222,6 +222,7 @@ describe("a bill that is no longer a draft", () => {
       ["delete a line", (d) => editItems("gavin", { op: "delete", itemId: item("noodles") }, d)],
       ["tip", (d) => patch("gavin", { tip: "10.00" }, d)],
       ["tip percent", (d) => patch("gavin", { tipPercent: 20 }, d)],
+      ["discount", (d) => patch("gavin", { discount: "5.00" }, d)],
       ["printed total", (d) => patch("gavin", { tax: "1.00", printedTotal: null }, d)],
       ["payer", (d) => patch("gavin", { payer: "priya" }, d)],
     ];
@@ -446,6 +447,58 @@ describe("tax, tip and the printed total", () => {
       expect((await patch("gavin", { tax })).status, String(tax)).toBe(400);
     }
     expect((await getBill(db, BILL))!.taxCents).toBe(2200);
+  });
+
+  it("lets the payer take a discount off the whole bill, shared by what each person ordered", async () => {
+    await seedSaigon(db, BILL);
+
+    const reply = await patch("gavin", { discount: "25.15" });
+
+    expect(reply.status).toBe(200);
+    expect((await getBill(db, BILL))!.discountCents).toBe(2515);
+    expect(reply.body.discountCents).toBe(2515);
+    expect(reply.body.result.distributableCents).toBe(32412 - 2515);
+    expect(shareOf(reply, "marcus")).toMatchObject({ subtotalCents: 3450, discountCents: 345, owedCents: 4446 - 345 });
+    // The printed total still says 273.82, so the read no longer adds up until
+    // the payer fixes one or the other.
+    expect(reply.body.reconciles).toEqual({ ok: false, discrepancyCents: -2515 });
+    const fixed = await patch("gavin", { printedTotal: "248.67" });
+    expect(fixed.body.reconciles).toEqual({ ok: true, discrepancyCents: null });
+
+    const cleared = await patch("gavin", { discount: "0" });
+    expect(cleared.body.discountCents).toBe(0);
+    expect(cleared.body.result.distributableCents).toBe(32412);
+  });
+
+  it("freezes each person's slice of the discount at confirm", async () => {
+    await seedSaigon(db, BILL);
+    await patch("gavin", { discount: "25.15", printedTotal: "248.67" });
+
+    expect(await confirmBill(db, BILL, await revision(), "gavin")).toMatchObject({ ok: true });
+
+    const rows = await db.prepare("SELECT discount_cents, owed_cents FROM shares WHERE bill_id = ?").bind(BILL).all<{ discount_cents: number; owed_cents: number }>();
+    expect(rows.results.reduce((n, r) => n + r.discount_cents, 0)).toBe(2515);
+    expect(rows.results.reduce((n, r) => n + r.owed_cents, 0)).toBe(32412 - 2515);
+  });
+
+  it("takes a discount only from the payer, as a plain amount no bigger than the subtotal", async () => {
+    await seedSaigon(db, BILL);
+    const before = await revision();
+
+    const diner = await patch("marcus", { discount: "5.00" });
+    expect(diner.status).toBe(403);
+    expect(diner.body.error).toBe("Only Gavin can change the discount, tax, tip and total, because they paid.");
+
+    const over = await patch("gavin", { discount: "251.51" });
+    expect(over.status).toBe(400);
+    expect(over.body.error).toBe("Discount is more than the subtotal.");
+    expect((await patch("gavin", { discount: "251.50" })).status).toBe(200);
+
+    for (const discount of ["-5.00", 5, null, "5%"]) {
+      expect((await patch("gavin", { discount })).status, String(discount)).toBe(400);
+    }
+    expect((await getBill(db, BILL))!.discountCents).toBe(25150);
+    expect(await revision()).toBe(before + 1);
   });
 
   it("lets the payer enter a printed total the model could not read, and clear it again", async () => {

@@ -75,7 +75,7 @@ function fitLines(lines: string[], budget: number, more: (n: number) => string):
 // total of the dishes as read is the number in doubt. The problem itself is
 // one short sentence: the gap and the lines to edit are in Open the split.
 function readProblem(bill: BillRow, items: LineItem[]): { headline: string | null; line: string } | null {
-  const check = reconciles({ items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents });
+  const check = reconciles({ ...bill, items });
   if (check.ok) return null;
   if (bill.printedTotalCents === null) return { headline: null, line: "⚠️ **Couldn't read the receipt total!**" };
   return {

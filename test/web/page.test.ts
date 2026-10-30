@@ -26,6 +26,7 @@ const bill: BillRow = {
   payerId: "gavin",
   place: "Saigon Kitchen",
   billDate: "2026-10-28",
+  discountCents: 0,
   taxCents: 2232,
   tipCents: 5030,
   printedTotalCents: 27382,
@@ -249,10 +250,31 @@ describe("renderPage", () => {
     expect(await textOf(html, '[data-total="unclaimed"]')).toBe("$27.06");
   });
 
-  it("reads the payer's receipt as subtotal plus tax, before the tip", async () => {
+  it("reads the payer's receipt as subtotal less discount plus tax, before the tip", async () => {
     const rows = await select(page("gavin"), ".totals > .trow");
-    expect(rows.map((r) => /^[A-Za-z]+/.exec(r.text)?.[0])).toEqual(["Subtotal", "Tax", "Receipt", "Tip", "Total", "Unclaimed"]);
-    expect(rows[2]!.attrs.class).toContain("receipt-row");
+    expect(rows.map((r) => /^[A-Za-z]+/.exec(r.text)?.[0])).toEqual(["Subtotal", "Discount", "Tax", "Receipt", "Tip", "Total", "Unclaimed"]);
+    expect(rows[3]!.attrs.class).toContain("receipt-row");
+  });
+
+  it("shows a whole-bill discount as money off between the subtotal and tax", async () => {
+    const discounted = { ...SAIGON, discountCents: 2515 };
+    const html = page("marcus", { ...bill, discountCents: 2515, printedTotalCents: 27382 - 2515 }, discounted);
+
+    const rows = await select(html, "[data-totals] .trow dt");
+    expect(rows.slice(0, 3).map((r) => r.text)).toEqual(["Subtotal", "Discount (10.0%)", "Tax (8.9%)"]);
+    expect(await textOf(html, '[data-total="discount"]')).toBe("-$25.15");
+    expect(await textOf(html, '[data-total="total"]')).toBe("$298.97");
+    // Only the payer can change it.
+    expect(await select(html, '[data-edit-field="discount"]')).toEqual([]);
+  });
+
+  it("hides a zero discount from everyone but the payer, who adds one from that row", async () => {
+    expect(await select(page("marcus"), '[data-field-row="discount"]')).toEqual([]);
+    expect(await select(page("marcus", confirmedBill, SAIGON), '[data-field-row="discount"]')).toEqual([]);
+
+    const payer = await one(page("gavin"), 'button.amt[data-edit-field="discount"]');
+    expect(payer.attrs["aria-label"]).toBe("Discount, $0.00");
+    expect(payer.text).toBe("$0.00");
   });
 
   it("drops the shortfall line once every line is claimed", async () => {
@@ -424,8 +446,8 @@ describe("renderPage", () => {
     expect(await textOf(adds, "[data-reconcile] .mark")).toBe("Adds up");
     expect(await textOf(adds, '[data-total="printed"]')).toBe("$273.82");
     const fields = await select(adds, "button.amt[data-edit-field]");
-    expect(fields.map((f) => f.attrs["data-edit-field"])).toEqual(["tax", "printedTotal", "tip"]);
-    expect(fields.map((f) => f.attrs["aria-label"])).toEqual(["Tax, $22.32", "Printed total, $273.82", "Tip, $50.30"]);
+    expect(fields.map((f) => f.attrs["data-edit-field"])).toEqual(["discount", "tax", "printedTotal", "tip"]);
+    expect(fields.map((f) => f.attrs["aria-label"])).toEqual(["Discount, $0.00", "Tax, $22.32", "Printed total, $273.82", "Tip, $50.30"]);
     // Adding a line needs the script; without it the payer still sees the check.
     expect(await select(adds, "[data-add-line].needs-js")).toHaveLength(1);
 
@@ -447,7 +469,7 @@ describe("renderPage", () => {
     const payer = page("gavin");
     expect((await one(payer, "section[data-items]")).attrs.class).toContain("is-editable");
     expect(await select(payer, "li.item .item-price .brush")).toHaveLength(SAIGON.items.length);
-    expect(await select(payer, "button.amt[data-edit-field] > .brush")).toHaveLength(3);
+    expect(await select(payer, "button.amt[data-edit-field] > .brush")).toHaveLength(4);
     expect(await select(payer, "header button.payer-chip .brush")).toHaveLength(1);
     // Read-only figures on the payer's own receipt stay plain.
     expect(await select(payer, '[data-total="subtotal"] .brush, [data-total="total"] .brush, .piece .brush')).toEqual([]);
@@ -503,7 +525,7 @@ describe("renderPage", () => {
     expect(await select(html, "header span.payer-chip")).toHaveLength(1);
     expect(stateOf(html).hasPayments).toBe(true);
     // The rest of the payer's corrections stay available.
-    expect(await select(html, "[data-edit-field]")).toHaveLength(3);
+    expect(await select(html, "[data-edit-field]")).toHaveLength(4);
 
     const unpaid = page("gavin");
     expect(await select(unpaid, "[data-open-payer]")).toHaveLength(1);
@@ -570,7 +592,8 @@ describe("renderPage", () => {
     // So "$5.00 and $32.00" under You never has to be squared with $47.68 up
     // top in someone's head.
     it("ends each person's lines with their tax and tip, adding up to their amount to the cent", async () => {
-      const sum = (text: string) => [...text.matchAll(/\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + Number(m[1]) * 100 + Number(m[2]), 0);
+      const sum = (text: string) =>
+        [...text.matchAll(/(-?)\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + (m[1] ? -1 : 1) * (Number(m[2]) * 100 + Number(m[3])), 0);
       for (const [html, ids] of [[view("dani"), ["dani", "guest-sam"]], [view("gavin"), ["gavin", "guest-kim"]]] as const) {
         const groups = await select(html, "[data-mine] .mine-group");
         expect(groups).toHaveLength(ids.length);
@@ -589,6 +612,25 @@ describe("renderPage", () => {
       // Alone, the bar up top already breaks the one amount down.
       expect(await select(view("theo"), "[data-mine] .tax-tip")).toEqual([]);
       expect(await select(view("theo"), "[data-you] .split-bar")).toHaveLength(1);
+    });
+
+    it("puts each person's slice of a whole-bill discount before their tax, so the lines still add up", async () => {
+      const sum = (text: string) =>
+        [...text.matchAll(/(-?)\$(\d+)\.(\d\d)/g)].reduce((n, m) => n + (m[1] ? -1 : 1) * (Number(m[2]) * 100 + Number(m[3])), 0);
+      const off = { ...input, discountCents: 3001 };
+      const discounted = splitBill(off);
+      const slice = (id: string) => discounted.shares.find((x) => x.participant === id)!;
+      for (const [viewer, ids] of [["dani", ["dani", "guest-sam"]], ["gavin", ["gavin", "guest-kim"]]] as const) {
+        const html = renderPage({ ...confirmedBill, discountCents: 3001 }, discounted, off.items, people, viewer, { paid: [] }, NOW);
+        const groups = await select(html, "[data-mine] .mine-group");
+        expect(groups).toHaveLength(ids.length);
+        groups.forEach((group, i) => {
+          const x = slice(ids[i]!);
+          expect(x.discountCents, ids[i]).toBeGreaterThan(0);
+          expect(group.text).toContain(`Discount-${money(x.discountCents)}Tax${money(x.taxCents)}Tip${money(x.tipCents)}`);
+          expect(sum(group.text), ids[i]).toBe(x.owedCents);
+        });
+      }
     });
 
     // The share is split off the line's total, so a dish shared with an extra
@@ -619,6 +661,19 @@ describe("renderPage", () => {
       const groups = await select(html, "[data-mine] .mine-group");
       expect(groups).toHaveLength(1);
       expect(groups[0]!.text).toMatch(/^GYou/);
+    });
+
+    it("names a solo diner's slice of a whole-bill discount in their breakdown", async () => {
+      const off = { ...input, discountCents: 3000 };
+      const discounted = splitBill(off);
+      const theo = discounted.shares.find((x) => x.participant === "theo")!;
+      const html = renderPage({ ...confirmedBill, discountCents: 3000 }, discounted, off.items, people, "theo", { paid: [] }, NOW);
+
+      const detail = await textOf(html, "[data-you-detail]");
+      expect(detail).toContain(`Discount -${money(theo.discountCents)}`);
+      expect(theo.discountCents).toBeGreaterThan(0);
+      const bar = await one(html, "[data-you] .split-bar");
+      expect(bar.attrs["aria-label"]).toContain(`Discount -${money(theo.discountCents)}`);
     });
 
     it("takes a guest who paid the payer directly off the share, and stamps them once", async () => {

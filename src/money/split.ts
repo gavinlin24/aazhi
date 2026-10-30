@@ -74,8 +74,15 @@ export function itemPieces(item: LineItem): Map<ParticipantId, Cents> {
   return new Map(claimants.map((p, i) => [p, base + (i < leftover ? 1 : 0)]));
 }
 
+// Whether a displayed slice points the way its exact value does: zero when
+// there is nothing to share, never the opposite sign of a real amount.
+function fits(cents: Cents, exactSign: number): boolean {
+  return exactSign === 0 ? cents === 0 : Math.sign(cents) !== -exactSign;
+}
+
 export function splitBill(input: BillInput): SplitResult {
   if (input.tipCents < 0) throw new RangeError(`Tip cannot be negative (got ${input.tipCents} cents)`);
+  if (input.discountCents < 0) throw new RangeError(`Discount cannot be negative (got ${input.discountCents} cents)`);
 
   const participants = byId(input.participants);
   const subtotals = new Map<ParticipantId, Cents>(participants.map((p) => [p, 0]));
@@ -94,7 +101,9 @@ export function splitBill(input: BillInput): SplitResult {
     }
   }
 
-  const distributableCents = billSubtotalCents + input.taxCents + input.tipCents;
+  // The discount rides each person's subtotal exactly as tax and tip do, so it
+  // is one more term of the same proration rather than a step of its own.
+  const distributableCents = billSubtotalCents - input.discountCents + input.taxCents + input.tipCents;
   const fullyClaimed = input.items.every((item) => item.claimedBy.length > 0);
   const isZeroBill = billSubtotalCents === 0;
   // Distribute only the claimed slice of the bill. Rounding toward the full
@@ -110,18 +119,30 @@ export function splitBill(input: BillInput): SplitResult {
   const shares: Share[] = participants.map((p) => {
     const subtotalCents = isZeroBill ? 0 : subtotals.get(p)!;
     const owedCents = owed.get(p)!;
-    const roundedTaxCents = isZeroBill ? 0 : roundDiv(input.taxCents, subtotalCents, billSubtotalCents);
-    // The tip line absorbs the rounding so the three displayed lines add up to
-    // the total; tip is the payer's own number, not one printed on paper. But a
-    // stray cent must not show a -$0.01 tip on a no-tip bill, or any tip pointing
-    // the opposite way from the person's real slice, so then tax takes it.
-    const absorbingTipCents = owedCents - subtotalCents - roundedTaxCents;
-    const exactTipSign = Math.sign(input.tipCents) * Math.sign(subtotalCents) * Math.sign(billSubtotalCents);
-    const tipCents = Math.sign(absorbingTipCents) === exactTipSign ? absorbingTipCents : 0;
+    const slice = (cents: Cents) => (isZeroBill ? 0 : roundDiv(cents, subtotalCents, billSubtotalCents));
+    const sign = (cents: Cents) => Math.sign(cents) * Math.sign(subtotalCents) * Math.sign(billSubtotalCents);
+    // The tip line absorbs the rounding so the displayed lines add up to the
+    // total; tip is the payer's own number, not one printed on paper. But a
+    // stray cent must not show a -$0.01 tip on a no-tip bill, or any slice
+    // pointing the opposite way from the person's real one, so then tax takes
+    // it, or the discount on a bill with neither.
+    let discountCents = slice(input.discountCents);
+    let taxCents = slice(input.taxCents);
+    let tipCents = owedCents - subtotalCents + discountCents - taxCents;
+    if (!fits(tipCents, sign(input.tipCents))) {
+      const stray = tipCents;
+      tipCents = 0;
+      if (!fits(taxCents + stray, sign(input.taxCents)) && fits(discountCents - stray, sign(input.discountCents))) {
+        discountCents -= stray;
+      } else {
+        taxCents += stray;
+      }
+    }
     return {
       participant: p,
       subtotalCents,
-      taxCents: owedCents - subtotalCents - tipCents,
+      discountCents,
+      taxCents,
       tipCents,
       owedCents,
       pardoned: pardoned.has(p),

@@ -19,10 +19,10 @@ const MAX_TOKENS = 4096;
 // Takes only the amounts so a stored bill is checked by the same rule as a
 // fresh read.
 export function reconciles(
-  e: Pick<Extraction, "taxCents" | "printedTotalCents"> & { items: { cents: Cents }[] },
+  e: Pick<Extraction, "discountCents" | "taxCents" | "printedTotalCents"> & { items: { cents: Cents }[] },
 ): { ok: boolean; discrepancyCents: Cents | null } {
   if (e.printedTotalCents === null) return { ok: false, discrepancyCents: null };
-  const sum = e.items.reduce((total, item) => total + item.cents, 0) + (e.taxCents ?? 0);
+  const sum = e.items.reduce((total, item) => total + item.cents, 0) - e.discountCents + (e.taxCents ?? 0);
   const discrepancy = sum - e.printedTotalCents;
   return discrepancy === 0 ? { ok: true, discrepancyCents: null } : { ok: false, discrepancyCents: discrepancy };
 }

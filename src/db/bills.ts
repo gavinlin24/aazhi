@@ -22,6 +22,7 @@ export interface BillRow {
   payerId: ParticipantId;
   place: string | null;
   billDate: string | null;
+  discountCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
   printedTotalCents: Cents | null;
@@ -50,6 +51,7 @@ interface BillDbRow {
   payer_id: string;
   place: string | null;
   bill_date: string | null;
+  discount_cents: number;
   tax_cents: number;
   tip_cents: number;
   printed_total_cents: number | null;
@@ -71,8 +73,8 @@ interface ParticipantDbRow {
   added_by: string | null;
 }
 
-const BILL_COLUMNS = `id, guild_id, channel_id, message_id, payer_id, place, bill_date, tax_cents,
-  tip_cents, printed_total_cents, status, revision, created_at, confirmed_at`;
+const BILL_COLUMNS = `id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
+  tax_cents, tip_cents, printed_total_cents, status, revision, created_at, confirmed_at`;
 
 function toBill(r: BillDbRow): BillRow {
   return {
@@ -83,6 +85,7 @@ function toBill(r: BillDbRow): BillRow {
     payerId: r.payer_id,
     place: r.place,
     billDate: r.bill_date,
+    discountCents: r.discount_cents,
     taxCents: r.tax_cents,
     tipCents: r.tip_cents,
     printedTotalCents: r.printed_total_cents,
@@ -146,9 +149,9 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
   const createdAt = new Date().toISOString();
   await db
     .prepare(
-      `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, tax_cents,
-         tip_cents, printed_total_cents, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
+         tax_cents, tip_cents, printed_total_cents, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       b.id,
@@ -158,6 +161,7 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       b.payerId,
       b.place,
       b.billDate,
+      b.discountCents,
       b.taxCents,
       b.tipCents,
       b.printedTotalCents,
@@ -351,6 +355,7 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
     participants: people,
     input: {
       items: assembleItems(items.results as ItemDbRow[], claims.results as ClaimDbRow[]),
+      discountCents: billRow.discount_cents,
       taxCents: billRow.tax_cents,
       tipCents: billRow.tip_cents,
       payer: billRow.payer_id,
@@ -566,6 +571,7 @@ export async function deleteItem(db: D1Database, billId: string, itemId: string)
 }
 
 export interface BillAmounts {
+  discountCents?: number;
   taxCents?: number;
   tipCents?: number;
   // A percentage in hundredths of a percent, applied to the bill subtotal
@@ -581,6 +587,7 @@ export async function setBillAmounts(db: D1Database, billId: string, amounts: Bi
     values.push(value);
     sets.push(sql.replace("?", `?${values.length + 1}`));
   };
+  if (amounts.discountCents !== undefined) set("discount_cents = ?", amounts.discountCents);
   if (amounts.taxCents !== undefined) set("tax_cents = ?", amounts.taxCents);
   if (amounts.tipCents !== undefined) set("tip_cents = ?", amounts.tipCents);
   // Integer division truncates, and both factors are non-negative, so adding
@@ -654,6 +661,7 @@ export class NotOnRosterError extends Error {
 interface ShareDbRow {
   participant_id: string;
   subtotal_cents: number;
+  discount_cents: number;
   tax_cents: number;
   tip_cents: number;
   owed_cents: number;
@@ -668,7 +676,7 @@ export interface Settled {
 function sharesStatement(db: D1Database, billId: string) {
   return db
     .prepare(
-      `SELECT participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents, pardoned
+      `SELECT participant_id, subtotal_cents, discount_cents, tax_cents, tip_cents, owed_cents, pardoned
        FROM shares WHERE bill_id = ? ORDER BY participant_id`,
     )
     .bind(billId);
@@ -687,6 +695,7 @@ function toShares(result: D1Result): Share[] {
   return (result.results as ShareDbRow[]).map((r) => ({
     participant: r.participant_id,
     subtotalCents: r.subtotal_cents,
+    discountCents: r.discount_cents,
     taxCents: r.tax_cents,
     tipCents: r.tip_cents,
     owedCents: r.owed_cents,
@@ -810,7 +819,7 @@ export async function confirmBill(
   const { bill, input } = snapshot;
   if (actor !== bill.payerId) return refused("not-payer");
   if (bill.revision !== revision) return refused("stale");
-  if (!reconciles({ items: input.items, taxCents: bill.taxCents, printedTotalCents: bill.printedTotalCents }).ok) {
+  if (!reconciles({ ...bill, items: input.items }).ok) {
     return refused("unreconciled");
   }
   const split = splitBill(input);
@@ -827,10 +836,11 @@ export async function confirmBill(
   // their new amount is re-derived from their payments right after, in the
   // same batch, rather than carried over from the old amount.
   const upsert = db.prepare(
-    `INSERT INTO shares (bill_id, participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents)
-     SELECT ?1, ?3, ?4, ?5, ?6, ?7 WHERE ${atRevision}
+    `INSERT INTO shares (bill_id, participant_id, subtotal_cents, discount_cents, tax_cents, tip_cents, owed_cents)
+     SELECT ?1, ?3, ?4, ?5, ?6, ?7, ?8 WHERE ${atRevision}
      ON CONFLICT (bill_id, participant_id) DO UPDATE SET
        subtotal_cents = excluded.subtotal_cents,
+       discount_cents = excluded.discount_cents,
        tax_cents = excluded.tax_cents,
        tip_cents = excluded.tip_cents,
        owed_cents = excluded.owed_cents`,
@@ -843,7 +853,7 @@ export async function confirmBill(
     )
     .bind(billId, revision, now);
   const written = await db.batch([
-    ...split.shares.map((s) => upsert.bind(billId, revision, s.participant, s.subtotalCents, s.taxCents, s.tipCents, s.owedCents)),
+    ...split.shares.map((s) => upsert.bind(billId, revision, s.participant, s.subtotalCents, s.discountCents, s.taxCents, s.tipCents, s.owedCents)),
     settledAtStatement(db, billId, null, now),
     freeze,
   ]);
