@@ -128,24 +128,28 @@ a { color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ic { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-/* One look for "tap to change": a brush in a small tinted button after the
-   value. Read-only values carry none. The tap target is the whole value
-   around it, so the circle only has to read as a button, and the negative
-   margin keeps it from making its line taller. */
-.ic.brush {
-  box-sizing: border-box;
-  width: 30px;
+/* One look for "tap to change": the value sits in a tinted pill with a small
+   brush inside, so the pill's edge, not a brush hanging past it, lines up
+   with the plain values. Read-only values stay plain. The negative margin
+   keeps a pill from making its line taller. */
+.ic.brush { width: 16px; height: 16px; color: var(--muted); stroke-width: 1.6; }
+.amt, .is-editable .item-price, button.payer-chip, .name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 30px;
   margin: -4px 0;
-  padding: 5px;
-  border: 1px solid var(--ring);
-  border-radius: 50%;
+  padding: 0 9px 0 11px;
+  border: 0;
+  border-radius: 15px;
   background: var(--fill);
   color: var(--ink);
-  stroke-width: 1.5;
 }
-button:active .ic.brush { background: var(--line); }
-@media (hover: hover) { button:hover .ic.brush { border-color: var(--ink); } }
+.amt:active, .is-editable button.row:active .item-price, button.payer-chip:active, .name-btn:active { background: var(--line); }
+@media (hover: hover) { .amt:hover, .is-editable button.row:hover .item-price, button.payer-chip:hover, .name-btn:hover { background: var(--line); } }
+/* A 30px pill is easier to see than to hit, so the buttons reach 44px. */
+.amt, button.payer-chip, .name-btn { position: relative; cursor: pointer; }
+.amt::after, button.payer-chip::after, .name-btn::after { content: ""; position: absolute; inset: -7px -4px; }
 .money, .item-price, .totals dd { font-variant-numeric: tabular-nums lining-nums; }
 .page {
   max-width: 480px;
@@ -188,16 +192,8 @@ html:has(.has-bar .claimers:not([hidden])) { scroll-padding-bottom: calc(140px +
 .meta { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 16px; min-height: 30px; }
 .payer-chip { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
 .payer-chip .ic { width: 17px; height: 17px; color: var(--warn); }
-button.payer-chip {
-  margin: -7px -6px;
-  padding: 7px 6px;
-  min-height: 44px;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
 /* Undoes the coin's size and colour, which the chip's icon rule gives every icon in it. */
-button.payer-chip .brush { width: 30px; height: 30px; color: var(--ink); }
+button.payer-chip .brush { width: 16px; height: 16px; color: var(--muted); }
 
 .toast {
   position: fixed;
@@ -224,12 +220,9 @@ button.payer-chip .brush { width: 30px; height: 30px; color: var(--ink); }
 /* The scroll margin leaves room for the first line's focus ring when claim mode scrolls here. */
 .items { list-style: none; margin: 0; padding: 0; scroll-margin-top: 16px; }
 .item { position: relative; border-bottom: 1px solid var(--rule); }
-/* --edge is the inset of the tick circles from the card, and the right side
-   mirrors it. Where the payer can change values, the figures' edge (--end)
-   moves in by --hang so the brushes hang in the margin and every figure,
-   brush or not, still lines up on one edge. --hang is a brush and its gap. */
-.receipt { --edge: 13px; --hang: 0px; --end: calc(var(--edge) + var(--hang)); }
-.receipt.is-editable { --hang: 36px; }
+/* The inset of the tick circles from the card. The figures, pills and rules
+   end the same distance from the right, so the receipt is balanced. */
+.receipt { --edge: 13px; }
 .row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;
@@ -239,7 +232,7 @@ button.payer-chip .brush { width: 30px; height: 30px; color: var(--ink); }
   align-items: center;
   width: 100%;
   margin: 0;
-  padding: 8px var(--end) 8px 4px;
+  padding: 8px var(--edge) 8px 4px;
   border: 0;
   background: none;
   text-align: left;
@@ -256,7 +249,6 @@ button.row:active { background: var(--fill); }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
-.has-picker .row .item-price, .amt { display: inline-flex; align-items: center; gap: 6px; margin-right: calc(0px - var(--hang)); }
 .tick-btn {
   position: absolute;
   z-index: 1;
@@ -340,24 +332,22 @@ button.row:active { background: var(--fill); }
 }
 .add-row .ic { width: 22px; height: 22px; }
 
-/* The labels sit as far in from the left as the figures sit from the right,
-   counted from the last digit, not the brush. */
-.totals { margin: 8px 0 0; padding: 0 var(--end) 10px; }
-.trow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
-.trow dt { display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
-.trow dd { margin: 0; white-space: nowrap; }
-.trow .pct { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* The left padding widens the tap target without moving the figure. */
-.amt {
-  min-height: 44px;
-  margin-top: -2px;
-  margin-bottom: -2px;
-  margin-left: -12px;
-  padding: 0 0 0 12px;
-  border: 0;
-  background: none;
-  cursor: pointer;
+/* Label, percent, amount. Each row is a subgrid of the list, so percents
+   line up in one column whatever the width of the amounts beside them. A
+   row with a percent gives its term a second dd. */
+.totals {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 12px;
+  margin: 8px 0 0;
+  padding: 0 var(--edge) 10px;
 }
+.trow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: 40px; }
+.trow dt { grid-column: 1; display: flex; align-items: baseline; gap: 8px; color: var(--muted); min-width: 0; }
+.trow dd { grid-column: 3; justify-self: end; margin: 0; white-space: nowrap; }
+.trow dd.pct { grid-column: 2; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Subtotal plus tax, so it sits under them as their sum. */
+.receipt-row { margin-top: 4px; border-top: 1px solid var(--rule); }
 .receipt-row dt { align-items: center; }
 .receipt-row .mark { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
 .receipt-row.is-ok .mark { color: var(--ok); }
@@ -429,9 +419,7 @@ button.row:active { background: var(--fill); }
 .field-msg { flex-basis: 100%; color: var(--warn); font-size: 15px; }
 .field-msg:empty { display: none; }
 .field-msg.is-hint { color: var(--muted); }
-/* The tip editor needs the card's full width at 390px, so it reaches out to
-   the ticks and the brushes. */
-.trow.is-editing { flex-wrap: wrap; margin: 0 calc(var(--edge) - var(--end)); }
+.trow.is-editing { display: flex; flex-wrap: wrap; }
 
 /* Its fields keep the width of the box it opens from. */
 .line-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; padding: 2px 0 8px; }
@@ -686,7 +674,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 .sheet-guest { margin-top: 14px; padding-top: 10px; border-top: 3px double var(--rule); }
 .sheet-guest .sheet-head .av { --s: 34px; }
 .sheet-guest h3 { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
-.name-btn { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-height: 44px; margin: -4px 0; padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+/* A long name wraps inside its pill instead of overflowing the sheet. */
+.name-btn { height: auto; min-height: 30px; max-width: 100%; padding-block: 4px; font: inherit; text-align: left; }
 .name-btn > span { overflow-wrap: anywhere; }
 .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .chip-btn {
@@ -987,8 +976,16 @@ function itemRow(v: View, item: LineItem): string {
   return `<li class="${classes.filter(Boolean).join(" ")}" data-item="${id}"><div class="row">${CHECK_TICK}${inner}</div></li>`;
 }
 
-function percentOf(tip: Cents, subtotal: Cents): string {
-  return subtotal > 0 ? `${Math.round((tip * 100) / subtotal)}%` : "";
+// Tax rates are rarely whole, so tax shows a decimal. A tip is picked as a
+// whole percent and shows as one.
+function percentOf(part: Cents, subtotal: Cents, decimals = 0): string {
+  if (subtotal <= 0) return "";
+  const scale = 10 ** decimals;
+  return `${(Math.round((part * 100 * scale) / subtotal) / scale).toFixed(decimals)}%`;
+}
+
+function pctCell(pct: string): string {
+  return pct ? `<dd class="pct">${pct}</dd>` : "";
 }
 
 function receiptMark(s: BillState): string {
@@ -1009,13 +1006,12 @@ function amount(v: View, field: string, key: string, cents: Cents | null, label:
 function totals(v: View): string {
   const s = v.s;
   const r = s.result;
-  const pct = percentOf(s.tipCents, r.billSubtotalCents);
   const rows = [
     `<div class="trow"><dt>Subtotal</dt><dd data-total="subtotal">${formatCents(r.billSubtotalCents)}</dd></div>`,
-    `<div class="trow" data-field-row="tax"><dt>Tax</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
+    `<div class="trow" data-field-row="tax"><dt>Tax</dt>${pctCell(percentOf(s.taxCents, r.billSubtotalCents, 1))}<dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   ];
   // Between tax and tip, because the printed total is what the restaurant
-  // charged before anyone added a tip: where it sits says what it covers.
+  // charged before anyone added a tip: it reads as the sum of the two above.
   if (v.s.viewerIsPayer && v.bill.status === "draft") {
     rows.push(
       `<div class="trow receipt-row ${s.reconciles.ok ? "is-ok" : "is-off"}" data-reconcile data-field-row="printedTotal">` +
@@ -1023,7 +1019,7 @@ function totals(v: View): string {
     );
   }
   rows.push(
-    `<div class="trow" data-field-row="tip"><dt>Tip${pct ? ` <span class="pct">${pct}</span>` : ""}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
+    `<div class="trow" data-field-row="tip"><dt>Tip</dt>${pctCell(percentOf(s.tipCents, r.billSubtotalCents))}<dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {

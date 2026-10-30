@@ -239,10 +239,17 @@ describe("renderPage", () => {
     expect(await textOf(html, '[data-total="subtotal"]')).toBe("$251.50");
     expect(await textOf(html, '[data-total="tax"]')).toBe("$22.32");
     expect(await textOf(html, '[data-total="tip"]')).toBe("$50.30");
-    expect(await textOf(html, '[data-field-row="tip"] .pct')).toBe("20%");
+    expect(await textOf(html, '[data-field-row="tax"] dd.pct')).toBe("8.9%");
+    expect(await textOf(html, '[data-field-row="tip"] dd.pct')).toBe("20%");
     expect(await textOf(html, ".trow.grand [data-total]")).toBe("$324.12");
     expect(await textOf(html, '[data-total="total"]')).toBe("$324.12");
     expect(await textOf(html, '[data-total="unclaimed"]')).toBe("$27.06");
+  });
+
+  it("reads the payer's receipt as subtotal plus tax, before the tip", async () => {
+    const rows = await select(page("gavin"), ".totals > .trow");
+    expect(rows.map((r) => /^[A-Za-z]+/.exec(r.text)?.[0])).toEqual(["Subtotal", "Tax", "Receipt", "Tip", "Total", "Unclaimed"]);
+    expect(rows[2]!.attrs.class).toContain("receipt-row");
   });
 
   it("drops the shortfall line once every line is claimed", async () => {
