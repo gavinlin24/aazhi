@@ -30,13 +30,13 @@ function amountString(cents: Cents): string {
 const MAX_NOTE = 60;
 
 // "Saigon Kitchen 10/28". A Venmo note can be visible to the sender's friends,
-// so it says which dinner and nothing else: no amounts and no names. The date
+// so it says which bill and nothing else: no amounts and no names. The date
 // is left off rather than guessed, because a bill's creation time is in UTC and
 // reads as tomorrow for an evening dinner in the US. Only the place is clipped,
 // so a long name never costs the date.
 export function payNote(place: string | null, billDate: string | null): string {
   const date = formatMonthDay(billDate);
-  const where = place?.replace(/\s+/g, " ").trim() || "Dinner";
+  const where = place?.replace(/\s+/g, " ").trim() || "Bill";
   return date ? `${clip(where, MAX_NOTE - date.length - 1)} ${date}` : clip(where, MAX_NOTE);
 }
 

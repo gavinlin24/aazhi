@@ -77,15 +77,15 @@ describe("payNote", () => {
     expect(payNote("Saigon Kitchen", "2026-01-05")).toBe("Saigon Kitchen 1/5");
   });
 
-  it("falls back to Dinner when the receipt names no place", () => {
-    expect(payNote(null, "2026-10-28")).toBe("Dinner 10/28");
-    expect(payNote("   ", "2026-10-28")).toBe("Dinner 10/28");
+  it("falls back to Bill when the receipt names no place", () => {
+    expect(payNote(null, "2026-10-28")).toBe("Bill 10/28");
+    expect(payNote("   ", "2026-10-28")).toBe("Bill 10/28");
   });
 
   // Today's date would be a guess: late in a US evening it is already tomorrow in UTC.
   it("leaves the date off rather than guessing one", () => {
     expect(payNote("Saigon Kitchen", null)).toBe("Saigon Kitchen");
-    expect(payNote(null, "not a date")).toBe("Dinner");
+    expect(payNote(null, "not a date")).toBe("Bill");
   });
 
   it("folds a place that came off the receipt on two lines", () => {
