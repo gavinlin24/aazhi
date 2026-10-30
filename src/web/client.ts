@@ -353,7 +353,7 @@ export const CLIENT_SCRIPT = String.raw`
 
   function rowLabel(v, item, actor) {
     const others = item.claimedBy.filter((id) => id !== actor).map((id) => nameOf(v, id));
-    return item.label + ", " + money(item.cents) + (others.length > 0 ? ", with " + others.join(", ") : "") +
+    return item.label + (item.note ? " (" + item.note + ")" : "") + ", " + money(item.cents) + (others.length > 0 ? ", with " + others.join(", ") : "") +
       (actor !== v.s.viewer ? ", for " + nameOf(v, actor) : "");
   }
 
@@ -377,10 +377,11 @@ export const CLIENT_SCRIPT = String.raw`
     const inner = () => [
       el("span", { class: "item-label" }, item.label),
       el("span", { class: "item-price" }, [money(item.cents), mode === "all" ? icon("brush", "brush") : null]),
+      item.note ? el("span", { class: "item-note" }, item.note) : null,
       el("span", { class: "who" }, stack(v, others, 5)),
       pieceNode(item, actor),
     ];
-    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
+    const classes = ["item", mine ? "is-mine" : "", item.claimedBy.length === 0 ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.note ? "has-note" : ""];
     const claim = { "data-claim": true, "data-item": item.id, "data-participant": actor, "aria-pressed": String(mine) };
     if (mode === "all") {
       classes.push("has-picker");
@@ -413,7 +414,7 @@ export const CLIENT_SCRIPT = String.raw`
         const roster = v.s.participants.map((p) => [p.id, p.displayName]);
         patch(list, v.s.items.map((item) => ({
           id: item.id,
-          key: JSON.stringify([item.label, item.cents, item.claimedBy.slice().sort(), roster, actor, mode]),
+          key: JSON.stringify([item.label, item.note, item.cents, item.claimedBy.slice().sort(), roster, actor, mode]),
           build: () => rowNode(v, item, actor, mode),
         })));
       }

@@ -116,8 +116,15 @@ export async function extractReceipt(
     if (parsed.kind === "invalid") continue;
     if (parsed.kind !== "extraction") return { ok: false, reason: parsed.kind };
 
-    const check = reconciles(parsed.extraction);
-    return { ok: true, extraction: parsed.extraction, reconciles: check.ok, discrepancyCents: check.discrepancyCents };
+    // Charged on top is the usual layout, so it wins unless only the other
+    // reading matches the printed total to the cent.
+    let { extraction } = parsed;
+    let check = reconciles(extraction);
+    if (!check.ok && parsed.modifiersIncluded && reconciles(parsed.modifiersIncluded).ok) {
+      extraction = parsed.modifiersIncluded;
+      check = reconciles(extraction);
+    }
+    return { ok: true, extraction, reconciles: check.ok, discrepancyCents: check.discrepancyCents };
   }
   return { ok: false, reason: "model-error" };
 }

@@ -36,6 +36,7 @@ export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt">;
 export interface NewItem {
   id: string;
   label: string;
+  note?: string;
   cents: Cents;
   source: "ocr" | "manual";
   confidence?: number | null;
@@ -173,7 +174,7 @@ export async function getBill(db: D1Database, id: string): Promise<BillRow | nul
 }
 
 function itemsStatement(db: D1Database, billId: string) {
-  return db.prepare("SELECT id, label, cents FROM bill_items WHERE bill_id = ? ORDER BY position").bind(billId);
+  return db.prepare("SELECT id, label, note, cents FROM bill_items WHERE bill_id = ? ORDER BY position").bind(billId);
 }
 
 function claimsStatement(db: D1Database, billId: string) {
@@ -189,6 +190,7 @@ function claimsStatement(db: D1Database, billId: string) {
 interface ItemDbRow {
   id: string;
   label: string;
+  note: string | null;
   cents: number;
 }
 
@@ -207,6 +209,7 @@ function assembleItems(items: ItemDbRow[], claims: ClaimDbRow[]): LineItem[] {
   return items.map((i) => ({
     id: i.id,
     label: i.label,
+    ...(i.note ? { note: i.note } : {}),
     cents: i.cents,
     claimedBy: sortedIds(byItem.get(i.id) ?? []),
   }));
@@ -373,13 +376,13 @@ export async function bumpRevision(db: D1Database, billId: string): Promise<numb
 
 export async function insertItems(db: D1Database, billId: string, items: NewItem[]): Promise<number> {
   const insert = db.prepare(
-    `INSERT INTO bill_items (id, bill_id, label, cents, position, source, confidence)
-     VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM bill_items WHERE bill_id = ?), ?, ?)`,
+    `INSERT INTO bill_items (id, bill_id, label, note, cents, position, source, confidence)
+     VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position) + 1, 0) FROM bill_items WHERE bill_id = ?), ?, ?)`,
   );
   return mutate(
     db,
     billId,
-    items.map((i) => insert.bind(i.id, billId, i.label, i.cents, billId, i.source, i.confidence ?? null)),
+    items.map((i) => insert.bind(i.id, billId, i.label, i.note ?? null, i.cents, billId, i.source, i.confidence ?? null)),
   );
 }
 

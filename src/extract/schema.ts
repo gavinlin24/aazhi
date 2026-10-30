@@ -1,9 +1,11 @@
+import { formatCents } from "../format";
 import type { Cents } from "../money/types";
 
 export interface Extraction {
   place: string | null;
   billDate: string | null;
-  items: { label: string; cents: Cents; confidence: number }[];
+  // `cents` already includes the item's priced modifiers; `note` lists them.
+  items: { label: string; cents: Cents; confidence: number; note?: string }[];
   taxCents: Cents | null;
   printedTotalCents: Cents | null;
 }
@@ -36,10 +38,26 @@ export const EXTRACT_TOOL = {
           type: "object",
           properties: {
             label: { type: "string" },
-            price: { ...PRICE, description: "Total price of the line (quantity already applied), as printed." },
-            confidence: { type: "number", minimum: 0, maximum: 1, description: "How sure you are that label and price were read correctly." },
+            price: { ...PRICE, description: "Price printed on the item's own line (quantity already applied), not counting its modifiers." },
+            modifiers: {
+              type: "array",
+              description: "Modifiers, add-ons and special requests printed under this item, in printed order. Empty if none.",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string", description: 'Short phrase, e.g. "Extra patty" or "No onions".' },
+                  price: {
+                    ...NULLABLE_PRICE,
+                    description:
+                      "The modifier's own charge in the price column. null if it has no price, or if its amount is shown only as information because the item's price already includes it.",
+                  },
+                },
+                required: ["label", "price"],
+              },
+            },
+            confidence: { type: "number", minimum: 0, maximum: 1, description: "How sure you are that label, price and modifiers were read correctly." },
           },
-          required: ["label", "price", "confidence"],
+          required: ["label", "price", "modifiers", "confidence"],
         },
       },
       tax: NULLABLE_PRICE,
@@ -54,13 +72,21 @@ export const EXTRACT_PROMPT = [
   "Copy every price exactly as printed. Do not round, correct, or infer an amount.",
   "Items are charged lines only. Include discounts, comps and service charges as signed items (negative when money comes off).",
   "Leave subtotal, tax, total, tip and payment lines out of items.",
+  "A modifier, add-on or special request printed under an item (indented, or marked with +, -, ADD, NO or SUB) belongs to that item. Put it in the item's modifiers, never in items.",
+  "Give a modifier a price only when it has its own charge in the price column. Use null when it has no price, or when its amount is printed beside its name (for example \"Soft egg ($2.00)\") rather than in the price column, because the item's price already includes it.",
+  "Drop a leading + from a modifier, and write one marked only with - as No (\"- Rice\" becomes \"No rice\").",
   "Report the printed tax and the printed total before any tip, or null if absent or illegible.",
   "Give each item a confidence from 0 to 1 for how sure you are of its label and price.",
   "If the image is not a receipt set is_receipt to false. If it is one but you cannot read the amounts set readable to false.",
 ].join("\n");
 
+// `modifiersIncluded` is the same read with every priced modifier taken as
+// already inside its item's price. Some tills print a modifier's amount for
+// information under a price that includes it, and only the printed total can
+// tell that layout from one where the modifier is charged on top. It is there
+// only when some modifier has a price.
 export type ParsedToolInput =
-  | { kind: "extraction"; extraction: Extraction }
+  | { kind: "extraction"; extraction: Extraction; modifiersIncluded?: Extraction }
   | { kind: "not-a-receipt" }
   | { kind: "unreadable" }
   | { kind: "invalid" };
@@ -92,6 +118,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+interface Modifier {
+  label: string;
+  cents: Cents | null;
+}
+
+// An unpriced modifier read as "" instead of null is still unpriced. Refusing
+// it would fail the whole receipt over a line that carries no money.
+function parseModifiers(raw: unknown): Modifier[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  const modifiers: Modifier[] = [];
+  for (const modifier of raw) {
+    if (!isRecord(modifier) || typeof modifier.label !== "string") return null;
+    const cents = modifier.price === "" ? null : parseNullablePrice(modifier.price);
+    if (cents === undefined) return null;
+    modifiers.push({ label: modifier.label.trim(), cents: cents || null });
+  }
+  return modifiers;
+}
+
+// A dish and its modifiers stay one claimable line, so whoever had the burger
+// pays for its extra patty. Charged modifiers join the line's price, and every
+// modifier is named in the line's note.
+function line(
+  label: string,
+  printed: Cents,
+  confidence: number,
+  modifiers: Modifier[],
+  charged: boolean,
+): Extraction["items"][number] {
+  let cents = printed;
+  const parts: string[] = [];
+  for (const m of modifiers) {
+    const extra = charged ? m.cents : null;
+    if (extra !== null) cents += extra;
+    if (m.label) parts.push(extra === null ? m.label : `${m.label} ${extra > 0 ? "+" : ""}${formatCents(extra)}`);
+  }
+  return parts.length > 0 ? { label, cents, confidence, note: parts.join(", ") } : { label, cents, confidence };
+}
+
 export function parseToolInput(input: unknown): ParsedToolInput {
   if (!isRecord(input)) return { kind: "invalid" };
   if (typeof input.is_receipt !== "boolean" || typeof input.readable !== "boolean") return { kind: "invalid" };
@@ -107,16 +173,25 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   }
   if (!Array.isArray(input.items)) return { kind: "invalid" };
 
-  const items: Extraction["items"] = [];
+  const lines: { label: string; printed: Cents; confidence: number; modifiers: Modifier[] }[] = [];
   for (const raw of input.items) {
     if (!isRecord(raw) || typeof raw.label !== "string") return { kind: "invalid" };
-    const cents = parsePriceCents(raw.price);
+    const printed = parsePriceCents(raw.price);
     const confidence = raw.confidence;
-    if (cents === null) return { kind: "invalid" };
+    const modifiers = parseModifiers(raw.modifiers);
+    if (printed === null || modifiers === null) return { kind: "invalid" };
     if (typeof confidence !== "number" || !(confidence >= 0 && confidence <= 1)) return { kind: "invalid" };
-    items.push({ label: raw.label, cents, confidence });
+    lines.push({ label: raw.label, printed, confidence, modifiers });
   }
 
-  if (items.length === 0) return { kind: "not-a-receipt" };
-  return { kind: "extraction", extraction: { place, billDate, items, taxCents, printedTotalCents } };
+  if (lines.length === 0) return { kind: "not-a-receipt" };
+  const read = (charged: boolean): Extraction => ({
+    place,
+    billDate,
+    items: lines.map((l) => line(l.label, l.printed, l.confidence, l.modifiers, charged)),
+    taxCents,
+    printedTotalCents,
+  });
+  const anyPriced = lines.some((l) => l.modifiers.some((m) => m.cents !== null));
+  return { kind: "extraction", extraction: read(true), ...(anyPriced ? { modifiersIncluded: read(false) } : {}) };
 }

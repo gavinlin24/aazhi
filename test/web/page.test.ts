@@ -311,6 +311,27 @@ describe("renderPage", () => {
     expect(await select(page("marcus", bill, input, outsider), "[data-add-guest]")).toEqual([]);
   });
 
+  it("shows a line's modifiers under the dish name, and reads them out with it", async () => {
+    const note = "Extra patty +$3.00, No onions";
+    const input = withItem(withItem(draft, { id: "burger", label: "Burger", note, cents: 1950, claimedBy: ["marcus"] }), {
+      id: "odd",
+      label: "Odd",
+      note: "<b>bold</b>",
+      cents: 100,
+      claimedBy: [],
+    });
+    const html = renderPage(bill, splitBill(input), input.items, participantsOf(input), "marcus", {}, NOW);
+
+    const row = await one(html, 'li.item[data-item="burger"]');
+    expect(row.attrs.class.split(" ")).toContain("has-note");
+    expect(await textOf(html, 'li.item[data-item="burger"] .item-note')).toBe(note);
+    expect(html).not.toContain("<b>bold");
+    expect(html).toContain("&lt;b&gt;bold&lt;/b&gt;");
+    expect((await one(html, 'li.item[data-item="burger"] [aria-label]')).attrs["aria-label"]).toBe(`Burger (${note}), $19.50`);
+    expect(await select(html, 'li.item[data-item="bun"] .item-note')).toEqual([]);
+    expect(stateOf(html).items.find((i: any) => i.id === "burger").note).toBe(note);
+  });
+
   it("escapes text that came from the receipt or from people", async () => {
     const place = `<img src=x onerror="alert(1)">`;
     const label = `</script><script>alert("label")</script> & 'friends'`;

@@ -258,6 +258,10 @@ button.row:active { background: var(--fill); }
 .is-bare .who, .is-bare .piece { display: none; }
 .item-label { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
 .item-price { grid-area: price; justify-self: end; white-space: nowrap; font-size: 17px; }
+/* A dish's modifiers wrap rather than clip: they explain the price beside it. */
+.item-note { grid-area: note; min-width: 0; font-size: 14px; line-height: 18px; color: var(--muted); padding-bottom: 2px; }
+.has-note .row { grid-template-rows: 23px auto 22px; grid-template-areas: "tick name price" "tick note note" "tick who piece"; }
+.is-bare.has-note .row { grid-template-rows: 30px auto; grid-template-areas: "tick name price" "tick note note"; }
 .who { grid-area: who; display: flex; align-items: center; min-width: 0; }
 .piece { grid-area: piece; justify-self: end; white-space: nowrap; font-size: 15px; color: var(--muted); }
 .piece .money { color: var(--ink); margin-left: 4px; }
@@ -1106,7 +1110,7 @@ function notOnBill(v: View): string {
 
 function rowLabel(v: View, item: LineItem): string {
   const others = item.claimedBy.filter((id) => id !== v.s.viewer).map((id) => nameOf(v, id));
-  return `${item.label}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
+  return `${item.label}${item.note ? ` (${item.note})` : ""}, ${formatCents(item.cents)}${others.length > 0 ? `, with ${others.join(", ")}` : ""}`;
 }
 
 function piece(v: View, item: LineItem): string {
@@ -1128,9 +1132,10 @@ function itemRow(v: View, item: LineItem): string {
   const brush = v.s.editable === "all" ? BRUSH : "";
   const inner =
     `<span class="item-label">${escapeHtml(item.label)}</span><span class="item-price">${formatCents(item.cents)}${brush}</span>` +
+    (item.note ? `<span class="item-note">${escapeHtml(item.note)}</span>` : "") +
     `<span class="who">${stack(v, others, 5)}</span>${piece(v, item)}`;
   const id = escapeHtml(item.id);
-  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : ""];
+  const classes = ["item", mine ? "is-mine" : "", unclaimed ? "is-unclaimed" : "", others.length === 0 ? "is-bare" : "", item.note ? "has-note" : ""];
   const claim = `data-claim data-item="${id}" data-participant="${escapeHtml(v.s.viewer)}" aria-pressed="${mine}"`;
   if (v.s.editable === "all") {
     classes.push("has-picker");

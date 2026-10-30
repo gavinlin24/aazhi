@@ -17,6 +17,7 @@ import {
 import type { Env } from "../../src/env";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
 import { editBillMessage, ephemeral, followUp } from "../../src/discord/rest";
+import { PATTY_SHACK } from "../fixtures/modifiers";
 import { SAIGON } from "../fixtures/saigon";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
 
@@ -329,6 +330,22 @@ describe("/split", () => {
     expect(post!.body.allowed_mentions).toEqual({ parse: [] });
     // Nothing else to edit: there was no older draft here.
     expect(discordCalls()).toHaveLength(1);
+  });
+
+  it("keeps a dish and its modifiers one claimable line, so the bill adds up as printed", async () => {
+    anthropic = () => toolUse(PATTY_SHACK);
+
+    await run(slashSplit());
+
+    const bill = await openDraftInChannel(db, "chan-1");
+    const items = await getBillItems(db, bill!.id);
+    expect(items.map((i) => [i.label, i.cents, i.note])).toEqual([
+      ["Classic Burger", 1950, "Medium Rare, Extra Patty +$3.00, Add Bacon +$2.50, No Onions"],
+      ["Veggie Burger", 1500, "Gluten Free Bun +$2.00, No Pickles"],
+      ["Fries", 650, "Truffle Oil +$1.50"],
+      ["Soda", 600, undefined],
+    ]);
+    expect(shown(originalEdits()[0]!.body)).toContain("Total $51.17");
   });
 
   it("supersedes an existing open draft in the same channel", async () => {

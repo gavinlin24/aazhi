@@ -127,6 +127,7 @@ async function saveDraft(e: Extraction, guildId: string, channelId: string, paye
     e.items.map((item) => ({
       id: crypto.randomUUID(),
       label: item.label,
+      note: item.note,
       cents: item.cents,
       source: "ocr" as const,
       confidence: item.confidence,
