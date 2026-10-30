@@ -365,7 +365,7 @@ describe("recording a payment", () => {
     expect(over.body.error).toBe("That's more than you have left to pay, which is $44.46.");
     const zero = await pay("marcus", 0);
     expect(zero.status).toBe(400);
-    expect(zero.body.error).toBe("Enter the amount you sent, more than $0.00.");
+    expect(zero.body.error).toBe("Enter the amount you paid, more than $0.00.");
     expect(await listSettlements(db, BILL)).toEqual([]);
   });
 

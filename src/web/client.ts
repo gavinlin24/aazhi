@@ -741,7 +741,7 @@ export const CLIENT_SCRIPT = String.raw`
       el("div", { class: "flow" }, [stack(v, mine, 3), icon("arrow", "arrow"), av(v, s.payerId)]),
       forgiven ? el("p", { class: "was money" }, money(sharesOf(v, mine).reduce((n, x) => n + x.owedCents, 0))) : null,
       el("p", { class: "hero-amt money", "data-you-owed": true }, money(paid || forgiven ? 0 : leftOf(v, s.viewer))),
-      paid ? el("span", { class: "stamp" + (justPaid ? " is-pressed" : ""), role: "img", "aria-label": "Paid" }, "付讫") : null,
+      paid ? el("span", { class: "stamp" + (justPaid ? (slamming ? " is-pressed is-after-slam" : " is-pressed") : ""), role: "img", "aria-label": "Paid" }, "付讫") : null,
       !paid && forgiven ? el("span", { class: "gift-mark", role: "img", "aria-label": "Forgiven" }, icon("gift")) : null,
       whoNodes(v),
     ].concat(forgiven ? [] : splitNodes(counted(v, s.viewer)))
@@ -754,32 +754,42 @@ export const CLIENT_SCRIPT = String.raw`
     const s = v.s;
     const guests = guestsOf(v, s.viewer);
     if (guests.length === 0) return null;
-    const row = (id, name, note, paid, off) => {
+    const row = (id, name, paid, off) => {
       const share = v.shares.get(id);
       const forgiven = Boolean(share && share.pardoned);
       return el("li", off ? { class: "is-off" } : null, [
         av(v, id),
         el("span", { class: "name" }, name),
         paid ? el("span", { class: "stamp", role: "img", "aria-label": "Paid" }, "付讫") : null,
-        el("span", { class: "note" }, forgiven ? "forgiven" : note),
+        el("span", { class: "note" }, forgiven ? "forgiven" : ""),
         el("span", { class: "money" + (forgiven ? " is-forgiven is-off" : off ? " is-off" : "") }, money(share ? share.owedCents : 0)),
       ]);
     };
-    const payer = nameOf(v, s.payerId);
-    return el("ul", { class: "whose", "data-who": true, "aria-label": "Whose share" }, [row(s.viewer, "You", "", false, false)].concat(guests.map((g) =>
-      g.paidToPayer
-        ? row(g.id, g.displayName, "paid " + payer, true, true)
-        : row(g.id, g.displayName, g.paidToHost ? "paid you" : "", g.paidToHost === true, false))));
+    return el("ul", { class: "whose", "data-who": true, "aria-label": "Whose share" }, [row(s.viewer, "You", false, false)].concat(guests.map((g) =>
+      row(g.id, g.displayName, g.paidToPayer === true || g.paidToHost === true, g.paidToPayer === true))));
   }
 
   function sentNodes(v) {
     if (leftOf(v, v.s.viewer) <= 0) return null;
     return el("div", { class: "sent-row needs-js", "data-sent": true },
-      el("button", { type: "button", class: "sent", "data-ask": "sent", "aria-haspopup": "dialog" }, [icon("check"), "I sent it"]));
+      el("button", { type: "button", class: "sent", "data-ask": "sent", "aria-haspopup": "dialog" }, [icon("check"), "I paid"]));
   }
 
   let wasPaid = null;
   let justPaid = false;
+  // Set before a payment that clears what is left is sent, because the hero
+  // redraws with the answer, before the big stamp is put down.
+  let slamming = false;
+  const SLAM_MS = 1000;
+
+  function slam() {
+    const mark = el("div", { class: "slam", "aria-hidden": "true" }, el("span", { class: "stamp" }, "付讫"));
+    document.body.appendChild(mark);
+    setTimeout(() => {
+      mark.remove();
+      slamming = false;
+    }, SLAM_MS);
+  }
 
   function renderHero(v) {
     const hero = root.querySelector("section.hero[data-you]");
@@ -1192,14 +1202,14 @@ export const CLIENT_SCRIPT = String.raw`
     const input = el("input", { id: "sent-amount", name: "amount", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", "aria-describedby": "sent-left" });
     input.value = sheet.amount === undefined ? plain(left) : sheet.amount;
     return [
-      askHead("How much did you send?"),
-      el("p", { class: "sheet-body", id: "sent-left" }, "You have " + money(left) + " left to pay " + nameOf(v, v.s.payerId) + ". Sent part of it? Change the amount."),
+      askHead("How much did you pay?"),
+      el("p", { class: "sheet-body", id: "sent-left" }, "You have " + money(left) + " left to pay " + nameOf(v, v.s.payerId) + ". Paid part of it? Change the amount."),
       el("form", { class: "sent-form", "data-sent-form": true, novalidate: true }, [
         el("div", { class: "money-input" }, [el("span", { "aria-hidden": "true" }, "$"), input]),
         el("p", { class: "field-msg", role: "status" }, sheet.msg || ""),
         el("div", { class: "sheet-actions", style: "width: 100%" }, [
           cancelButton(),
-          el("button", { type: "submit", class: "chip-btn sheet-go is-ink", disabled: stopped, "aria-busy": busy.has("sent") ? "true" : null }, [icon("check"), "I sent it"]),
+          el("button", { type: "submit", class: "chip-btn sheet-go is-ink", disabled: stopped, "aria-busy": busy.has("sent") ? "true" : null }, [icon("check"), "I paid"]),
         ]),
       ]),
     ];
@@ -1693,7 +1703,7 @@ export const CLIENT_SCRIPT = String.raw`
     const msg = form.querySelector(".field-msg");
     const amount = decimal(form.elements.amount.value);
     if (amount === null || hundredths(amount) === 0) {
-      msg.textContent = "Enter the amount you sent, like 12.50.";
+      msg.textContent = "Enter the amount you paid, like 12.50.";
       form.elements.amount.focus();
       return;
     }
@@ -1701,17 +1711,27 @@ export const CLIENT_SCRIPT = String.raw`
     busy.add("sent");
     setBusy(form, true);
     const left = leftOf(model(view()), state.viewer);
+    slamming = hundredths(amount) >= left;
     // One id per sheet, so a retry after a dropped answer finds the payment
     // it already made instead of making a second.
     const failure = await write("POST", "/payment", { id: sheet.id, amount, left: plain(left) });
     busy.delete("sent");
     if (failure) {
+      slamming = false;
       if (sheet && sheet.kind === "sent") sheet.msg = failure.message;
       render();
       return;
     }
     closeSheet();
-    showNote(money(hundredths(amount)) + " recorded", false);
+    const recorded = money(hundredths(amount)) + " recorded";
+    if (!slamming || !paidUp(model(view()), state.viewer)) {
+      slamming = false;
+      showNote(recorded, false);
+      return;
+    }
+    slam();
+    // The note says how much once the stamp has lifted, rather than under it.
+    setTimeout(() => showNote(recorded, false), SLAM_MS);
   }
 
   function confirmBill() {

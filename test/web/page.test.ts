@@ -549,10 +549,10 @@ describe("renderPage", () => {
       expect((await one(html, "[data-you] .flow .stack")).attrs["aria-label"]).toBe("Dani");
       expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
       expect((await one(html, '[data-person="dani"]')).attrs["aria-label"]).toContain(money(share("dani").owedCents));
-      // Still listed, greyed, and saying why it is off the amount.
+      // Still listed, greyed and stamped, with no words beside the stamp.
       const rows = await select(html, "[data-who] li");
       expect(rows[1]!.attrs.class).toBe("is-off");
-      expect(rows[1]!.text).toBe(`SSam付讫paid Gavin${money(sam.owedCents)}`);
+      expect(rows[1]!.text).toBe(`SSam付讫${money(sam.owedCents)}`);
     });
 
     it("stamps a guest who paid their adder for the adder, without taking anything off", async () => {
@@ -562,7 +562,7 @@ describe("renderPage", () => {
       expect(await textOf(html, "[data-mine] .mine-guest .stamp")).toBe("付讫");
       const rows = await select(html, "[data-who] li");
       expect(rows[1]!.attrs.class).toBeUndefined();
-      expect(rows[1]!.text).toBe(`SSam付讫paid you${money(share("guest-sam").owedCents)}`);
+      expect(rows[1]!.text).toBe(`SSam付讫${money(share("guest-sam").owedCents)}`);
     });
 
     it("draws a forgiven share as nothing owed, with what it was struck through", async () => {
@@ -646,15 +646,15 @@ describe("renderPage", () => {
 
       const zelleOnly = view("theo", { handles: [zelle] });
       expect(await select(zelleOnly, "[data-pay]")).toEqual([]);
-      expect(await textOf(zelleOnly, "[data-you] [data-sent] [data-ask=sent]")).toBe("I sent it");
+      expect(await textOf(zelleOnly, "[data-you] [data-sent] [data-ask=sent]")).toBe("I paid");
       expect(zelleOnly).not.toContain("Zelle");
     });
 
-    it("lets someone with something left record that they sent it, or say something is wrong", async () => {
+    it("lets someone with something left record that they paid, or say something is wrong", async () => {
       const html = view("theo", { settled: [{ participant: "theo", cents: 100 }] });
 
-      expect(await textOf(html, "[data-you] [data-sent] [data-ask=sent]")).toBe("I sent it");
-      // No handle on file, so no link: "I sent it" stands alone.
+      expect(await textOf(html, "[data-you] [data-sent] [data-ask=sent]")).toBe("I paid");
+      // No handle on file, so no link: "I paid" stands alone.
       expect(await select(html, "[data-you] [data-pay]")).toEqual([]);
       const actions = await one(html, "[data-actions]");
       expect(actions.text).toBe("Something&#39;s wrongPaying pauses until Gavin fixes it.");

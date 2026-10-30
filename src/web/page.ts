@@ -38,6 +38,17 @@ function grain(rgb: string, alpha: string): string {
   return `url("data:image/svg+xml,${svg.replace(/"/g, "'").replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
 }
 
+// A mask that lets most of the seal through and drops it in fine flecks, the
+// way a hand stamp never inks evenly.
+function speckle(): string {
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'>" +
+    "<filter id='s'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/>" +
+    "<feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.2 1.95'/></filter>" +
+    "<rect width='100%' height='100%' filter='url(%23s)'/></svg>";
+  return `url("data:image/svg+xml,${svg.replace(/</g, "%3C").replace(/>/g, "%3E")}")`;
+}
+
 // Ink & Paper. Every pair that carries meaning was checked against WCAG: 4.5:1
 // for text, 3:1 for the tick rings and seals. The avatar hues are mineral
 // pigments, each a wash with its own ink, so an initial always reads.
@@ -65,6 +76,7 @@ const STYLES = `${FONT_FACES}
   --tip: #d9cdb6;
   --scrim: rgba(29, 27, 24, 0.36);
   --grain: ${grain(".3", ".07")};
+  --speckle: ${speckle()};
   --serif: "Iowan Old Style", "New York", ui-serif, "Noto Serif", "Source Serif Pro", Georgia, serif;
   --display: "Noto Serif Display", "Iowan Old Style", "New York", ui-serif, Georgia, serif;
   --brush: "Ma Shan Zheng", "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", serif;
@@ -474,6 +486,65 @@ button.tile:active { background: var(--fill); }
   from { transform: scale(1.6) rotate(-14deg); opacity: 0; }
   to { transform: scale(1) rotate(-6deg); opacity: 1; }
 }
+/* The small stamp waits for the big one to lift, so the seal reads as one
+   mark that came down and stayed. */
+.is-pressed.is-after-slam { animation-delay: 820ms; animation-fill-mode: backwards; }
+/* Paying in full: the seal comes down on the page like a stamp on paper. It
+   drops in large and tilted, presses past its size and springs back, bleeds a
+   ring of ink, holds a beat, and lifts, all in a second. */
+.slam {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding-bottom: 12vh;
+  pointer-events: none;
+  animation: slam-wash 1000ms ease both;
+}
+.slam .stamp {
+  position: relative;
+  padding: 14px 10px;
+  border-width: 6px;
+  border-radius: 9px;
+  font-size: 84px;
+  letter-spacing: 10px;
+  background: none;
+  -webkit-mask: var(--speckle);
+  mask: var(--speckle);
+  animation: slam 1000ms both;
+}
+.slam .stamp::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border: 3px solid var(--seal);
+  border-radius: 12px;
+  opacity: 0;
+  animation: bleed 1000ms ease-out both;
+}
+@keyframes slam {
+  0% { transform: scale(2.6) rotate(-24deg); opacity: 0; animation-timing-function: cubic-bezier(.55, 0, 1, .45); }
+  17% { transform: scale(.93) rotate(-8deg); opacity: 1; animation-timing-function: ease-out; }
+  25% { transform: scale(1.03) rotate(-8deg); }
+  33% { transform: scale(1) rotate(-8deg); }
+  80% { transform: scale(1) rotate(-8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(-8deg); opacity: 0; }
+}
+@keyframes bleed {
+  0%, 16% { opacity: 0; transform: scale(.97); }
+  19% { opacity: .5; }
+  50%, 100% { opacity: 0; transform: scale(1.22); }
+}
+@keyframes slam-wash {
+  0% { background: transparent; }
+  14%, 80% { background: color-mix(in srgb, var(--paper) 55%, transparent); }
+  100% { background: transparent; }
+}
+@keyframes slam-fade {
+  0%, 100% { opacity: 0; transform: rotate(-8deg); }
+  20%, 80% { opacity: 1; transform: rotate(-8deg); }
+}
 .add-tile .av { background: none; border: 1.5px dashed var(--ring); color: var(--muted); box-shadow: none; }
 .add-tile .av .ic { width: 22px; height: 22px; }
 .add-tile .tile-name { color: var(--muted); }
@@ -803,6 +874,8 @@ dialog.sheet::backdrop { background: var(--scrim); }
 
 @media (prefers-reduced-motion: reduce) {
   .is-inked .tick, .is-pressed { animation: none; }
+  .slam .stamp { animation-name: slam-fade; }
+  .slam .stamp::after { animation: none; }
 }
 @media (min-width: 700px) {
   .page { padding-top: 40px; }
@@ -1238,7 +1311,7 @@ function pie(done: Cents, total: Cents): string {
     `${f > 0 ? `<circle class="done" cx="27" cy="27" r="22" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}"/>` : ""}</svg>`;
 }
 
-// With no app link to offer, "I sent it" stands alone: the person pays the
+// With no app link to offer, "I paid" stands alone: the person pays the
 // way they usually would and records it here after.
 function payRow(v: View): string {
   const links = v.s.pay.map(
@@ -1251,32 +1324,28 @@ function payRow(v: View): string {
 // sheet it opens starts at all of it, and takes a smaller amount for part.
 function sentRow(v: View): string {
   if (leftOf(v, v.s.viewer) <= 0) return "";
-  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I sent it</button></div>`;
+  return `<div class="sent-row needs-js" data-sent><button type="button" class="sent" data-ask="sent" aria-haspopup="dialog">${icon("check")}I paid</button></div>`;
 }
 
 // One amount for you and the guests you brought, then whose it is: you
-// first, then each guest. A guest who paid the payer directly is off the
-// amount, so their row is greyed and says so.
+// first, then each guest. A paid guest gets the stamp, which says it without
+// words. One who paid the payer directly is also off the amount, so the row
+// is greyed.
 function whoRows(v: View): string {
   const s = v.s;
   const guests = guestsOf(v, s.viewer);
   if (guests.length === 0) return "";
   const stamp = `<span class="stamp" role="img" aria-label="Paid">付讫</span>`;
-  const row = (id: ParticipantId, name: string, note: string, paid: boolean, off: boolean) => {
+  const row = (id: ParticipantId, name: string, paid: boolean, off: boolean) => {
     const share = v.shares.get(id);
     const forgiven = share?.pardoned === true;
     const cls = forgiven ? " is-forgiven is-off" : off ? " is-off" : "";
     return `<li${off ? ' class="is-off"' : ""}>${av(v, id)}<span class="name">${escapeHtml(name)}</span>${paid ? stamp : ""}` +
-      `<span class="note">${escapeHtml(forgiven ? "forgiven" : note)}</span><span class="money${cls}">${formatCents(share?.owedCents ?? 0)}</span></li>`;
+      `<span class="note">${forgiven ? "forgiven" : ""}</span><span class="money${cls}">${formatCents(share?.owedCents ?? 0)}</span></li>`;
   };
-  const payer = nameOf(v, s.payerId);
   const rows = [
-    row(s.viewer, "You", "", false, false),
-    ...guests.map((g) =>
-      g.paidToPayer
-        ? row(g.id, g.displayName, `paid ${payer}`, true, true)
-        : row(g.id, g.displayName, g.paidToHost ? "paid you" : "", g.paidToHost === true, false),
-    ),
+    row(s.viewer, "You", false, false),
+    ...guests.map((g) => row(g.id, g.displayName, g.paidToPayer === true || g.paidToHost === true, g.paidToPayer === true)),
   ];
   return `<ul class="whose" data-who aria-label="Whose share">${rows.join("")}</ul>`;
 }

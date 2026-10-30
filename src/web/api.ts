@@ -725,7 +725,7 @@ function paymentRefused(error: SettlementRefusedError, snapshot: BillSnapshot): 
     case "no-share":
       return refuse(409, "You have no share on this bill, so there's nothing for you to pay.");
     case "not-positive":
-      return refuse(400, "Enter the amount you sent, more than $0.00.");
+      return refuse(400, "Enter the amount you paid, more than $0.00.");
     case "clear":
       return refuse(409, "You're all paid up on this bill.");
     case "stale":
