@@ -1,15 +1,15 @@
 import { Hono, type Context } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
 import { getBillSnapshot } from "./db/bills";
-import { personProfile, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
+import { hasBillHere, personProfile, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
 import { api } from "./web/api";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
-import { renderBoards, renderNoBills, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
+import { renderBoards, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
 import { pageData } from "./web/state";
-import { readToken, readViewerToken } from "./web/token";
+import { checkMemberProof, readToken, readViewerToken } from "./web/token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -67,8 +67,8 @@ app.get("/b/:billId", async (c) => {
 app.route("/b", api);
 
 // As with a bill, the token is checked first and every failure looks the same.
-// The server in the path must be the one in the token, which is what keeps a
-// link from one server off every other server's numbers.
+// The server in the path must be the one in the token: the numbers cross
+// servers, but a link only ever opens from the server it was asked for in.
 async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
   const token = c.req.query("t") ?? "";
   const grant = await readViewerToken(token, c.env.TOKEN_SIGNING_KEY, Date.now());
@@ -76,11 +76,22 @@ async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
   return { ...grant, token };
 }
 
+// Numbers cross servers, so this is the check that stops a link from walking
+// to any Discord id at all: only yourself, someone with a bill here, or someone
+// /profile @name just vouched for.
+async function mayOpen(c: Context<{ Bindings: Env }>, viewer: Viewer, person: string): Promise<boolean> {
+  if (person === viewer.viewerId) return true;
+  const proof = c.req.query("m");
+  if (proof && (await checkMemberProof(proof, viewer.token, person, c.env.TOKEN_SIGNING_KEY))) return true;
+  return hasBillHere(c.env.DB, viewer.guildId, person);
+}
+
 async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) => string): Promise<Response> {
   const viewer = await viewerOf(c);
   if (!viewer) return page(renderProfileRefused(), 403);
   const nowMs = Date.now();
   const person = who(viewer);
+  if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
   const profile = await personProfile(c.env.DB, viewer.guildId, person, nowMs);
   if (!profile) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
   return page(renderProfile(profile, viewer, nowMs), 200);

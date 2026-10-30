@@ -2,7 +2,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "../../src/index";
 import type { Env } from "../../src/env";
-import { mintToken, mintViewerToken, TOKEN_TTL_MS } from "../../src/web/token";
+import { mintMemberProof, mintToken, mintViewerToken, TOKEN_TTL_MS } from "../../src/web/token";
 import { seedOuting } from "../fixtures/outings";
 import { one, select, textOf } from "./html";
 
@@ -83,6 +83,41 @@ describe("who can open a server's pages", () => {
       expect((await get(`${path}?t=${token}`)).status, path).toBe(403);
     }
   });
+
+  it("refuses a typed id for someone with no bill here, the same whether or not they have bills elsewhere", async () => {
+    const token = await viewerToken();
+    const elsewhere = await get(`/g/guild-1/u/theo?t=${token}`);
+    const nobody = await get(`/g/guild-1/u/someone-else?t=${token}`);
+    expect(elsewhere.status).toBe(403);
+    expect(nobody.status).toBe(403);
+    const html = await elsewhere.text();
+    expect(html).toBe(await nobody.text());
+    expect(html).not.toMatch(/Theo|Crag|\$9/);
+  });
+
+  it("opens that person with the proof /profile @name gave, and no one else with it", async () => {
+    const token = await viewerToken();
+    const proof = await mintMemberProof(token, "theo", KEY);
+    const res = await get(`/g/guild-1/u/theo?t=${token}&m=${proof}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(await textOf(html, "h1")).toContain("Theo");
+    expect(await textOf(html, ".hero-amt")).toBe("$9.00");
+
+    expect((await get(`/g/guild-1/u/kai?t=${token}&m=${proof}`)).status).toBe(403);
+    const otherViewer = await viewerToken("marcus");
+    expect((await get(`/g/guild-1/u/theo?t=${otherViewer}&m=${proof}`)).status).toBe(403);
+    expect((await get(`/g/guild-1/u/theo?t=${token}&m=${proof}x`)).status).toBe(403);
+    expect((await get(`/g/guild-1/u/theo?t=${token}&m=nonsense`)).status).toBe(403);
+  });
+
+  it("will not take a bill token or a viewer token as a proof", async () => {
+    const token = await viewerToken();
+    const billToken = await mintToken("a1", "theo", KEY, Date.now());
+    for (const fake of [billToken, billToken.split(".")[1], token.split(".")[1]]) {
+      expect((await get(`/g/guild-1/u/theo?t=${token}&m=${fake}`)).status, fake).toBe(403);
+    }
+  });
 });
 
 describe("the profile page", () => {
@@ -97,12 +132,10 @@ describe("the profile page", () => {
     expect(html).not.toMatch(/seal-strip|seal-card/);
   });
 
-  it("carries the server's name, and copes without it", async () => {
-    const named = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
-    expect(await textOf(named, ".meta")).toContain("Friday Table");
-    const token = await mintViewerToken("guild-1", "gavin", null, KEY, Date.now());
-    const plain = await (await get(`/g/guild-1?t=${token}`)).text();
-    expect(await textOf(plain, ".meta")).toMatch(/^since /);
+  it("says it counts every server, and names none of them", async () => {
+    const html = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
+    expect(await textOf(html, ".meta")).toMatch(/^Every server · since [A-Z]/);
+    expect(html).not.toContain("Friday Table");
   });
 
   it("adds the Back to you chip and the pair card on someone else's page", async () => {
@@ -142,20 +175,58 @@ describe("the profile page", () => {
     expect(await select(html, ".chip-back")).toHaveLength(0);
   });
 
-  it("says no bills for someone only on another server's bills, and names nobody", async () => {
-    const html = await (await get(`/g/guild-1/u/theo?t=${await viewerToken()}`)).text();
-    expect(await textOf(html, ".pair-none")).toBe("No bills in this server yet.");
-    expect(html).not.toMatch(/Theo|Crag|Belayer|\$9/);
+  it("says no bills only when a proven link finds none anywhere", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/u/priya?t=${token}&m=${await mintMemberProof(token, "priya", KEY)}`)).text();
+    expect(await textOf(html, ".pair-none")).toBe("No bills yet.");
+    expect(html).not.toContain("server yet");
   });
 
-  it("shows no other server's name or money for someone on both", async () => {
+  it("adds someone up across servers, under the name from this one", async () => {
     const html = await (await get(`/g/guild-1/u/marcus?t=${await viewerToken()}`)).text();
-    expect(html).not.toMatch(/Belayer|Crag|Toast|\$99/);
+    expect(await textOf(html, ".hero-amt")).toBe("$129.00");
+    expect(await textOf(html, ".hero-sub")).toBe("2 outings so far.");
+    expect(await textOf(html, "h1")).toContain("Marcus &lt;b&gt;");
+    expect(html).toContain("Crag Cafe");
+    expect(html).not.toContain("Belayer");
+  });
+
+  it("names a companion from another server with no way through to them", async () => {
+    for (const id of ["z2", "z3"]) {
+      await seedOuting(db, {
+        id,
+        guild: "guild-2",
+        channel: "chan-2",
+        people: [["theo", "Theo"], ["gavin", "Gavin"]],
+        billDate: new Date().toISOString().slice(0, 10),
+        items: [["Eggs", 900, ["theo", "gavin"]]],
+      });
+    }
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1?t=${token}`)).text();
+    expect(await select(html, "a.tile2")).toHaveLength(0);
+    expect(html).toContain("Theo");
+    expect(html).toContain("2 outings together");
+    expect(await select(html, ".tile2 .go-ic")).toHaveLength(0);
+    expect(html).not.toContain("/u/theo");
+  });
+
+  it("keeps the pair card cumulative when the two only met elsewhere", async () => {
+    await seedOuting(db, {
+      id: "z2",
+      guild: "guild-2",
+      channel: "chan-2",
+      people: [["marcus", "Marc the Belayer"], ["gavin", "Gavin"]],
+      billDate: new Date().toISOString().slice(0, 10),
+      items: [["Eggs", 900, ["marcus", "gavin"]]],
+    });
+    const html = await (await get(`/g/guild-1/u/marcus?t=${await viewerToken()}`)).text();
+    expect((await select(html, ".fig")).map((f) => f.text)).toEqual(["2", "1", "1"]);
   });
 
   it("tells a viewer with no bills so, and still lets them reach the boards", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken("noor")}`)).text();
-    expect(await textOf(html, ".pair-none")).toBe("You have no bills in this server yet.");
+    expect(await textOf(html, ".pair-none")).toBe("You have no bills yet.");
     expect((await select(html, ".tabs a")).map((a) => a.text)).toEqual(["Profile", "Boards"]);
   });
 });
@@ -211,14 +282,24 @@ describe("the boards page", () => {
   it("says so when a board has nobody on it", async () => {
     const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
     expect(await textOf(html, '[data-list="visits:month"] .card-h')).toContain("different places");
-    expect(await textOf(html, '[data-list="hosted:all"] .rank-row .nm')).toContain("Gavin");
+    expect((await select(html, '[data-list="hosted:all"] .rank-row .nm')).map((n) => n.text).join()).toContain("Gavin");
     await db.prepare("DELETE FROM bills").run();
     const empty = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
     expect(await textOf(empty, '[data-list="hosted:all"] .pair-none')).toBe("Nobody is on this board yet.");
   });
 
-  it("keeps another server out of the same person's board rows", async () => {
+  it("lists this server's people with their whole totals, and says so", async () => {
     const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}&board=spent`)).text();
-    expect(html).not.toMatch(/Belayer|Theo|\$99/);
+    expect(html).toContain("$129.00");
+    expect(html).not.toMatch(/Belayer|Theo/);
+    expect((await select(html, ".foot")).map((f) => f.text)).toContain("Everyone with a bill in this server. Their numbers count every server.");
+  });
+
+  it("carries the server's name, and copes without it", async () => {
+    const named = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    expect(await textOf(named, ".meta")).toContain("Friday Table");
+    const token = await mintViewerToken("guild-1", "gavin", null, KEY, Date.now());
+    const plain = await (await get(`/g/guild-1/boards?t=${token}`)).text();
+    expect(await textOf(plain, ".meta")).toBe("This server");
   });
 });

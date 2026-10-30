@@ -63,9 +63,6 @@ function head(v: Viewer, title: string, on: "profile" | "boards", meta: string, 
   return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}<p class="meta">${meta}</p></header>`;
 }
 
-function metaLine(v: Viewer, extra?: string): string {
-  return [v.guildName && escapeHtml(v.guildName), extra].filter(Boolean).join(' <span class="dot">·</span> ') || "This server";
-}
 
 // The mountain drawn in the first design, as numbers: 356 wide, feet at 156,
 // the tallest peak 110 high, and any month at least a low swell so the ridge
@@ -179,6 +176,8 @@ function namedTile(art: string, named: Named | null, empty: string, label: (coun
 
 function companionTile(v: Viewer, top: Companion | undefined): string {
   if (!top) return tile(icon("people"), "Just you", "no outings together yet");
+  // Someone from another server is named but not linked: this tile is no way in.
+  if (!top.inServer) return tile(avatar(top.id, top.name, 24), escapeHtml(top.name), `${plural(top.outings, "outing")} together`);
   return `<a class="tile2 is-link" href="${escapeHtml(personUrl(v, top.id))}">${avatar(top.id, top.name, 24)}${icon("chev", "go-ic")}<span class="t-val">${escapeHtml(top.name)}</span><span class="t-lbl">${plural(top.outings, "outing")} together</span></a>`;
 }
 
@@ -200,7 +199,7 @@ export function renderProfile(p: Profile, v: Viewer, nowMs: number): string {
   const back = `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, "profile", metaLine(v, `since ${since(p.firstMonth, nowMs)}`), p.name.length > LONG_NAME)}
+${head(v, title, "profile", `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, p.name.length > LONG_NAME)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
@@ -210,17 +209,20 @@ ${tiles(p, v)}
   return shell(`${p.name} · AAzhi`, main, PROFILE_STYLES);
 }
 
-// Reached by a Profile tab or a stale link, never from the reply, which gives
-// no button in this case. It says nothing about why, so a person with bills
-// elsewhere looks the same as a person with none.
+// Reached by the Profile tab or a stale link, never from the reply, which gives
+// no button in this case. It means no bills anywhere.
 export function renderNoBills(v: Viewer, self: boolean): string {
-  const line = self ? "You have no bills in this server yet." : "No bills in this server yet.";
+  const line = self ? "You have no bills yet." : "No bills yet.";
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, "Profile", "profile", metaLine(v))}
+${head(v, "Profile", "profile", "Every server")}
 <section class="card pair-card"><p class="pair-none">${line}</p></section>
 </main>`;
   return shell("Profile · AAzhi", main, PROFILE_STYLES);
+}
+
+export function renderPersonRefused(): string {
+  return notice("This profile can't open here", "Profiles open for people in this server. Run <strong>/profile</strong> with their name in Discord.");
 }
 
 export function renderProfileRefused(): string {
@@ -275,11 +277,12 @@ export function renderBoards(boards: Boards, v: Viewer, shown: { board: BoardNam
     `<a class="${on ? "on" : ""}" href="${escapeHtml(href)}" data-${attr}="${value}">${label}</a>`;
   const main = `${sprite()}
 <main class="page" id="boards" data-board="${shown.board}" data-span="${shown.span}">
-${head(v, "Boards", "boards", metaLine(v))}
+${head(v, "Boards", "boards", v.guildName ? escapeHtml(v.guildName) : "This server")}
 <div class="tabs wide">${BOARD_TABS.map(([b, label]) => tab("tab", b, label, b === shown.board, boardsUrl(v, b, shown.span))).join("")}</div>
 <div class="tabs wide">${SPAN_TABS.map(([s, label]) => tab("to", s, label, s === shown.span, boardsUrl(v, shown.board, s))).join("")}</div>
 <section class="card board">${lists.join("")}</section>
 ${BOARD_TABS.map(([b]) => `<p class="foot" data-foot="${b}"${b === shown.board ? "" : " hidden"}>${FOOTS[b]}</p>`).join("")}
+<p class="foot">Everyone with a bill in this server. Their numbers count every server.</p>
 <p class="foot">Tap a name to open that profile.</p>
 </main>
 <script>${PROFILE_SCRIPT}</script>`;

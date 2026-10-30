@@ -87,6 +87,31 @@ export async function mintViewerToken(
   return sign({ g: guildId, v: viewerId, ...(guildName ? { n: guildName } : {}), exp: nowMs + TOKEN_TTL_MS }, key);
 }
 
+// /profile @someone is Discord vouching that they belong here, which a bill
+// here can't show for someone whose bills are all elsewhere. The Open profile
+// link carries that, bound to its viewer token, so it dies with the token and
+// opens nobody else. A bare signature, not a third token: that link sits close
+// to Discord's 512-character limit. The dots in the message mean it can never
+// match what a token signs.
+function memberMessage(viewerToken: string, personId: ParticipantId): Uint8Array {
+  return encoder.encode(`member.${viewerToken}.${personId}`);
+}
+
+export async function mintMemberProof(viewerToken: string, personId: ParticipantId, key: string): Promise<string> {
+  const signature = await crypto.subtle.sign("HMAC", await hmacKey(key, "sign"), memberMessage(viewerToken, personId));
+  return toBase64url(new Uint8Array(signature));
+}
+
+export async function checkMemberProof(proof: string, viewerToken: string, personId: ParticipantId, key: string): Promise<boolean> {
+  try {
+    const signature = fromBase64url(proof);
+    if (!signature) return false;
+    return await crypto.subtle.verify("HMAC", await hmacKey(key, "verify"), signature, memberMessage(viewerToken, personId));
+  } catch {
+    return false;
+  }
+}
+
 export async function readViewerToken(
   token: string,
   key: string,

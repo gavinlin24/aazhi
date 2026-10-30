@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { foldName, monthOf, personProfile, personSummary, serverBoards, type Ranked } from "../../src/db/stats";
+import { foldName, hasBillHere, monthOf, personProfile, personSummary, serverBoards, type Ranked } from "../../src/db/stats";
 import { reopenBill } from "../../src/db/bills";
 import { seedOuting } from "../fixtures/outings";
 
@@ -203,14 +203,14 @@ describe("a profile", () => {
     expect(p.dish?.name).not.toBe("Promo");
   });
 
-  it("gives every month from the server's first, so quiet months show as gaps", async () => {
+  it("gives every month from their first, so quiet months show as gaps", async () => {
     await october();
-    const p = (await personProfile(db, G1, "priya", NOW))!;
-    expect(p.firstMonth).toBe("2026-10");
+    const p = (await personProfile(db, G1, "marcus", NOW))!;
+    expect(p.firstMonth).toBe("2026-08");
     expect(p.months.map((m) => [m.month, m.cents, m.outings])).toEqual([
-      ["2026-08", 0, 0],
+      ["2026-08", 1800, 1],
       ["2026-09", 0, 0],
-      ["2026-10", 450, 1],
+      ["2026-10", 150, 1],
     ]);
   });
 
@@ -228,8 +228,8 @@ describe("a profile", () => {
     await october();
     const p = (await personProfile(db, G1, "gavin", NOW))!;
     expect(p.companions).toEqual([
-      { id: "marcus", name: "Marcus", outings: 2, theyHosted: 1, personHosted: 1 },
-      { id: "priya", name: "Priya", outings: 1, theyHosted: 0, personHosted: 0 },
+      { id: "marcus", name: "Marcus", inServer: true, outings: 2, theyHosted: 1, personHosted: 1 },
+      { id: "priya", name: "Priya", inServer: true, outings: 1, theyHosted: 0, personHosted: 0 },
     ]);
   });
 
@@ -247,7 +247,7 @@ describe("a profile", () => {
 
 describe("two servers", () => {
   async function both() {
-    await seedOuting(db, { id: "a1", people: [gavin, marcus], place: "Saigon Kitchen", items: [["Pho", 2000, ["gavin"]], ["Bun", 2000, ["marcus"]]], billDate: "2026-10-05" });
+    await seedOuting(db, { id: "a1", people: [gavin, marcus], place: "Saigon Kitchen", items: [["Pho", 2000, ["gavin"]], ["Bun", 2000, ["marcus"]]], billDate: "2026-09-05" });
     await seedOuting(db, {
       id: "b1",
       guild: G2,
@@ -259,24 +259,85 @@ describe("two servers", () => {
     });
   }
 
-  it("never mixes names, money, places or people", async () => {
+  it("adds a person up across every server, under the name from the one being viewed", async () => {
     await both();
-    const first = await serverBoards(db, G1, NOW);
-    const second = await serverBoards(db, G2, NOW);
-
-    expect(JSON.stringify(first)).not.toMatch(/Belayer|theo|9900/i);
-    expect(JSON.stringify(second)).not.toMatch(/gavin|Saigon|"Marcus"/);
-
-    const here = (await personProfile(db, G1, "marcus", NOW))!;
-    expect(here).toMatchObject({ name: "Marcus", spentCents: 2000, outings: 1, places: 1 });
-    expect(here.companions.map((c) => c.id)).toEqual(["gavin"]);
-    expect(JSON.stringify(here)).not.toMatch(/Belayer|Crag|Theo/);
+    const whole = { spentCents: 11900, outings: 2, places: 2, hosted: 1, frontedCents: 10800, firstMonth: "2026-09" };
+    expect(await personProfile(db, G1, "marcus", NOW)).toMatchObject({ ...whole, name: "Marcus", biggest: { cents: 10800, place: "Crag Cafe" } });
+    expect(await personProfile(db, G2, "marcus", NOW)).toMatchObject({ ...whole, name: "Marc the Belayer" });
+    expect((await personProfile(db, G1, "marcus", NOW))!.months.map((m) => [m.month, m.cents])).toEqual([["2026-09", 2000], ["2026-10", 9900]]);
+    expect(await personSummary(db, G1, "marcus")).toMatchObject({ name: "Marcus", outings: 2, spentCents: 11900, hosted: 1 });
   });
 
-  it("answers no bills for someone whose bills are all elsewhere", async () => {
+  it("gives someone with bills only elsewhere their latest name, and nobody a profile from nothing", async () => {
     await both();
-    expect(await personSummary(db, G1, "theo")).toBeNull();
-    expect(await personProfile(db, G1, "theo", NOW)).toBeNull();
+    await seedOuting(db, { id: "b2", guild: G2, channel: "chan-2", people: [["theo", "Theo R"]], items: [["Eggs", 900, ["theo"]]], billDate: "2026-10-07" });
+    expect(await personSummary(db, G1, "theo")).toMatchObject({ name: "Theo R", outings: 2 });
+    expect(await personProfile(db, G1, "theo", NOW)).toMatchObject({ name: "Theo R", spentCents: 1800 });
+    expect(await personSummary(db, G1, "nobody")).toBeNull();
+    expect(await personProfile(db, G1, "nobody", NOW)).toBeNull();
+  });
+
+  it("names people from anywhere, and says who has a bill in the server being viewed", async () => {
+    await both();
+    const seen = (await personProfile(db, G1, "marcus", NOW))!.companions.map((c) => [c.id, c.name, c.inServer]);
+    expect(seen).toEqual([["theo", "Theo", false], ["gavin", "Gavin", true]]);
+  });
+
+  it("names a companion from the viewing server even when a later bill elsewhere says otherwise", async () => {
+    await both();
+    await seedOuting(db, {
+      id: "b2",
+      guild: G2,
+      channel: "chan-2",
+      people: [["gavin", "G-Force"], ["theo", "Theo"]],
+      items: [["Eggs", 900, ["gavin", "theo"]]],
+      billDate: "2026-10-08",
+    });
+    const fromG1 = (await personProfile(db, G1, "theo", NOW))!.companions;
+    expect(fromG1.map((c) => [c.id, c.name, c.inServer])).toEqual([["gavin", "Gavin", true], ["marcus", "Marcus", true]]);
+    const fromG2 = (await personProfile(db, G2, "theo", NOW))!.companions;
+    expect(fromG2.map((c) => [c.id, c.name, c.inServer])).toEqual([["gavin", "G-Force", true], ["marcus", "Marc the Belayer", true]]);
+  });
+
+  it("does not take a draft, or a guest row, as a name or as being in the server", async () => {
+    await both();
+    await seedOuting(db, { id: "d1", people: [["theo", "Theo Draft"]], items: [["A", 100, ["theo"]]], draft: true });
+    expect(await hasBillHere(db, G1, "theo")).toBe(false);
+    expect((await personProfile(db, G1, "marcus", NOW))!.companions[0]).toMatchObject({ name: "Theo", inServer: false });
+  });
+
+  it("knows whose bills are here", async () => {
+    await both();
+    expect(await hasBillHere(db, G1, "gavin")).toBe(true);
+    expect(await hasBillHere(db, G1, "theo")).toBe(false);
+    expect(await hasBillHere(db, G2, "theo")).toBe(true);
+    expect(await hasBillHere(db, G2, "gavin")).toBe(false);
+  });
+
+  it("lists only this server's people on a board, each with their whole total", async () => {
+    await both();
+    const first = await serverBoards(db, G1, NOW);
+    expect(scores(first.lists["spent:all"])).toEqual([[1, "marcus", 11900], [2, "gavin", 2000]]);
+    expect(scores(first.lists["hosted:all"])).toEqual([[1, "gavin", 1], [1, "marcus", 1]]);
+    expect(scores(first.lists["visits:all"])).toEqual([[1, "marcus", 2], [2, "gavin", 1]]);
+    expect(first.lists["spent:all"].map((r) => r.name)).toEqual(["Marcus", "Gavin"]);
+
+    const second = await serverBoards(db, G2, NOW);
+    expect(scores(second.lists["spent:all"])).toEqual([[1, "marcus", 11900], [2, "theo", 900]]);
+    expect(second.lists["spent:all"][0]!.name).toBe("Marc the Belayer");
+  });
+
+  it("counts a month from everywhere, for this server's people only", async () => {
+    await both();
+    const { month, lists } = await serverBoards(db, G1, NOW);
+    expect(month).toBe("2026-10");
+    expect(scores(lists["spent:month"])).toEqual([[1, "marcus", 9900]]);
+  });
+
+  it("leaves a server with no bills of its own empty, whoever has bills elsewhere", async () => {
+    await both();
+    const { lists } = await serverBoards(db, "guild-3", NOW);
+    expect(lists["spent:all"]).toEqual([]);
   });
 });
 
@@ -288,6 +349,31 @@ describe("the indexes", () => {
       .all<{ detail: string }>();
     const plan = results.map((r) => r.detail).join("\n");
     expect(plan).toMatch(/idx_participants_person|idx_bills_guild_status/);
+    expect(plan).not.toMatch(/SCAN/);
+  });
+
+  it("reads a person across servers from the person, not a scan", async () => {
+    const { results } = await db
+      .prepare("EXPLAIN QUERY PLAN SELECT b.id FROM participants p JOIN bills b ON b.id = p.bill_id WHERE p.id = ? AND p.kind = 'member' AND b.status = 'confirmed'")
+      .bind("gavin")
+      .all<{ detail: string }>();
+    const plan = results.map((r) => r.detail).join("\n");
+    expect(plan).toMatch(/idx_participants_person/);
+    expect(plan).not.toMatch(/SCAN/);
+  });
+
+  it("starts a board from the server's bills, not a scan", async () => {
+    const { results } = await db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT b.id FROM participants p JOIN bills b ON b.id = p.bill_id
+         WHERE p.kind = 'member' AND b.status = 'confirmed' AND p.id IN (
+           SELECT h.id FROM participants h JOIN bills hb ON hb.id = h.bill_id
+           WHERE h.kind = 'member' AND hb.status = 'confirmed' AND hb.guild_id = ?)`,
+      )
+      .bind("guild-1")
+      .all<{ detail: string }>();
+    const plan = results.map((r) => r.detail).join("\n");
+    expect(plan).toMatch(/idx_bills_guild_status/);
     expect(plan).not.toMatch(/SCAN/);
   });
 });

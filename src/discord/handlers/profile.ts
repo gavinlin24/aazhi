@@ -10,7 +10,7 @@ import {
 } from "discord-api-types/v10";
 import { personSummary, type Summary } from "../../db/stats";
 import { formatCents } from "../../format";
-import { mintViewerToken } from "../../web/token";
+import { mintMemberProof, mintViewerToken } from "../../web/token";
 import type { InteractionHandler } from "../interactions";
 import { displayName, invokerOf } from "../members";
 import { clip } from "../notices";
@@ -48,15 +48,15 @@ function profileLine(person: Summary): string {
   return `**${name}**: ${plural(person.outings, "outing")}, ${formatCents(person.spentCents)} spent, hosted ${hosted}.`;
 }
 
-function profileUrl(origin: string, guildId: string, person: string, viewer: string, token: string): string {
+function profileUrl(origin: string, guildId: string, person: string, viewer: string, token: string, proof: string | null): string {
   const path = person === viewer ? "" : `/u/${encodeURIComponent(person)}`;
-  return `${origin}/g/${encodeURIComponent(guildId)}${path}?t=${token}`;
+  return `${origin}/g/${encodeURIComponent(guildId)}${path}?t=${token}${proof ? `&m=${proof}` : ""}`;
 }
 
 // The reply is private because the link in it belongs to one viewer. It works
 // from a Discord user id, so someone who has left is still reachable by anyone
-// who can name them. Only this server's bills are ever consulted, so the
-// no-bills reply is the same whether or not they have bills elsewhere.
+// who can name them. The no-bills reply means none anywhere, so it names no
+// server.
 export const profileCommand: InteractionHandler = async (body, env, _ctx, origin) => {
   const who = invokerOf(body);
   const guildId = body.guild_id;
@@ -70,18 +70,19 @@ export const profileCommand: InteractionHandler = async (body, env, _ctx, origin
   if (!summary) {
     return privately(
       person === who.id
-        ? "You have no bills in this server yet."
-        : `${escapeMarkdown(clip(target!.name, MAX_NAME))} has no bills in this server yet.`,
+        ? "You have no bills yet."
+        : `${escapeMarkdown(clip(target!.name, MAX_NAME))} has no bills yet.`,
     );
   }
 
   const server = await guildName(guildId, env);
   const token = await mintViewerToken(guildId, who.id, server && clip(server, MAX_NAME), env.TOKEN_SIGNING_KEY, Date.now());
+  const proof = person === who.id ? null : await mintMemberProof(token, person, env.TOKEN_SIGNING_KEY);
   return privately(profileLine(summary), [
     {
       type: ComponentType.ActionRow,
       components: [
-        { type: ComponentType.Button, style: ButtonStyle.Link, label: "Open profile", url: profileUrl(origin, guildId, person, who.id, token) },
+        { type: ComponentType.Button, style: ButtonStyle.Link, label: "Open profile", url: profileUrl(origin, guildId, person, who.id, token, proof) },
         { type: ComponentType.Button, style: ButtonStyle.Secondary, label: "Post it here", custom_id: `${POST_PREFIX}${person}` },
       ],
     },
@@ -95,7 +96,7 @@ export const postProfile: InteractionHandler = async (body, env) => {
   const guildId = body.guild_id;
   if (body.type !== InteractionType.MessageComponent || !guildId) return privately("That action is not supported.");
   const summary = await personSummary(env.DB, guildId, body.data.custom_id.slice(POST_PREFIX.length));
-  if (!summary) return privately("There are no bills to show for them in this server any more.");
+  if (!summary) return privately("There are no bills to show for them any more.");
   return Response.json({
     type: InteractionResponseType.ChannelMessageWithSource,
     data: { content: profileLine(summary), allowed_mentions: { parse: [] } },

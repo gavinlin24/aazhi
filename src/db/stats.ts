@@ -4,21 +4,25 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // A year of peaks is what fits across a phone.
 const MAX_MONTHS = 12;
 
-// Every statistic is one server's: each query here is scoped by guild, and a
-// person's name comes only from their bills in that server, because the same
-// person can go by another name elsewhere. "Hosted" is always the bill's
-// payer, never the member who added a guest.
+// Going out is one life, so a person's numbers count every server. The server
+// being viewed only decides who is on its boards and which name shows: people
+// go by different names in different groups, so the name from that server wins
+// when they have one. "Hosted" is always the bill's payer, never the member who
+// added a guest. The monthly recap is the per-server view, and it isn't here.
 
 // One person on one confirmed bill: the row every number here is counted from.
-const OUTING_COLUMNS = `b.id AS bill_id, b.place, b.bill_date, b.created_at, b.payer_id,
+const OUTING_COLUMNS = `b.id AS bill_id, b.guild_id, b.place, b.bill_date, b.created_at, b.payer_id,
   p.id AS person, p.display_name, s.owed_cents, s.pardoned,
   EXISTS (SELECT 1 FROM participants o WHERE o.bill_id = b.id AND o.id <> p.id) AS shared`;
 const OUTINGS_FROM = `participants p JOIN bills b ON b.id = p.bill_id
   LEFT JOIN shares s ON s.bill_id = b.id AND s.participant_id = p.id`;
-const CONFIRMED_MEMBER = `p.kind = 'member' AND b.guild_id = ?1 AND b.status = 'confirmed'`;
+const CONFIRMED_MEMBER = `p.kind = 'member' AND b.status = 'confirmed'`;
+const LATEST_NAME = `SELECT n.display_name FROM participants n JOIN bills nb ON nb.id = n.bill_id
+  WHERE n.id = o.id AND n.kind = 'member' AND nb.status = 'confirmed'`;
 
 interface OutingDbRow {
   bill_id: string;
+  guild_id: string;
   place: string | null;
   bill_date: string | null;
   created_at: string;
@@ -32,7 +36,8 @@ interface OutingDbRow {
 
 interface CompanionDbRow {
   id: string;
-  name: string;
+  name_here: string | null;
+  name_anywhere: string;
   outings: number;
   they_hosted: number;
   person_hosted: number;
@@ -41,6 +46,9 @@ interface CompanionDbRow {
 export interface Companion {
   id: ParticipantId;
   name: string;
+  // Has a confirmed bill in the server being viewed, which is what makes them
+  // someone a viewer there can tap through to.
+  inServer: boolean;
   outings: number;
   // Of the bills the two shared: who paid.
   theyHosted: number;
@@ -153,28 +161,36 @@ function hostedBy(row: OutingDbRow, who: ParticipantId): boolean {
   return row.payer_id === who && row.shared === 1;
 }
 
-function summarize(rows: OutingDbRow[]): Summary | null {
+// Rows run oldest first, so the last one from a server has the latest name there.
+function summarize(rows: OutingDbRow[], guildId: string): Summary | null {
   const last = rows.at(-1);
   if (!last) return null;
   return {
     id: last.person,
-    name: last.display_name,
+    name: (rows.filter((r) => r.guild_id === guildId).at(-1) ?? last).display_name,
     outings: rows.length,
     spentCents: rows.reduce((sum, r) => sum + spentOn(r), 0),
     hosted: rows.filter((r) => hostedBy(r, last.person)).length,
   };
 }
 
-function personOutings(db: D1Database, guildId: string, who: ParticipantId, columns = OUTING_COLUMNS): D1PreparedStatement {
-  return db
-    .prepare(`SELECT ${columns} FROM ${OUTINGS_FROM} WHERE p.id = ?2 AND ${CONFIRMED_MEMBER} ORDER BY b.created_at, b.id`)
-    .bind(guildId, who);
+function personOutings(db: D1Database, who: ParticipantId, columns = OUTING_COLUMNS): D1PreparedStatement {
+  return db.prepare(`SELECT ${columns} FROM ${OUTINGS_FROM} WHERE p.id = ? AND ${CONFIRMED_MEMBER} ORDER BY b.created_at, b.id`).bind(who);
 }
 
-// Null when the person has no confirmed bill in this server, whatever they
-// have elsewhere.
+// Null only for someone with no confirmed bill anywhere.
 export async function personSummary(db: D1Database, guildId: string, who: ParticipantId): Promise<Summary | null> {
-  return summarize((await personOutings(db, guildId, who).all<OutingDbRow>()).results);
+  return summarize((await personOutings(db, who).all<OutingDbRow>()).results, guildId);
+}
+
+// The app has no member list, so a confirmed bill here is how it knows someone
+// belongs to this server.
+export async function hasBillHere(db: D1Database, guildId: string, who: ParticipantId): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT 1 FROM ${OUTINGS_FROM} WHERE p.id = ?1 AND b.guild_id = ?2 AND ${CONFIRMED_MEMBER} LIMIT 1`)
+    .bind(who, guildId)
+    .first();
+  return row !== null;
 }
 
 function monthWindow(first: string, last: string): string[] {
@@ -196,25 +212,27 @@ function monthSpend(rows: OutingDbRow[], first: string, last: string): MonthSpen
 
 // A shared plate counts once for each person on it. Money-off lines are not
 // something anyone ordered.
-function dishesStatement(db: D1Database, guildId: string, who: ParticipantId): D1PreparedStatement {
+function dishesStatement(db: D1Database, who: ParticipantId): D1PreparedStatement {
   return db
     .prepare(
       `SELECT i.label FROM participants p JOIN bills b ON b.id = p.bill_id
        JOIN bill_items i ON i.bill_id = b.id
        JOIN item_claims c ON c.bill_item_id = i.id AND c.participant_id = p.id
-       WHERE p.id = ?2 AND ${CONFIRMED_MEMBER} AND i.cents > 0
+       WHERE p.id = ? AND ${CONFIRMED_MEMBER} AND i.cents > 0
        ORDER BY b.created_at, b.id, i.position`,
     )
-    .bind(guildId, who);
+    .bind(who);
 }
 
-// SQLite takes a bare column from the row that held the MAX, so `name` is
-// what they went by on the latest bill the two shared.
+// A companion can come from a server the viewer isn't in, so their name is
+// looked up on its own rather than read off the bills the two shared.
 function companionsStatement(db: D1Database, guildId: string, who: ParticipantId): D1PreparedStatement {
   return db
     .prepare(
-      `SELECT o.id, o.display_name AS name, COUNT(*) AS outings, MAX(b.created_at) AS latest,
-         SUM(b.payer_id = o.id) AS they_hosted, SUM(b.payer_id = p.id) AS person_hosted
+      `SELECT o.id, COUNT(*) AS outings, MAX(b.created_at) AS latest,
+         SUM(b.payer_id = o.id) AS they_hosted, SUM(b.payer_id = p.id) AS person_hosted,
+         (${LATEST_NAME} AND nb.guild_id = ?1 ORDER BY nb.created_at DESC, nb.id DESC LIMIT 1) AS name_here,
+         (${LATEST_NAME} ORDER BY nb.created_at DESC, nb.id DESC LIMIT 1) AS name_anywhere
        FROM participants p JOIN bills b ON b.id = p.bill_id
        JOIN participants o ON o.bill_id = p.bill_id AND o.id <> p.id AND o.kind = 'member'
        WHERE p.id = ?2 AND ${CONFIRMED_MEMBER}
@@ -223,29 +241,19 @@ function companionsStatement(db: D1Database, guildId: string, who: ParticipantId
     .bind(guildId, who);
 }
 
-// Oldest by the day it was made, which is close enough to anchor a window.
-function firstBillStatement(db: D1Database, guildId: string): D1PreparedStatement {
-  return db
-    .prepare(`SELECT bill_date, created_at FROM bills WHERE guild_id = ? AND status = 'confirmed' ORDER BY created_at LIMIT 1`)
-    .bind(guildId);
-}
-
 export async function personProfile(db: D1Database, guildId: string, who: ParticipantId, nowMs: number): Promise<Profile | null> {
   const total = "(SELECT COALESCE(SUM(t.owed_cents), 0) FROM shares t WHERE t.bill_id = b.id) AS total_cents";
-  const [outings, dishes, companions, first] = await db.batch<unknown>([
-    personOutings(db, guildId, who, `${OUTING_COLUMNS}, ${total}`),
-    dishesStatement(db, guildId, who),
+  const [outings, dishes, companions] = await db.batch<unknown>([
+    personOutings(db, who, `${OUTING_COLUMNS}, ${total}`),
+    dishesStatement(db, who),
     companionsStatement(db, guildId, who),
-    firstBillStatement(db, guildId),
   ]);
   const rows = outings!.results as (OutingDbRow & { total_cents: number })[];
-  const summary = summarize(rows);
+  const summary = summarize(rows, guildId);
   if (!summary) return null;
 
   const monthsOf = rows.map((r) => monthOf(r.bill_date, r.created_at));
-  const oldest = (first!.results as { bill_date: string | null; created_at: string }[])[0]!;
   const firstMonth = monthsOf.reduce((a, b) => (b < a ? b : a));
-  const start = [monthOf(oldest.bill_date, oldest.created_at), firstMonth].reduce((a, b) => (b < a ? b : a));
   const end = [monthAt(nowMs), ...monthsOf].reduce((a, b) => (b > a ? b : a));
 
   const hosted = rows.filter((r) => hostedBy(r, who));
@@ -254,7 +262,7 @@ export async function personProfile(db: D1Database, guildId: string, who: Partic
   return {
     ...summary,
     firstMonth,
-    months: monthSpend(rows, start, end),
+    months: monthSpend(rows, firstMonth, end),
     frontedCents: hosted.reduce((sum, r) => sum + r.total_cents, 0),
     favorite: mostUsed(places),
     dish: mostUsed((dishes!.results as { label: string }[]).map((d) => d.label)),
@@ -262,7 +270,8 @@ export async function personProfile(db: D1Database, guildId: string, who: Partic
     biggest: { cents: biggest.total_cents, place: biggest.place?.trim() || null },
     companions: (companions!.results as CompanionDbRow[]).map((c) => ({
       id: c.id,
-      name: c.name,
+      name: c.name_here ?? c.name_anywhere,
+      inServer: c.name_here !== null,
       outings: c.outings,
       theyHosted: c.they_hosted,
       personHosted: c.person_hosted,
@@ -298,13 +307,17 @@ function boardLists(rows: OutingDbRow[], names: Map<ParticipantId, string>): [Ra
 
 // The board's month is the current one, or last month until the current one
 // has a bill, so the 1st is never an empty page.
+// The rows are this server's people and the numbers are each person's whole
+// total, so a board compares friends here on everything they've done.
 export async function serverBoards(db: D1Database, guildId: string, nowMs: number): Promise<Boards> {
+  const peopleHere = `SELECT h.id FROM participants h JOIN bills hb ON hb.id = h.bill_id
+    WHERE h.kind = 'member' AND hb.status = 'confirmed' AND hb.guild_id = ?`;
   const { results: rows } = await db
-    .prepare(`SELECT ${OUTING_COLUMNS} FROM ${OUTINGS_FROM} WHERE ${CONFIRMED_MEMBER} ORDER BY b.created_at, b.id`)
+    .prepare(`SELECT ${OUTING_COLUMNS} FROM ${OUTINGS_FROM} WHERE ${CONFIRMED_MEMBER} AND p.id IN (${peopleHere}) ORDER BY b.created_at, b.id`)
     .bind(guildId)
     .all<OutingDbRow>();
-  // Rows run oldest first, so each person's latest name lands last.
-  const names = new Map(rows.map((r) => [r.person, r.display_name]));
+  // Rows run oldest first, so each person's latest name here lands last.
+  const names = new Map(rows.filter((r) => r.guild_id === guildId).map((r) => [r.person, r.display_name]));
   const monthly = rows.map((row) => ({ row, month: monthOf(row.bill_date, row.created_at) }));
   const current = monthAt(nowMs);
   const month = monthly.some((m) => m.month === current) ? current : shiftMonth(current, -1);

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/index";
 import { commands } from "../../src/discord/commands";
 import type { Env } from "../../src/env";
-import { readViewerToken } from "../../src/web/token";
+import { checkMemberProof, mintViewerToken, readViewerToken } from "../../src/web/token";
 import { seedOuting } from "../fixtures/outings";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
 
@@ -132,10 +132,11 @@ describe("/profile", () => {
     expect(grant).toEqual({ guildId: GUILD, viewerId: "gavin", guildName: "Friday Table" });
   });
 
-  it("uses the name from this server's bills rather than the option's", async () => {
+  it("uses the name from this server's bills rather than the option's or another server's", async () => {
     await twoBills();
+    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["marcus", "Marc the Belayer"]], items: [["Eggs", 900, ["marcus"]]] });
     const reply = await send(profileBody({ id: "marcus", nick: "Some Other Nick" }));
-    expect(reply.data.content).toMatch(/^\*\*Marcus\*\*/);
+    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted 0 times.");
   });
 
   it("still answers when Discord will not say the server's name", async () => {
@@ -150,8 +151,13 @@ describe("/profile", () => {
   it("fits Discord's 512-character button URL at the longest name", async () => {
     await twoBills();
     serverReply = () => Response.json({ name: "朋友们的周五晚餐俱乐部".repeat(9) });
-    const reply = await send(profileBody({ id: "marcus" }));
-    expect(reply.data.components[0].components[0].url.length).toBeLessThan(512);
+    const reply = await send(profileBody({ id: "1234567890123456789" }));
+    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["1234567890123456789", "Theo"]], items: [["Eggs", 900, ["1234567890123456789"]]] });
+    const longest = await send(profileBody({ id: "1234567890123456789" }));
+    expect(reply.data.components).toBeUndefined();
+    const { url } = longest.data.components[0].components[0];
+    expect(url).toContain("&m=");
+    expect(url.length).toBeLessThan(512);
   });
 
   it("escapes Markdown in a name", async () => {
@@ -162,18 +168,18 @@ describe("/profile", () => {
 
   it("says you have no bills, with no button", async () => {
     const reply = await send(profileBody());
-    expect(reply.data).toMatchObject({ content: "You have no bills in this server yet.", flags: EPHEMERAL });
+    expect(reply.data).toMatchObject({ content: "You have no bills yet.", flags: EPHEMERAL });
     expect(reply.data.components).toBeUndefined();
     expect(lookups).toEqual([]);
   });
 
   it("says someone has no bills, with no button", async () => {
     const reply = await send(profileBody({ id: "priya", nick: "Priya" }));
-    expect(reply.data.content).toBe("Priya has no bills in this server yet.");
+    expect(reply.data.content).toBe("Priya has no bills yet.");
     expect(reply.data.components).toBeUndefined();
   });
 
-  it("gives the same reply for someone with bills only in another server", async () => {
+  it("takes naming someone as proof they're here, even with bills only in another server", async () => {
     await seedOuting(db, {
       id: "elsewhere",
       guild: "guild-2",
@@ -181,12 +187,30 @@ describe("/profile", () => {
       items: [["Eggs", 900, ["theo"]]],
     });
     const reply = await send(profileBody({ id: "theo", nick: "Theo" }));
-    expect(reply.data.content).toBe("Theo has no bills in this server yet.");
+    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted 0 times.");
+
+    const url = new URL(reply.data.components[0].components[0].url);
+    expect(await checkMemberProof(url.searchParams.get("m")!, url.searchParams.get("t")!, "theo", "k")).toBe(true);
+    const page = await app.request(url.pathname + url.search, {}, env());
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("Theo Elsewhere");
+  });
+
+  it("gives the plain command no proof, because it vouches for nobody", async () => {
+    await twoBills();
+    const reply = await send(profileBody());
+    expect(new URL(reply.data.components[0].components[0].url).searchParams.has("m")).toBe(false);
+  });
+
+  it("will not open someone else from a link for the plain command", async () => {
+    await seedOuting(db, { id: "elsewhere", guild: "guild-2", people: [["theo", "Theo"]], items: [["Eggs", 900, ["theo"]]] });
+    const token = await mintViewerToken(GUILD, "gavin", null, "k", Date.now());
+    expect((await app.request(`/g/${GUILD}/u/theo?t=${token}`, {}, env())).status).toBe(403);
   });
 
   it("counts only drafts as no bills", async () => {
     await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]], draft: true });
-    expect((await send(profileBody())).data.content).toBe("You have no bills in this server yet.");
+    expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
   });
 
   it("turns a bot away", async () => {
