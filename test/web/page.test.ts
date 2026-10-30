@@ -92,11 +92,6 @@ describe("renderPage", () => {
       expect(pressed.map((b) => b.attrs["data-item"])).toEqual(["rolls", "bun"]);
       expect((await select(html, "li.item.is-unclaimed")).map((r) => r.attrs["data-item"])).toEqual(["tea", "water"]);
       expect(html).toMatch(/\.is-unclaimed \.tick\s*\{[^}]*dashed/);
-
-      const ring = await one(html, "[data-bar] [data-jump-unclaimed]");
-      expect(ring.text).toBe("2 left");
-      expect(ring.attrs["aria-label"]).toBe("2 left to claim");
-      expect(await select(page("marcus", bill, SAIGON), "[data-jump-unclaimed]")).toEqual([]);
     });
 
     it("shows the viewer's piece of a shared line, and nothing on a line that is theirs alone", async () => {
@@ -118,8 +113,9 @@ describe("renderPage", () => {
       // Bun bo Hue is Marcus's alone; spring rolls are shared.
       expect(await bare("bun")).toBe(true);
       expect(await bare("rolls")).toBe(false);
-      expect(html).toMatch(/\.row\s*\{[^}]*grid-template-rows:\s*23px 22px/);
-      expect(html).toMatch(/\.is-bare \.row\s*\{[^}]*grid-template-rows:\s*30px/);
+      // The name's line grows when a long name wraps; the avatar line below it doesn't.
+      expect(html).toMatch(/\.row\s*\{[^}]*grid-template-rows:\s*minmax\(23px, auto\) 22px/);
+      expect(html).toMatch(/\.is-bare \.row\s*\{[^}]*grid-template-rows:\s*minmax\(23px, auto\);/);
     });
 
     it("marks the viewer, and gives a member one tap per line for their own claim", async () => {
@@ -176,16 +172,14 @@ describe("renderPage", () => {
     }
   });
 
-  it("shows the viewer's running amount in the bar and each person's on their tile", async () => {
+  it("shows the viewer what they owe in the bar and each person's on their tile", async () => {
     const html = page("marcus");
 
     expect(await textOf(html, "[data-you-owed]")).toBe("$38.02");
-    const bar = await one(html, "[data-bar]");
-    expect(bar.text).toContain("$38.02");
-    // Amount, arrow, whoever receives it: the payer.
-    expect(await textOf(html, "[data-bar] .owe")).toBe("you owe $38.02");
-    expect(await textOf(html, "[data-bar] .bar-in > .av.payer")).toBe("G");
-    expect(await select(html, "[data-bar] .stack")).toEqual([]);
+    // Only what is owed: no count of what is left to claim, nothing to tap.
+    const owes = await select(html, "[data-bar] .owe");
+    expect(owes.map((o) => o.text)).toEqual(["MYou owe$38.02"]);
+    expect(await select(html, "[data-bar] button")).toEqual([]);
     expect(await textOf(html, '[data-owed="marcus"]')).toBe("$38.02");
     expect(await textOf(html, '[data-owed="jess"]')).toBe("$37.38");
 
@@ -199,13 +193,11 @@ describe("renderPage", () => {
     expect(await select(html, ".badge.coin")).toHaveLength(1);
   });
 
-  it("tells the payer what the table owes them", async () => {
+  it("gives the payer the same bar as everyone else: their own share", async () => {
     const html = page("gavin");
-    expect(await textOf(html, "[data-you-owed]")).toBe(`$${(splitBill(draft).payerCollectsCents / 100).toFixed(2)}`);
-    // The same order as everyone else's bar, with the payer as the one receiving.
-    expect(await textOf(html, "[data-bar] .owe-label")).toBe("to collect");
-    expect((await one(html, "[data-bar] .bar-in > .av.payer")).attrs.class).toContain("is-viewer");
-    expect(await select(html, "[data-bar] .stack")).toEqual([]);
+    const own = splitBill(draft).shares.find((x) => x.participant === "gavin")!.owedCents;
+    expect(await textOf(html, "[data-you-owed]")).toBe(formatCents(own));
+    expect((await select(html, "[data-bar] .owe")).map((o) => o.text)).toEqual([`GYou owe${formatCents(own)}`]);
   });
 
   describe("who a tap claims for", () => {
@@ -215,24 +207,26 @@ describe("renderPage", () => {
     it("puts you and your guests in the bar, you pressed, so switching is one tap", async () => {
       const html = page("dani", bill, withSam, people);
 
-      const row = await one(html, "[data-bar] [data-claimers]");
-      expect(row.attrs.hidden).toBeUndefined();
+      const row = await one(html, "[data-bar] [data-owes]");
+      expect(row.attrs.role).toBe("group");
       expect(row.attrs["aria-label"]).toBe("Claim for");
-      const chips = await select(html, "[data-claimers] button.claimer");
-      // Each chip carries that person's share of the total beside them.
+      // Each one says what that person owes, so picking a guest also shows theirs.
       const owed = (id: string) => formatCents(splitBill(withSam).shares.find((x) => x.participant === id)!.owedCents);
+      const chips = await select(html, "[data-owes] button.owe");
       expect(chips.map((c) => [c.attrs["data-claim-as"], c.attrs["aria-pressed"], c.text])).toEqual([
-        ["dani", "true", `DDani${owed("dani")}`],
-        ["guest-sam", "false", `SSam${owed("guest-sam")}`],
+        ["dani", "true", `DYou owe${owed("dani")}`],
+        ["guest-sam", "false", `SSam owes${owed("guest-sam")}`],
       ]);
-      expect(html).toMatch(/\.claimers\[hidden\]\s*\{\s*display:\s*none/);
+      expect(await textOf(html, "[data-you-owed]")).toBe(owed("dani"));
     });
 
-    it("stays out of the way for anyone with nobody else to claim for", async () => {
+    it("is only what you owe for anyone with nobody else to claim for", async () => {
       for (const viewer of ["marcus", "gavin"]) {
         const html = page(viewer, bill, withSam, people);
-        expect((await one(html, "[data-claimers]")).attrs.hidden, viewer).toBe("");
-        expect(await select(html, "[data-claimers] button"), viewer).toEqual([]);
+        const row = await one(html, "[data-bar] [data-owes]");
+        expect(row.attrs.role, viewer).toBeUndefined();
+        expect(await select(html, "[data-owes] .owe"), viewer).toHaveLength(1);
+        expect(await select(html, "[data-owes] button"), viewer).toEqual([]);
       }
     });
   });
@@ -250,10 +244,9 @@ describe("renderPage", () => {
     expect(await textOf(html, '[data-total="unclaimed"]')).toBe("$27.06");
   });
 
-  it("reads the payer's receipt as subtotal less discount plus tax, before the tip", async () => {
+  it("reads the payer's receipt as subtotal less discount plus tax, then the tip", async () => {
     const rows = await select(page("gavin"), ".totals > .trow");
-    expect(rows.map((r) => /^[A-Za-z]+/.exec(r.text)?.[0])).toEqual(["Subtotal", "Discount", "Tax", "Receipt", "Tip", "Total", "Unclaimed"]);
-    expect(rows[3]!.attrs.class).toContain("receipt-row");
+    expect(rows.map((r) => /^[A-Za-z]+/.exec(r.text)?.[0])).toEqual(["Subtotal", "Discount", "Tax", "Tip", "Total", "Unclaimed"]);
   });
 
   it("shows a whole-bill discount as money off between the subtotal and tax", async () => {
@@ -443,36 +436,38 @@ describe("renderPage", () => {
     expect(await textOf(page("marcus", { ...bill, status: "reading" }, SAIGON), "[data-status-label] .word")).toBe("Reading");
   });
 
-  it("shows the payer whether the read adds up, and lets them fix each amount in place", async () => {
+  it("asks the payer for the receipt total only when the lines don't add up to it, beside Confirm", async () => {
     const adds = page("gavin");
-    expect((await one(adds, "[data-reconcile]")).attrs.class).toContain("is-ok");
-    expect(await textOf(adds, "[data-reconcile] .mark")).toBe("Adds up");
-    expect(await textOf(adds, '[data-total="printed"]')).toBe("$273.82");
+    expect(await select(adds, '[data-field-row="printedTotal"], [data-total="printed"]')).toEqual([]);
     const fields = await select(adds, "button.amt[data-edit-field]");
-    expect(fields.map((f) => f.attrs["data-edit-field"])).toEqual(["discount", "tax", "printedTotal", "tip"]);
-    expect(fields.map((f) => f.attrs["aria-label"])).toEqual(["Discount, $0.00", "Tax, $22.32", "Printed total, $273.82", "Tip, $50.30"]);
+    expect(fields.map((f) => f.attrs["data-edit-field"])).toEqual(["discount", "tax", "tip"]);
+    expect(fields.map((f) => f.attrs["aria-label"])).toEqual(["Discount, $0.00", "Tax, $22.32", "Tip, $50.30"]);
     // Adding a line needs the script; without it the payer still sees the check.
     expect(await select(adds, "[data-add-line].needs-js")).toHaveLength(1);
 
     const misread = withItem(SAIGON, { id: "extra", label: "Misread", cents: 5000, claimedBy: [] });
     const over = page("gavin", bill, misread);
-    expect((await one(over, "[data-reconcile]")).attrs.class).toContain("is-off");
-    expect(await textOf(over, "[data-reconcile] .mark")).toBe("+$50.00");
+    expect(await select(over, '.totals [data-field-row="printedTotal"]')).toEqual([]);
+    const row = await one(over, '[data-actions] [data-field-row="printedTotal"]');
+    expect(row.text).toContain("Receipt total");
+    expect((await one(over, '[data-edit-field="printedTotal"]')).attrs["aria-label"]).toBe("Receipt total, $273.82");
+    expect(await textOf(over, "#confirm-why")).toBe("Line items do not add up to total!");
 
     const unread = page("gavin", { ...bill, printedTotalCents: null });
-    expect(await textOf(unread, "[data-reconcile] .mark")).toBe("Not entered");
     expect(await textOf(unread, '[data-total="printed"]')).toBe("—");
-    expect((await one(unread, '[data-edit-field="printedTotal"]')).attrs["aria-label"]).toBe("Printed total, not entered");
+    expect((await one(unread, '[data-edit-field="printedTotal"]')).attrs["aria-label"]).toBe("Receipt total, not entered");
 
-    expect(await select(page("marcus"), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
-    expect(await select(page("gavin", confirmedBill, SAIGON), "[data-reconcile], [data-add-line], [data-edit-field]")).toEqual([]);
+    for (const html of [page("marcus", bill, misread), page("gavin", confirmedBill, SAIGON)]) {
+      expect(await select(html, "[data-field-row=\"printedTotal\"], [data-add-line], [data-edit-field]")).toEqual([]);
+    }
   });
 
   it("marks every value the payer can change with a brush, and nothing anyone else sees", async () => {
     const payer = page("gavin");
     expect((await one(payer, "section[data-items]")).attrs.class).toContain("is-editable");
     expect(await select(payer, "li.item .item-price .brush")).toHaveLength(SAIGON.items.length);
-    expect(await select(payer, "button.amt[data-edit-field] > .brush")).toHaveLength(4);
+    expect(await select(payer, "button.amt[data-edit-field] > .brush")).toHaveLength(3);
+    expect(await select(page("gavin", { ...bill, printedTotalCents: null }), "button.amt[data-edit-field] > .brush")).toHaveLength(4);
     expect(await select(payer, "header button.payer-chip .brush")).toHaveLength(1);
     // Read-only figures on the payer's own receipt stay plain.
     expect(await select(payer, '[data-total="subtotal"] .brush, [data-total="total"] .brush, .piece .brush')).toEqual([]);
@@ -528,7 +523,7 @@ describe("renderPage", () => {
     expect(await select(html, "header span.payer-chip")).toHaveLength(1);
     expect(stateOf(html).hasPayments).toBe(true);
     // The rest of the payer's corrections stay available.
-    expect(await select(html, "[data-edit-field]")).toHaveLength(4);
+    expect(await select(html, "[data-edit-field]")).toHaveLength(3);
 
     const unpaid = page("gavin");
     expect(await select(unpaid, "[data-open-payer]")).toHaveLength(1);
@@ -877,14 +872,15 @@ describe("renderPage", () => {
     expect(CLIENT_SCRIPT).not.toMatch(/<\/script/i);
   });
 
-  it("spends its font budget on the numerals and the three seal characters only", () => {
+  it("spends its font budget on the numerals and the brush, for Latin names and the three seal characters only", () => {
     const html = page("marcus");
     const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? [];
     expect(faces).toHaveLength(2);
     expect(faces.join("")).toContain("unicode-range: U+2C-2E, U+30-39");
-    expect(faces.join("")).toContain("unicode-range: U+4ED8, U+5B9A, U+8BAB");
+    expect(faces.join("")).toContain("unicode-range: U+20-7E, U+4ED8, U+5B9A, U+8BAB");
+    // Inline on every page load, so a subset that grows past this is a regression.
     const bytes = faces.join("").length;
-    expect(bytes).toBeLessThan(8_000);
+    expect(bytes).toBeLessThan(24_000);
   });
 });
 
