@@ -1,0 +1,224 @@
+import { env as workerEnv } from "cloudflare:workers";
+import { beforeEach, describe, expect, it } from "vitest";
+import app from "../../src/index";
+import type { Env } from "../../src/env";
+import { mintToken, mintViewerToken, TOKEN_TTL_MS } from "../../src/web/token";
+import { seedOuting } from "../fixtures/outings";
+import { one, select, textOf } from "./html";
+
+const db = workerEnv.DB;
+const KEY = "profile-test-signing-key";
+
+function env(): Env {
+  return {
+    DB: db,
+    DISCORD_PUBLIC_KEY: "00",
+    DISCORD_BOT_TOKEN: "bot-token",
+    DISCORD_APPLICATION_ID: "app-1",
+    ANTHROPIC_API_KEY: "unused",
+    TOKEN_SIGNING_KEY: KEY,
+  };
+}
+
+const viewerToken = (viewer = "gavin", guild = "guild-1", at = Date.now()) => mintViewerToken(guild, viewer, "Friday Table", KEY, at);
+const get = (path: string) => app.request(path, {}, env());
+
+beforeEach(async () => {
+  await db.prepare("DELETE FROM bills").run();
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0, 10);
+  await seedOuting(db, {
+    id: "a1",
+    people: [["gavin", "Gavin"], ["marcus", "Marcus <b>"]],
+    place: "Saigon Kitchen",
+    billDate: thisMonth,
+    items: [["Pho dac biet", 2000, ["gavin"]], ["Bun bo Hue", 3000, ["marcus"]]],
+  });
+  await seedOuting(db, {
+    id: "z1",
+    guild: "guild-2",
+    channel: "chan-2",
+    people: [["marcus", "Marc the Belayer"], ["theo", "Theo"]],
+    place: "Crag Cafe",
+    billDate: thisMonth,
+    items: [["Toast", 9900, ["marcus"]], ["Eggs", 900, ["theo"]]],
+  });
+});
+
+describe("who can open a server's pages", () => {
+  it("opens the viewer's own profile and marks the page as uncacheable", async () => {
+    const res = await get(`/g/guild-1?t=${await viewerToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await textOf(await res.text(), "h1")).toContain("Gavin");
+  });
+
+  it("refuses a missing, tampered or expired token and says to run /profile again", async () => {
+    const stale = await viewerToken("gavin", "guild-1", Date.now() - TOKEN_TTL_MS - 1);
+    for (const t of ["", "nonsense", `${await viewerToken()}x`, stale]) {
+      const res = await get(`/g/guild-1?t=${t}`);
+      expect(res.status, t).toBe(403);
+      expect(await res.text()).toContain("/profile");
+    }
+  });
+
+  it("refuses a bill token", async () => {
+    const token = await mintToken("a1", "gavin", KEY, Date.now());
+    expect((await get(`/g/guild-1?t=${token}`)).status).toBe(403);
+    expect((await get(`/g/guild-1/boards?t=${token}`)).status).toBe(403);
+  });
+
+  it("will not let a viewer token open a bill or its API", async () => {
+    const token = await viewerToken();
+    expect((await get(`/b/a1?t=${token}`)).status).toBe(403);
+    const state = (t: string) => app.request("/b/a1/state", { headers: { authorization: `Bearer ${t}` } }, env());
+    expect((await state(token)).status).toBe(403);
+    expect((await state(await mintToken("a1", "gavin", KEY, Date.now()))).status).toBe(200);
+  });
+
+  it("refuses a token from another server, on every page", async () => {
+    const token = await viewerToken("gavin", "guild-2");
+    for (const path of ["/g/guild-1", "/g/guild-1/boards", "/g/guild-1/u/marcus"]) {
+      expect((await get(`${path}?t=${token}`)).status, path).toBe(403);
+    }
+  });
+});
+
+describe("the profile page", () => {
+  it("shows the range with one hit area per month, and no seal strip", async () => {
+    const html = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
+    expect(await textOf(html, ".hero-amt")).toBe("$20.00");
+    expect(await textOf(html, ".hero-sub")).toBe("1 outing so far.");
+    expect((await select(html, ".hit")).length).toBe(1);
+    expect((await one(html, ".hit")).attrs["data-line"]).toMatch(/^\$20\.00 in [A-Z][a-z]+, 1 outing\.$/);
+    expect(await select(html, ".chip-back")).toHaveLength(0);
+    expect(await select(html, ".pair-card")).toHaveLength(0);
+    expect(html).not.toMatch(/seal-strip|seal-card/);
+  });
+
+  it("carries the server's name, and copes without it", async () => {
+    const named = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
+    expect(await textOf(named, ".meta")).toContain("Friday Table");
+    const token = await mintViewerToken("guild-1", "gavin", null, KEY, Date.now());
+    const plain = await (await get(`/g/guild-1?t=${token}`)).text();
+    expect(await textOf(plain, ".meta")).toMatch(/^since /);
+  });
+
+  it("adds the Back to you chip and the pair card on someone else's page", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/u/marcus?t=${token}`)).text();
+    expect((await one(html, ".chip-back")).attrs.href).toBe(`/g/guild-1?t=${token}`);
+    expect(await textOf(html, ".pair-card .card-h")).toBe("You and Marcus &lt;b&gt;");
+    expect((await select(html, ".fig")).map((f) => f.text)).toEqual(["1", "0", "1"]);
+    expect(html).not.toContain("Marcus <b>");
+  });
+
+  it("gives a long name its own line and keeps it out of the narrow card label", async () => {
+    await seedOuting(db, {
+      id: "a2",
+      people: [["gavin", "Gavin"], ["alex", "Alexandria Featherstonehaugh"]],
+      billDate: new Date().toISOString().slice(0, 10),
+      items: [["Pho", 2000, ["gavin"]], ["Bun", 3000, ["alex"]]],
+    });
+    const token = await viewerToken();
+    const long = await (await get(`/g/guild-1/u/alex?t=${token}`)).text();
+    expect((await one(long, ".head")).attrs.class).toContain("is-long");
+    expect((await select(long, ".fl")).map((f) => f.text)).toContain("they hosted");
+    expect(await textOf(long, ".pair-card .card-h")).toBe("You and Alexandria Featherstonehaugh");
+
+    const short = await (await get(`/g/guild-1/u/marcus?t=${token}`)).text();
+    expect((await one(short, ".head")).attrs.class).toBe("head");
+  });
+
+  it("links the companion tile to that person with the same token", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1?t=${token}`)).text();
+    expect((await one(html, "a.tile2")).attrs.href).toBe(`/g/guild-1/u/marcus?t=${token}`);
+  });
+
+  it("treats a viewer's own id as their own page", async () => {
+    const html = await (await get(`/g/guild-1/u/gavin?t=${await viewerToken()}`)).text();
+    expect(await select(html, ".chip-back")).toHaveLength(0);
+  });
+
+  it("says no bills for someone only on another server's bills, and names nobody", async () => {
+    const html = await (await get(`/g/guild-1/u/theo?t=${await viewerToken()}`)).text();
+    expect(await textOf(html, ".pair-none")).toBe("No bills in this server yet.");
+    expect(html).not.toMatch(/Theo|Crag|Belayer|\$9/);
+  });
+
+  it("shows no other server's name or money for someone on both", async () => {
+    const html = await (await get(`/g/guild-1/u/marcus?t=${await viewerToken()}`)).text();
+    expect(html).not.toMatch(/Belayer|Crag|Toast|\$99/);
+  });
+
+  it("tells a viewer with no bills so, and still lets them reach the boards", async () => {
+    const html = await (await get(`/g/guild-1?t=${await viewerToken("noor")}`)).text();
+    expect(await textOf(html, ".pair-none")).toBe("You have no bills in this server yet.");
+    expect((await select(html, ".tabs a")).map((a) => a.text)).toEqual(["Profile", "Boards"]);
+  });
+});
+
+describe("the boards page", () => {
+  it("renders every board and span, with one showing", async () => {
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    const lists = await select(html, "[data-list]");
+    expect(lists.map((l) => l.attrs["data-list"])).toEqual([
+      "hosted:month",
+      "hosted:all",
+      "spent:month",
+      "spent:all",
+      "visits:month",
+      "visits:all",
+    ]);
+    expect(lists.filter((l) => !("hidden" in l.attrs)).map((l) => l.attrs["data-list"])).toEqual(["hosted:month"]);
+  });
+
+  it("opens the board and span the address names, and ignores a bad one", async () => {
+    const t = await viewerToken();
+    const pick = async (query: string) => {
+      const html = await (await get(`/g/guild-1/boards?t=${t}&${query}`)).text();
+      return (await select(html, "[data-list]")).filter((l) => !("hidden" in l.attrs)).map((l) => l.attrs["data-list"]);
+    };
+    expect(await pick("board=spent&span=all")).toEqual(["spent:all"]);
+    expect(await pick("board=nonsense&span=nonsense")).toEqual(["hosted:month"]);
+  });
+
+  it("marks the viewer's row and links each name to a profile", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/boards?t=${token}&board=spent`)).text();
+    const rows = await select(html, '[data-list="spent:month"] .rank-row');
+    expect(rows.map((r) => r.attrs.href)).toEqual([`/g/guild-1/u/marcus?t=${token}`, `/g/guild-1?t=${token}`]);
+    expect((await one(html, '[data-list="spent:month"] .is-me')).text).toContain("you");
+  });
+
+  it("gives the top three a seal numeral and anyone lower a plain number", async () => {
+    for (const [i, id] of ["ann", "bo", "cy", "di"].entries()) {
+      await seedOuting(db, {
+        id: `r${i}`,
+        people: [[id, id.toUpperCase()]],
+        items: [["A", 1000 * (10 - i), [id]]],
+        billDate: new Date().toISOString().slice(0, 10),
+      });
+    }
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}&board=spent`)).text();
+    const list = '[data-list="spent:month"]';
+    expect((await select(html, `${list} .sl text`)).map((t) => t.text)).toEqual(["一", "二", "三"]);
+    expect((await select(html, `${list} .rk`)).map((t) => t.text)).toEqual(["4", "5", "6"]);
+  });
+
+  it("says so when a board has nobody on it", async () => {
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    expect(await textOf(html, '[data-list="visits:month"] .card-h')).toContain("different places");
+    expect(await textOf(html, '[data-list="hosted:all"] .rank-row .nm')).toContain("Gavin");
+    await db.prepare("DELETE FROM bills").run();
+    const empty = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    expect(await textOf(empty, '[data-list="hosted:all"] .pair-none')).toBe("Nobody is on this board yet.");
+  });
+
+  it("keeps another server out of the same person's board rows", async () => {
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}&board=spent`)).text();
+    expect(html).not.toMatch(/Belayer|Theo|\$99/);
+  });
+});

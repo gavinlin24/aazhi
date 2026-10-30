@@ -1,6 +1,7 @@
 import { Script, runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { CLIENT_SCRIPT } from "../../src/web/client";
+import { PROFILE_SCRIPT } from "../../src/web/profile-client";
 
 // Lifts named top-level helpers out of the page script, which only runs
 // against a live page, so their logic can be checked on its own. The match
@@ -21,6 +22,11 @@ function helpers<T>(...names: string[]): T {
 describe("the page script", () => {
   it("parses as a browser script", () => {
     expect(() => new Script(CLIENT_SCRIPT, { filename: "client.js" })).not.toThrow();
+  });
+
+  it("includes the profile script, which has the same trap", () => {
+    expect(() => new Script(PROFILE_SCRIPT, { filename: "profile.js" })).not.toThrow();
+    expect(PROFILE_SCRIPT).not.toContain("</script");
   });
 
 });

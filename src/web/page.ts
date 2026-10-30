@@ -11,7 +11,7 @@ export type { Editable } from "./state";
 
 // Covers text and double-quoted attribute values alike; every attribute this
 // file writes is double-quoted.
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -1122,6 +1122,8 @@ const ICONS: Record<string, string> = {
   receipt: '<path d="M6 3.5h12v17l-2.5-1.6-2.5 1.6-2.5-1.6-2.5 1.6-2.5-1.6zM9 8.5h6M9 12h6M9 15.5h3"/>',
   people: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.3 2.8-5 5.5-5s4.9 1.7 5.5 5"/><circle cx="16.5" cy="9.5" r="2.6"/><path d="M15.5 14.2c2.6-.3 4.4 1.3 5 4.3"/>',
   bowl: '<path d="M3.5 11.5h17a8.5 8.5 0 0 1-17 0zM9 8c-.8-1.4.8-2.2 0-3.8M13 8c-.8-1.4.8-2.2 0-3.8"/>',
+  dish: '<path d="M3.5 13.5h17a8.5 6.5 0 0 1-17 0z"/><path d="M7 10.5L19.5 4M9.5 11L20.5 6.5"/>',
+  pin: '<path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/>',
   // A woven basket with a crumpled sheet in it: what you throw away.
   basket: '<path d="M5 11h14l-1.8 9.4H6.8z"/><path d="M6 15.4h12M10.2 11.4l.4 8.6M13.8 11.4l-.4 8.6"/><path d="M8.9 10.6l-.6-3.1 2.2-2.6 3.1-.3 2.4 2-.3 3.1M10.5 4.9l1.4 3.2 4.2-1.1M11.9 8.1l-.5 2.5"/>',
   cloud: '<path d="M5.6 17.6C3.8 17.6 2.6 16.3 2.6 14.8c0-1.7 1.5-3 3.2-2.8.3-2.7 2.5-4.6 5.2-4.6 2.3 0 4.2 1.4 4.9 3.4 2.4-.4 4.6 1.3 4.6 3.6 0 1.8-1.3 3.2-3.1 3.2z"/><path d="M8.6 14.6c-.2-1.4 1.3-2.4 2.5-1.6 1 .6.9 2.1-.2 2.4"/><path d="M15.4 14.2c.4-1 1.8-1.1 2.3-.2"/>',
@@ -1131,7 +1133,7 @@ const ICONS: Record<string, string> = {
     '<path fill="currentColor" stroke="none" d="M11.6 11.6c-2.6.1-5.1 4.2-6.7 8.3 4.1-1.6 8.2-4.1 8.3-6.7z"/><path fill="currentColor" stroke="none" d="M3 21.4c3-1 6.4-1.3 10-.9.4.1.4.5 0 .5-3.4 0-6.6.4-9.7 1-.5.1-.7-.4-.3-.6z"/>',
 };
 
-function sprite(): string {
+export function sprite(): string {
   const symbols = Object.entries(ICONS)
     .map(([name, paths]) => `<symbol id="i-${name}" viewBox="0 0 24 24">${paths}</symbol>`)
     .join("");
@@ -1151,18 +1153,18 @@ const MID_HILLS = "M0 88C24 80 40 62 66 66C90 70 104 84 130 78C152 73 168 56 192
 
 // The viewBox trims the ends of the paths, where the displacement would
 // otherwise pull the wash in from the sides.
-function hills(moon: boolean): string {
+export function hills(moon: boolean): string {
   return `<div class="hills" aria-hidden="true">${moon ? '<span class="moon"></span>' : ""}<svg viewBox="5 0 380 120" preserveAspectRatio="none">` +
     `<path class="far" d="${FAR_HILLS}" mask="url(#m-fade)" filter="url(#f-rough)"/><path class="mid" d="${MID_HILLS}" mask="url(#m-fade)" filter="url(#f-rough)"/></svg></div>`;
 }
 
-function icon(name: string, extra = ""): string {
+export function icon(name: string, extra = ""): string {
   return `<svg class="ic${extra ? ` ${extra}` : ""}" aria-hidden="true" focusable="false"><use href="#i-${name}"/></svg>`;
 }
 
 const BRUSH = icon("brush", "brush");
 
-function shell(title: string, body: string): string {
+export function shell(title: string, body: string, styles = ""): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1172,7 +1174,7 @@ function shell(title: string, body: string): string {
 <meta name="theme-color" content="#efe7d6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111417" media="(prefers-color-scheme: dark)">
 <title>${escapeHtml(title)}</title>
-<style>${STYLES}</style>
+<style>${STYLES}${styles}</style>
 </head>
 <body>
 ${body}
@@ -1183,7 +1185,7 @@ ${body}
 
 // Notices carry only fixed text, never anything from a bill, so a refused
 // visitor learns nothing about what the link pointed at.
-function notice(heading: string, paragraph: string): string {
+export function notice(heading: string, paragraph: string): string {
   return shell(
     `${heading} · AAzhi`,
     `<main class="page"><div class="card notice"><h1>${heading}</h1><p>${paragraph}</p></div></main>`,
@@ -1241,13 +1243,13 @@ function layoutOf(status: BillRow["status"]): "receipt" | "share" {
 }
 
 // Stable per person, not per name, so a renamed guest keeps their colour.
-function hueOf(id: string): number {
+export function hueOf(id: string): number {
   let h = 0;
   for (const ch of id) h = (h * 31 + ch.codePointAt(0)!) % 1_000_003;
   return h % 8;
 }
 
-function initialOf(name: string): string {
+export function initialOf(name: string): string {
   return (Array.from(name.trim())[0] ?? "?").toUpperCase();
 }
 

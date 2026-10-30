@@ -28,3 +28,16 @@ export const FONT_FACES = `
   unicode-range: U+4ED8, U+5B9A, U+7A3F, U+8BAB;
 }
 `;
+
+// The board's rank seals, kept apart so a bill page never pays for them.
+//   family=Ma+Shan+Zheng&text=一二三
+const RANKS = "d09GMgABAAAAAASsAA0AAAAAB/QAAARbAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGx4cHgZgAEwRCAqGSIUOCwwAATYCJAMUBCAFhCAHIBtLBsjEh8c5e79pu5CCV8CDqRezbZgG5pLeeWVqkiMn7v3/7yc/+hx5/JJ8pchFFF5bUBfRZsPRD6CFzXwiNvNMl1bO2KOfPmZmpqImavKKDYEAYOCqPiQnr0QLGlLUrNnctxl4S6n3yCuQARJeUo88inkPaUUUiUCrUTRB1F4/bGzIzcYVsGUvUCPmVQD1JZmArVUmf0v+pFlI9J1QESVjhDUpEtYJpyGBBGwZyizKXljFOcfMnx4jR/86OtNst0ECYjbDRmKyTpgODRAWSJEhJgVKQEDpXwscfQMCXZyC3Ofqzh7c6ChoBcF1jXYq/8hls1j3Tt36uln6k7fjdbdFUafaeVKxWKwTRRfTqRsx/K1J/hbD88yS+i0CZ9ode3KnymBw2rgnbpdxkuEFH0Gp59W7HhHjfs1psU6MPy0qdHNNOtVO1cm9WHRAqb+lNk4KOYL2BH8mhjf67WP4dWqjxrQ7XqwTp4q7b+oC965V6pX6pF0xJwSl3ui3y6hepzE1nd698w2VYYuPfoffKSHmBMOfY3hn52KREzW6kyqDaqebQa+8kGT02yXECNqcHXeUeyadjSb/3ff9i0+Lt8V4sdF0V2XYqNTvUBtv7NAzvNYn6ZzaaNKYxPjTJl3E9SJl2sUfbOk65XP7Y+zHC/s6yWXKf6vCxc5g0Ru802a4r5PInwfbJFxlma1FpBDxI69vsx9X/22zwqLEsj/Mo/6qLT1SjJIR2inU3tovvsIuC/8e+TNCLms07xuSxR6ULtFymuLyv606253zHXyWOYXLHbqn/ldu2UGXyx2yD9DBMYj8UOy0elPzU+5bTtbTt3Ffcl5rbfNp7wb5Bu9AxTk4fhyySCpdEuz0w7k4/++DRfq0fM5bmUz+UpdIz6QfDtQ+ygyI5LR202u2Fgc8KFm28vR5BVeiymGMXzlbrbHLZTjmg80K+SBlFYKOcjX+DcuRLFIk+9YeX1noljgzWvfXtl+Wkeq3nLX2zOdL8khlQLPbf6YJ/cSWgGxpQP0Un3yr4kjDonfOZ+hm67Yv3ms3nWbyXJSf/xZUHHjy86mOXcb7bgAAEAAS3ByYyT9ps0n5jaaoLwHgcd+J+wDw+YoTLmbb/3XUd9TrAOSQAAAIQGXmIbOtuZb6jvoyacMy6ksso75EYSGZjQQISe6WSVjYoh/LyUggW1UaXUdGakH+FJECgTO+Bgms8S5QSMEWkCIIM0AGZzSDHH6Ii1jjGaAH4xjHCDgkIRzhGAZ2YghdGB/COAbQi2m3bzh0IgzDGEM3StGBavSgA0NoRM8IuxGKKsFuTGAAYWOoRSfGwKH3nTAWUQhDBCIQPZtiechSiV2w/4pkNKIBuchGsveKy4Z+sewP42yMoVf0MPQ1xyMQiQSw0FouYf0qLCrK4DD60IlpU5iJCYwXPaTrHFgExKsi1jsMm8BUhGEahjH4MD+MYXRjAJ3B93IIxyA61PSk5sQCf2Ftu2XegCg0AAA=";
+
+export const RANK_FACE = `
+@font-face {
+  font-family: "Ma Shan Zheng";
+  src: url(data:font/woff2;base64,${RANKS}) format("woff2");
+  font-display: swap;
+  unicode-range: U+4E00, U+4E09, U+4E8C;
+}
+`;

@@ -1,13 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
 import { getBillSnapshot } from "./db/bills";
+import { personProfile, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
 import { handleInteraction } from "./discord/interactions";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
 import { api } from "./web/api";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
+import { renderBoards, renderNoBills, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
 import { pageData } from "./web/state";
-import { readToken } from "./web/token";
+import { readToken, readViewerToken } from "./web/token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -63,5 +65,41 @@ app.get("/b/:billId", async (c) => {
 
 // The page's script talks to these with the same token, as a bearer header.
 app.route("/b", api);
+
+// As with a bill, the token is checked first and every failure looks the same.
+// The server in the path must be the one in the token, which is what keeps a
+// link from one server off every other server's numbers.
+async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
+  const token = c.req.query("t") ?? "";
+  const grant = await readViewerToken(token, c.env.TOKEN_SIGNING_KEY, Date.now());
+  if (!grant || grant.guildId !== c.req.param("guildId")) return null;
+  return { ...grant, token };
+}
+
+async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) => string): Promise<Response> {
+  const viewer = await viewerOf(c);
+  if (!viewer) return page(renderProfileRefused(), 403);
+  const nowMs = Date.now();
+  const person = who(viewer);
+  const profile = await personProfile(c.env.DB, viewer.guildId, person, nowMs);
+  if (!profile) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
+  return page(renderProfile(profile, viewer, nowMs), 200);
+}
+
+app.get("/g/:guildId", (c) => profilePage(c, (viewer) => viewer.viewerId));
+app.get("/g/:guildId/u/:userId", (c) => profilePage(c, () => c.req.param("userId")!));
+
+const BOARDS: readonly string[] = ["hosted", "spent", "visits"] satisfies BoardName[];
+
+app.get("/g/:guildId/boards", async (c) => {
+  const viewer = await viewerOf(c);
+  if (!viewer) return page(renderProfileRefused(), 403);
+  const board = c.req.query("board") ?? "";
+  const shown = {
+    board: (BOARDS.includes(board) ? board : "hosted") as BoardName,
+    span: (c.req.query("span") === "all" ? "all" : "month") as BoardSpan,
+  };
+  return page(renderBoards(await serverBoards(c.env.DB, viewer.guildId, Date.now()), viewer, shown), 200);
+});
 
 export default app;
