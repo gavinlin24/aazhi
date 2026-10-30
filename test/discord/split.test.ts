@@ -374,9 +374,9 @@ describe("/split", () => {
     expect(text).not.toMatch(/do not add up/);
   });
 
-  it("supersedes an existing open draft in the same channel", async () => {
-    await seedDraft("old");
-    await seedDraft("elsewhere", { channelId: "chan-2", messageId: "msg-elsewhere" });
+  it("supersedes the same payer's open draft in the same channel", async () => {
+    await seedDraft("old", { payerId: "gavin" });
+    await seedDraft("elsewhere", { payerId: "gavin", channelId: "chan-2", messageId: "msg-elsewhere" });
 
     await run(slashSplit());
 
@@ -394,8 +394,17 @@ describe("/split", () => {
     expect(discordCalls().some((c) => c.url.includes("msg-elsewhere"))).toBe(false);
   });
 
+  it("leaves another payer's open draft in the channel alone", async () => {
+    await seedDraft("dinner");
+
+    await run(slashSplit());
+
+    expect((await getBill(db, "dinner"))!.status).toBe("draft");
+    expect(discordCalls().some((c) => c.url.includes("msg-dinner"))).toBe(false);
+  });
+
   it("leaves a reopened bill alone, since it was confirmed once and may hold payments", async () => {
-    await seedDraft("reopened");
+    await seedDraft("reopened", { payerId: "gavin" });
     await db.prepare("UPDATE bills SET confirmed_at = ? WHERE id = ?").bind("2026-10-27T00:00:00.000Z", "reopened").run();
 
     await run(slashSplit());
@@ -487,7 +496,7 @@ describe("/split", () => {
     ["unreadable", () => toolUse({ ...saigonToolInput(), readable: false }), /sharper.*flat|flat.*sharper/i],
     ["model-error", () => new Response("overloaded", { status: 529 }), /try again/i],
   ] as const)("on a %s read, says so plainly and creates no bill", async (_reason, reply, message) => {
-    await seedDraft("old");
+    await seedDraft("old", { payerId: "gavin" });
     anthropic = reply;
 
     await run(slashSplit());
@@ -502,7 +511,7 @@ describe("/split", () => {
   });
 
   it("gives up on a receipt reader that never answers, well inside the background time limit", async () => {
-    await seedDraft("old");
+    await seedDraft("old", { payerId: "gavin" });
     // Like a real fetch that hangs: it ends only when its signal aborts.
     anthropic = (init) =>
       new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));

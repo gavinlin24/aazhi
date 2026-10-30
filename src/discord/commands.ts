@@ -45,33 +45,6 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     name: "Split this receipt",
     type: ApplicationCommandType.Message,
   },
-  // One handle per app, kept per person: whoever pays sets theirs once and
-  // every later bill offers it.
-  {
-    ...guildOnly,
-    name: "paywith",
-    type: ApplicationCommandType.ChatInput,
-    description: "Set how people pay you back when you cover the bill",
-    options: [
-      {
-        type: ApplicationCommandOptionType.String,
-        name: "method",
-        description: "Which app",
-        required: true,
-        choices: [
-          { name: "Venmo", value: "venmo" },
-          { name: "Cash App", value: "cashapp" },
-        ],
-      },
-      {
-        type: ApplicationCommandOptionType.String,
-        name: "handle",
-        description: "Your Venmo username or $Cashtag",
-        required: true,
-        max_length: 254,
-      },
-    ],
-  },
   // A debt belongs to a bill and a bill to a server, so the same rows answer
   // "in this server" and "everywhere". A DM with the bot has no server, so
   // there it always answers everywhere.

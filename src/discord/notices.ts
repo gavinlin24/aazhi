@@ -12,8 +12,6 @@ import { escapeMarkdown, groupName } from "./render";
 const MAX_CONTENT = 2000;
 const MAX_BILL_NAME = 80;
 const MAX_NAME = 40;
-// A Venmo note is short, and the bill name is all the note says.
-export const MAX_NOTE = 60;
 
 // By code point, so a cut never splits an emoji into a lone surrogate.
 export function clip(text: string, max: number): string {

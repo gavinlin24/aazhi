@@ -154,6 +154,24 @@ describe("renderBill", () => {
     expect(embedText(embedOf(data))).toContain("🪙 Gavin paid · 9 people");
   });
 
+  it("leaves someone who claimed nothing off the owe card, and keeps a forgiven share on it", () => {
+    const confirmed = { ...bill, status: "confirmed" as const };
+    const result = splitBill(SAIGON);
+    const roster: Participant[] = [
+      ...participantsOf(SAIGON),
+      { billId: bill.id, id: "bystander", kind: "member", displayName: "Bystander", addedBy: null },
+    ];
+    const none = { subtotalCents: 0, discountCents: 0, taxCents: 0, tipCents: 0, owedCents: 0, pardoned: false };
+    const frozen = [...result.shares.map((s) => (s.participant === "theo" ? { ...s, pardoned: true } : s)), { participant: "bystander", ...none }];
+
+    const text = embedOf(renderBill(confirmed, result, SAIGON.items, roster, frozen)).description!;
+
+    expect(text).not.toContain("<@bystander>");
+    expect(text).not.toContain("$0.00");
+    expect(lineFor(text, "<@theo>")).toContain("forgiven");
+    expect(lineFor(text, "<@dani>")).toContain("$");
+  });
+
   // A reopened bill keeps its pardons, so a bare $0.00 would read as a claiming mistake.
   it("never shows a forgiven share as a bare $0.00 in the draft", () => {
     const text = embedText(embedOf(render(bill, { ...draftState, pardoned: ["marcus"] })));
@@ -281,9 +299,8 @@ describe("renderBill", () => {
     expect(draft.description).toMatch(/^\*\*Receipt total \$/);
 
     // The guests the payer added owe the payer directly, one row each.
-    const confirmed = embedOf(
-      renderBill({ ...bill, status: "confirmed" }, splitBill(input), many, people, splitBill(input).shares),
-    );
+    const owing = splitBill(input).shares.map((s) => ({ ...s, owedCents: s.owedCents || 1234 }));
+    const confirmed = embedOf(renderBill({ ...bill, status: "confirmed" }, splitBill(input), many, people, owing));
     withinLimits(confirmed);
     expect(confirmed.description).toMatch(/and \d+ more in Open the split$/);
     // The total still shows, however much of the list had to go.

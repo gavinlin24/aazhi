@@ -1,5 +1,6 @@
 import type { Addon, Cents } from "./money/types";
 
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function formatCents(cents: Cents): string {
@@ -17,8 +18,15 @@ export function formatAddons(addons: Addon[]): string {
 // Spelled out by hand rather than through Intl so the Discord message and the
 // page say the same thing whatever locale the runtime happens to carry.
 export function formatDate(isoDate: string | null): string | null {
-  const match = isoDate ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate) : null;
+  const match = isoDate ? ISO_DATE.exec(isoDate) : null;
   if (!match) return null;
   const month = MONTHS[Number(match[2]) - 1];
   return month ? `${month} ${Number(match[3])}, ${match[1]}` : null;
+}
+
+// "10/28", for a Venmo note, where the year only takes up room.
+export function formatMonthDay(isoDate: string | null): string | null {
+  const match = isoDate ? ISO_DATE.exec(isoDate) : null;
+  if (!match || !MONTHS[Number(match[2]) - 1]) return null;
+  return `${Number(match[2])}/${Number(match[3])}`;
 }

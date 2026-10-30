@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addClaim,
+  addGuest,
   addItem,
   addParticipant,
   addParticipants,
@@ -15,8 +16,12 @@ import {
   getBillSnapshot,
   getParticipants,
   insertItems,
+  MemberRefusedError,
+  NotOnRosterError,
   openDraftInChannel,
+  reassignPayer,
   removeClaim,
+  removeMember,
   setBillAmounts,
   setClaim,
   supersedeOlderDrafts,
@@ -445,5 +450,107 @@ describe("bill repository", () => {
 
     expect(swept.map((b) => [b.id, b.status])).toEqual([["b-first", "superseded"]]);
     expect((await openDraftInChannel(db, "chan-1"))?.id).toBe("b-second");
+  });
+
+  it("leaves another payer's draft in the channel open when a /split comes in", async () => {
+    await createBill(db, newBill("b-dinner", { payerId: "gavin" }));
+    await createBill(db, newBill("b-drinks", { payerId: "marcus" }));
+    await createBill(db, newBill("b-dinner-rescan", { payerId: "gavin" }));
+
+    expect(await supersedeOlderDrafts(db, "chan-1", "b-drinks")).toEqual([]);
+    const swept = await supersedeOlderDrafts(db, "chan-1", "b-dinner-rescan");
+
+    // The rescan still replaces its own payer's draft, and only that one.
+    expect(swept.map((b) => b.id)).toEqual(["b-dinner"]);
+    expect((await getBill(db, "b-drinks"))?.status).toBe("draft");
+    expect((await getBill(db, "b-dinner-rescan"))?.status).toBe("draft");
+  });
+});
+
+describe("removeMember", () => {
+  const member = (id: string): Participant => ({ billId: "b-roster", id, kind: "member", displayName: id, addedBy: null });
+  const refusal = (id: string) => removeMember(db, "b-roster", id).catch((error) => error);
+
+  beforeEach(async () => {
+    await db.prepare("DELETE FROM bills").run();
+    await createBill(db, newBill("b-roster", { payerId: "gavin", printedTotalCents: 1000 }));
+    await addParticipants(db, "b-roster", [member("gavin"), member("marcus"), member("bystander")]);
+    await insertItems(db, "b-roster", [{ id: "roster-pho", label: "Pho", cents: 1000, source: "ocr" }]);
+    await setClaim(db, "b-roster", "roster-pho", "marcus", true);
+  });
+
+  it("takes a member with no claims off the draft and moves the revision", async () => {
+    const before = (await getBill(db, "b-roster"))!.revision;
+
+    const revision = await removeMember(db, "b-roster", "bystander");
+
+    expect(revision).toBe(before + 1);
+    expect((await getParticipants(db, "b-roster")).map((p) => p.id)).toEqual(["gavin", "marcus"]);
+  });
+
+  it("clears their claims with them, leaving anyone else on the line", async () => {
+    await insertItems(db, "b-roster", [{ id: "roster-tea", label: "Tea", cents: 100, source: "ocr" }]);
+    await setClaim(db, "b-roster", "roster-tea", "marcus", true);
+    await setClaim(db, "b-roster", "roster-tea", "gavin", true);
+
+    await removeMember(db, "b-roster", "marcus");
+
+    const claimedBy = Object.fromEntries((await getBillItems(db, "b-roster")).map((i) => [i.id, i.claimedBy]));
+    expect(claimedBy).toEqual({ "roster-pho": [], "roster-tea": ["gavin"] });
+    expect((await getParticipants(db, "b-roster")).map((p) => p.id)).toEqual(["gavin", "bystander"]);
+  });
+
+  it("leaves the claims alone when it refuses", async () => {
+    await setClaim(db, "b-roster", "roster-pho", "bystander", true);
+    await addGuest(db, "b-roster", { id: "guest-kim", displayName: "Kim", addedBy: "bystander" });
+    const before = (await getBill(db, "b-roster"))!.revision;
+
+    const error = await refusal("bystander");
+
+    expect(error).toBeInstanceOf(MemberRefusedError);
+    expect((await getBill(db, "b-roster"))!.revision).toBe(before);
+    expect((await getBillItems(db, "b-roster"))[0]!.claimedBy).toEqual(["bystander", "marcus"]);
+  });
+
+  it("refuses the payer, a guest, a stranger and anyone with a guest of their own", async () => {
+    await addGuest(db, "b-roster", { id: "guest-kim", displayName: "Kim", addedBy: "bystander" });
+
+    expect((await refusal("gavin")).reason).toBe("payer");
+    expect((await refusal("guest-kim")).reason).toBe("no-member");
+    expect((await refusal("nobody")).reason).toBe("no-member");
+    expect((await refusal("bystander")).reason).toBe("guests");
+  });
+
+  it("refuses once the bill is not a draft", async () => {
+    await db.prepare("UPDATE bills SET status = 'confirmed' WHERE id = 'b-roster'").run();
+
+    await expect(removeMember(db, "b-roster", "bystander")).rejects.toBeInstanceOf(BillNotDraftError);
+  });
+
+  it("takes the share row a reopened bill kept, and refuses someone who paid on it", async () => {
+    await db.prepare("UPDATE bills SET confirmed_at = '2026-10-28' WHERE id = 'b-roster'").run();
+    const share = db.prepare(
+      `INSERT INTO shares (bill_id, participant_id, subtotal_cents, tax_cents, tip_cents, owed_cents) VALUES ('b-roster', ?, 0, 0, 0, 0)`,
+    );
+    await db.batch([share.bind("bystander"), share.bind("gavin")]);
+    await addParticipant(db, member("paid"));
+    await db
+      .prepare(
+        `INSERT INTO settlements (id, bill_id, participant_id, cents, recorded_at, recorded_by)
+         VALUES ('s-1', 'b-roster', 'paid', 100, '2026-10-28', 'paid')`,
+      )
+      .run();
+
+    await removeMember(db, "b-roster", "bystander");
+
+    expect((await getParticipants(db, "b-roster")).map((p) => p.id)).not.toContain("bystander");
+    expect((await refusal("paid")).reason).toBe("paid");
+  });
+
+  it("stops a handover to someone taken off between the check and the write", async () => {
+    await removeMember(db, "b-roster", "bystander");
+
+    await expect(reassignPayer(db, "b-roster", "bystander")).rejects.toBeInstanceOf(NotOnRosterError);
+    expect((await getBill(db, "b-roster"))!.payerId).toBe("gavin");
   });
 });

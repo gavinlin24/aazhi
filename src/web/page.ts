@@ -737,6 +737,11 @@ button.tile:active { background: var(--fill); }
 .guest-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0 4px; }
 .guest-form .text-input { flex: 1; min-width: 0; }
 .guest-form > .av { --s: 36px; }
+.handle-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.handle-field { position: relative; flex: 1; min-width: 0; }
+.handle-field .at { position: absolute; top: 0; left: 11px; color: var(--muted); line-height: 44px; pointer-events: none; }
+.handle-field .text-input { width: 100%; padding-left: 28px; }
+.handle-form .sheet-actions { flex-basis: 100%; margin-top: 4px; }
 
 .bar {
   position: fixed;
@@ -831,8 +836,11 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .legend.parts > span { flex-direction: column; align-items: flex-start; gap: 1px; }
 .part-name { display: inline-flex; align-items: center; gap: 5px; height: 18px; font-size: 14px; }
 .legend.parts .money { color: var(--ink); }
-.pay-row { display: flex; gap: 8px; margin-top: 16px; }
-/* Basis 0 splits the row equally among however many apps the payer has. */
+/* Venmo can't tell us a payment happened, so I paid stays beside the way out
+   to it, and has the row to itself when there is no Venmo to go to. */
+.pay-acts { display: flex; gap: 8px; margin-top: 16px; }
+.pay-acts > * { flex: 1 1 0; min-width: 0; }
+.pay-row { display: flex; }
 .pay {
   display: flex;
   flex: 1 1 0;
@@ -850,6 +858,13 @@ button.owe[aria-pressed="false"] .mark { display: none; }
   white-space: nowrap;
 }
 .pay .ic { width: 18px; height: 18px; }
+/* The device picks the link. A custom scheme goes nowhere on a computer, and
+   this works where a user agent wouldn't: an iPad reports itself as a Mac. */
+.pay.is-app { display: none; }
+@media (pointer: coarse) {
+  .pay.is-app { display: flex; }
+  .pay.is-web { display: none; }
+}
 /* Whose shares one amount covers, when it covers guests too. */
 .whose { list-style: none; margin: 12px 0 0; padding: 0; }
 .whose li { display: flex; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid var(--rule); }
@@ -859,9 +874,7 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .whose .is-off { color: var(--muted); }
 .hero .whose .stamp { position: static; font-size: 12px; padding: 2px 1px; border-width: 1.5px; letter-spacing: 1px; }
 /* Recording a payment is the person's own word, not a link out, so it is
-   inked rather than sealed and sits under the ways to pay. */
-.sent-row { margin-top: 16px; }
-.pay-row + .sent-row { margin-top: 10px; }
+   inked rather than sealed. */
 .sent {
   display: flex;
   align-items: center;
@@ -1599,10 +1612,14 @@ function pie(done: Cents, total: Cents): string {
 // With no app link to offer, "I paid" stands alone: the person pays the
 // way they usually would and records it here after.
 function payRow(v: View): string {
-  const links = v.s.pay.map(
-    (o) => `<a class="pay" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.name)}${icon("out")}</a>`,
-  );
-  return links.length > 0 ? `<div class="pay-row" data-pay>${links.join("")}</div>` : "";
+  const pay = v.s.pay;
+  if (!pay) return "";
+  const link = (kind: string, url: string) => `<a class="pay ${kind}" href="${escapeHtml(url)}">Venmo${icon("out")}</a>`;
+  return `<div class="pay-row" data-pay>${link("is-app", pay.appUrl)}${link("is-web", pay.webUrl)}</div>`;
+}
+
+function payActs(pay: string, sent: string): string {
+  return pay || sent ? `<div class="pay-acts">${pay}${sent}</div>` : "";
 }
 
 // Only someone with something left to pay has anything to record. Paid is
@@ -1675,8 +1692,7 @@ ${collectedOf(total - left, total)}
 ${was}<p class="hero-amt money" data-you-owed>${formatCents(paid || forgiven ? 0 : leftOf(v, s.viewer))}</p>${marks}
 ${whoRows(v)}
 ${split}
-${paid ? "" : payRow(v)}
-${sentRow(v)}
+${payActs(paid ? "" : payRow(v), sentRow(v))}
 </section>`;
 }
 
@@ -1763,17 +1779,29 @@ function confirmArea(v: View): string {
     `${why ? `<span class="why${blocked ? "" : " is-hint"}" id="confirm-why" aria-hidden="true">${escapeHtml(why)}</span>` : ""}</span></button></div>`;
 }
 
-function act(attrs: string, iconName: string, title: string, sub: string | null, cls = ""): string {
+function act(attrs: string, iconName: string, title: string, sub: string | null, cls = "", chev = false): string {
   return `<button type="button" class="act${cls ? ` ${cls}` : ""}" ${attrs}>${icon(iconName)}<span class="grow"><span>${escapeHtml(title)}</span>` +
-    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span></button>`;
+    `${sub ? `<span class="act-sub">${escapeHtml(sub)}</span>` : ""}</span>${chev ? icon("chev") : ""}</button>`;
+}
+
+// Mirrors venmoAct in the client. A payer without a Venmo on their own draft
+// gets no row: the sheet at Confirm is the one place that asks them.
+function venmoAct(v: View): string {
+  const s = v.s;
+  if (!v.onBill) return "";
+  const saved = s.viewerVenmo;
+  if (s.viewerIsPayer && v.bill.status === "draft" && !saved) return "";
+  return act('data-venmo aria-haspopup="dialog"', "coin", "Your Venmo",
+    saved ? `@${saved}` : "Add it so friends can pay you back.", "", true);
 }
 
 // The payer confirms, reopens to fix, and deletes. Anyone else on a
 // confirmed bill can say something is wrong, which reopens it for the payer
-// to fix. Nothing here for someone who is only claiming on a draft.
+// to fix. Everyone on the bill can set their Venmo.
 function actions(v: View): string {
   const s = v.s;
   const parts: string[] = [];
+  parts.push(venmoAct(v));
   if (s.viewerIsPayer) {
     if (v.bill.status === "draft") parts.push(confirmArea(v));
     if (v.bill.status === "confirmed") parts.push(act("data-reopen", "receipt", "Edit the bill", "Paying pauses until you confirm again."));
@@ -1783,7 +1811,7 @@ function actions(v: View): string {
       act('data-ask="wrong" aria-haspopup="dialog"', "warn", "Something's wrong", `Paying pauses until ${nameOf(v, s.payerId)} fixes it.`, "is-warn"),
     );
   }
-  if (parts.length === 0) return "";
+  if (!parts.some(Boolean)) return "";
   return `<section class="card acts needs-js" data-actions aria-label="Bill actions">${parts.join("")}</section>`;
 }
 
