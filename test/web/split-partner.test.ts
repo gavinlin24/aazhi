@@ -13,6 +13,7 @@ const KEY = "split-partner-test-signing-key";
 const gavin: [string, string] = ["gavin", "Gavin"];
 const marcus: [string, string] = ["marcus", "Marcus"];
 const WAITING = "Add someone to split with.";
+const NEEDS_CLAIM = "Someone else needs to claim an item.";
 
 function env(): Env {
   return {
@@ -83,11 +84,13 @@ describe("Confirm needs someone to split with", () => {
   it("refuses another member with nothing on the bill", async () => {
     await draft({ people: [gavin, marcus], items: [["Pho", 2000, ["gavin"]]] });
     await expectRefused();
+    expect(await textOf(await billPage(), "#confirm-why")).toBe(NEEDS_CLAIM);
   });
 
   it("refuses a member whose lines come to $0", async () => {
     await draft({ people: [gavin, marcus], items: [["Pho", 2000, ["gavin"]], ["Water", 0, ["marcus"]]] });
     await expectRefused();
+    expect(await textOf(await billPage(), "#confirm-why")).toBe(NEEDS_CLAIM);
   });
 
   it("refuses at the server even if the page offered to split the open lines", async () => {

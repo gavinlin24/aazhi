@@ -33,11 +33,22 @@ describe("the page script", () => {
 
 describe("the Confirm button's reason for waiting", () => {
   const { confirmBlock } = helpers<{ confirmBlock: (s: unknown) => string | null }>("confirmBlock");
-  const ready = { printedTotalCents: 2000, reconciles: { ok: true }, items: [{ claimedBy: ["gavin"] }], hasSplitPartner: true };
+  const gavin = { id: "gavin", kind: "member" };
+  const ready = { printedTotalCents: 2000, reconciles: { ok: true }, items: [{ claimedBy: ["gavin"] }], hasSplitPartner: true, payerId: "gavin", participants: [gavin] };
 
   it("waits for someone to split with, and matches the page", () => {
     expect(confirmBlock({ ...ready, hasSplitPartner: false })).toBe("Add someone to split with.");
     expect(confirmBlock(ready)).toBeNull();
+  });
+
+  it("asks for a claim once another member has joined, and matches the page", () => {
+    const joined = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "marcus", kind: "member" }] };
+    expect(confirmBlock(joined)).toBe("Someone else needs to claim an item.");
+  });
+
+  it("still asks for someone when the only other person is a guest", () => {
+    const guestOnly = { ...ready, hasSplitPartner: false, participants: [gavin, { id: "sam", kind: "guest" }] };
+    expect(confirmBlock(guestOnly)).toBe("Add someone to split with.");
   });
 
   it("says nobody has claimed first, since that's the earlier step", () => {
