@@ -32,7 +32,7 @@ export interface BillRow {
   confirmedAt: string | null;
 }
 
-export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt">;
+export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt"> & { receiptKey?: string | null };
 
 export interface NewItem {
   id: string;
@@ -63,6 +63,7 @@ interface BillDbRow {
 
 interface SnapshotBillDbRow extends BillDbRow {
   has_payments: number;
+  receipt_taken: number;
 }
 
 interface ParticipantDbRow {
@@ -145,13 +146,26 @@ async function mutateDraft(db: D1Database, billId: string, writes: D1PreparedSta
   return row.revision;
 }
 
+export class ReceiptAlreadySplitError extends Error {
+  constructor() {
+    super("this receipt is on a confirmed bill");
+    this.name = "ReceiptAlreadySplitError";
+  }
+}
+
+// A confirmed bill is what credits a receipt, so only that stops a new one. A
+// draft doesn't: a forgotten one must not hold a receipt hostage, and two drafts
+// sort themselves out at Confirm. A null key equals nothing, so a receipt
+// without one always saves.
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
+  const { receiptKey = null, ...bill } = b;
   const createdAt = new Date().toISOString();
-  await db
+  const { meta } = await db
     .prepare(
       `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
-         tax_cents, tip_cents, printed_total_cents, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+       WHERE NOT EXISTS (SELECT 1 FROM bills WHERE receipt_key = ?14 AND status = 'confirmed')`,
     )
     .bind(
       b.id,
@@ -167,9 +181,11 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       b.printedTotalCents,
       b.status,
       createdAt,
+      receiptKey,
     )
     .run();
-  return { ...b, revision: 1, createdAt, confirmedAt: null };
+  if (meta.changes === 0) throw new ReceiptAlreadySplitError();
+  return { ...bill, revision: 1, createdAt, confirmedAt: null };
 }
 
 export async function getBill(db: D1Database, id: string): Promise<BillRow | null> {
@@ -298,6 +314,8 @@ export interface BillSnapshot {
   // Whether anyone has paid against this bill, which is what stops the payer
   // being handed to someone else.
   hasPayments: boolean;
+  // Another confirmed bill already credits this receipt, so this one can't.
+  receiptTaken: boolean;
   // Everyone who answers for a share and has a payment against it: their own,
   // or a guest of theirs paying the payer directly.
   paid: ParticipantId[];
@@ -312,7 +330,11 @@ function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement
   return [
     db
       .prepare(
-        `SELECT ${BILL_COLUMNS}, EXISTS (SELECT 1 FROM settlements WHERE bill_id = bills.id) AS has_payments
+        `SELECT ${BILL_COLUMNS}, EXISTS (SELECT 1 FROM settlements WHERE bill_id = bills.id) AS has_payments,
+           EXISTS (
+             SELECT 1 FROM bills other
+             WHERE other.receipt_key = bills.receipt_key AND other.id <> bills.id AND other.status = 'confirmed'
+           ) AS receipt_taken
          FROM bills WHERE id = ?`,
       )
       .bind(billId),
@@ -367,6 +389,7 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
       pardoned: sortedIds(listed("pardoned")),
     },
     hasPayments: billRow.has_payments === 1,
+    receiptTaken: billRow.receipt_taken === 1,
     paid: listed("paid"),
     paidToPayer: listed("paidToPayer"),
     paidToHost: listed("paidToHost"),
@@ -798,7 +821,7 @@ export function amountChanges(
   });
 }
 
-export type ConfirmRefusal = "stale" | "unreconciled" | "not-payer" | "not-draft" | "unclaimed" | "alone";
+export type ConfirmRefusal = "stale" | "unreconciled" | "not-payer" | "not-draft" | "unclaimed" | "alone" | "receipt-taken";
 export type ConfirmResult = { ok: true; changes: AmountChange[] } | { ok: false; reason: ConfirmRefusal };
 
 function refused(reason: ConfirmRefusal): ConfirmResult {
@@ -835,6 +858,7 @@ export async function confirmBill(
   const { bill, input } = snapshot;
   if (actor !== bill.payerId) return refused("not-payer");
   if (bill.revision !== revision) return refused("stale");
+  if (snapshot.receiptTaken) return refused("receipt-taken");
   if (!reconciles({ ...bill, items: input.items }).ok) {
     return refused("unreconciled");
   }
@@ -869,11 +893,17 @@ export async function confirmBill(
        WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision`,
     )
     .bind(billId, revision, now);
+  // Two Confirms at once both pass the read above. The unique index lets one
+  // land, and the failed batch takes the other's shares back with it.
   const written = await db.batch([
     ...split.shares.map((s) => upsert.bind(billId, revision, s.participant, s.subtotalCents, s.discountCents, s.taxCents, s.tipCents, s.owedCents)),
     settledAtStatement(db, billId, null, now),
     freeze,
-  ]);
+  ]).catch((error: unknown) => {
+    if (error instanceof Error && error.message.includes("UNIQUE constraint failed") && error.message.includes("receipt_key")) return null;
+    throw error;
+  });
+  if (!written) return refused("receipt-taken");
   if (written[written.length - 1]!.results.length === 0) {
     const now = await getBill(db, billId);
     return refused(now?.status === "draft" ? "stale" : "not-draft");

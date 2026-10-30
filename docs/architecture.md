@@ -94,8 +94,8 @@ stored in D1, since Worker instances share no memory.
 
 **6. Confirming.** The payer taps Confirm on the page (`POST
 /b/:billId/confirm`). `confirmBill` (`src/db/bills.ts`) requires the payer, a
-current revision, a matching total, every line claimed and another Discord
-member with a share above $0. Unclaimed lines can instead be split evenly between
+current revision, a matching total, every line claimed, another Discord member
+with a share above $0 and a receipt no other confirmed bill holds. Unclaimed lines can instead be split evenly between
 everyone who claimed something.
 `src/money/split.ts` splits each line between its claimants and gives the
 whole-bill discount, tax and tip in proportion to subtotal.
@@ -194,8 +194,29 @@ nothing from other servers.
   same whether or not that person has bills elsewhere, so a link can't be walked
   to arbitrary accounts.
 
-**Known gap: one receipt split in two servers counts twice.** Nothing ties the
-two bills together, and they were the same outing. Nothing fixes this yet.
+**One receipt, one credit.** Numbers add up across servers, so a receipt split
+twice would count one outing twice. A receipt is credited by at most one
+confirmed bill, anywhere, same server included.
+
+`/split` is refused when the receipt is already on a confirmed bill, and nothing
+is saved. A draft stops nothing, because a forgotten one must not hold a receipt
+hostage, so two drafts of one receipt can exist. The race ends at Confirm: the
+second bill is refused, stays a draft, and its payer can delete it. Reopening or
+deleting frees the receipt, and a reconfirm is checked again.
+
+A unique index over confirmed bills (`migrations/0007_receipt_key.sql`) is what
+holds this, so two Confirms at the same moment can't both land. The read in
+`confirmBill` and on the page is there to give a clear answer sooner.
+
+A receipt is matched by `receipt_key` (`src/extract/receipt-key.ts`), a hash of
+the printed date, time and total and the sorted line prices. It is set at the
+read and never changes, so fixing a price can't dodge it. It compares money, not
+place names, because names read differently from one photo to the next.
+
+Without a printed date, time or total there is no key and nothing is refused,
+since refusing an honest receipt is worse than counting one twice. Two tills can
+also print the same minute, total and prices, and the second is then refused.
+Bills from before the key have none, because the printed time was never stored.
 
 **The link belongs to the viewer.** A viewer token holds the server and the
 viewer, not the person viewed, so one link can walk the whole server. It lasts

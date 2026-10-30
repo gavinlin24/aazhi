@@ -6,9 +6,10 @@ import {
   type APIAttachment,
   type APIInteraction,
 } from "discord-api-types/v10";
-import { addParticipant, createBill, insertItems, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
+import { addParticipant, createBill, insertItems, ReceiptAlreadySplitError, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
 import type { Env } from "../../env";
 import { extractReceipt, type Extraction } from "../../extract/claude";
+import { receiptKey } from "../../extract/receipt-key";
 import type { InteractionHandler } from "../interactions";
 import { displayName } from "../members";
 import { loadBillMessage } from "../render";
@@ -36,6 +37,8 @@ const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string
 };
 
 const SAVE_FAILED = "Something went wrong saving this bill. Try again in a minute.";
+
+const ALREADY_SPLIT = "This receipt was already split.";
 
 // Cloudflare cancels background work 30 s after the response, silently, so a
 // hung read would leave "thinking..." forever. Reading gets 20 s across both
@@ -121,6 +124,7 @@ async function saveDraft(e: Extraction, guildId: string, channelId: string, paye
     tipCents: 0,
     printedTotalCents: e.printedTotalCents,
     status: "draft",
+    receiptKey: await receiptKey(e),
   });
   await insertItems(
     db,
@@ -175,6 +179,11 @@ async function readAndPost(
       if (edit.status === "rejected") console.error("could not mark a superseded bill", edit.reason);
     }
   } catch (error) {
+    // Refused before anything was saved, so this channel's open draft stays.
+    if (error instanceof ReceiptAlreadySplitError) {
+      await editOriginal(interactionToken, { content: ALREADY_SPLIT, allowed_mentions: { parse: [] } }, env);
+      return;
+    }
     console.error("split failed", error);
     await editOriginal(interactionToken, { content: SAVE_FAILED, embeds: [], components: [], allowed_mentions: { parse: [] } }, env);
   }

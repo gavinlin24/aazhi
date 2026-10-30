@@ -3,6 +3,8 @@ import type { Addon, Cents } from "../money/types";
 export interface Extraction {
   place: string | null;
   billDate: string | null;
+  // 24-hour HH:MM. Only ever used to tell one receipt from another.
+  billTime: string | null;
   // `cents` is the dish with its add-ons, so whoever claims it pays for both.
   items: { label: string; cents: Cents; confidence: number; addons?: Addon[] }[];
   // Money off the whole bill, kept out of items because nobody claims it.
@@ -33,6 +35,10 @@ export const EXTRACT_TOOL = {
       readable: { type: "boolean", description: "false if it is a receipt but too blurry, cropped, or dark to read the amounts." },
       place: { type: ["string", "null"], description: "Restaurant name, or null." },
       bill_date: { type: ["string", "null"], description: "Date on the receipt as YYYY-MM-DD, or null." },
+      bill_time: {
+        type: ["string", "null"],
+        description: "Time printed on the receipt as 24-hour HH:MM, or null. If several are printed, use the latest.",
+      },
       items: {
         type: "array",
         description:
@@ -72,7 +78,7 @@ export const EXTRACT_TOOL = {
       tax: NULLABLE_PRICE,
       printed_total: { ...NULLABLE_PRICE, description: "The grand total printed on the receipt before any tip is added. " + NULLABLE_PRICE.description },
     },
-    required: ["is_receipt", "readable", "place", "bill_date", "items", "discount", "tax", "printed_total"],
+    required: ["is_receipt", "readable", "place", "bill_date", "bill_time", "items", "discount", "tax", "printed_total"],
   },
 } as const;
 
@@ -123,6 +129,14 @@ function parseNullablePrice(value: unknown): Cents | null | undefined {
 function parseNullableString(value: unknown): string | null | undefined {
   if (value === null || typeof value === "string") return value;
   return undefined;
+}
+
+// Anything but a clean time is no time. A bill doesn't need one, so a bad read
+// here shouldn't fail the whole receipt.
+function parseTime(value: unknown): string | null {
+  const match = typeof value === "string" ? /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(value.trim()) : null;
+  if (!match || Number(match[1]) > 23) return null;
+  return `${match[1]!.padStart(2, "0")}:${match[2]}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -179,6 +193,7 @@ export function parseToolInput(input: unknown): ParsedToolInput {
 
   const place = parseNullableString(input.place);
   const billDate = parseNullableString(input.bill_date);
+  const billTime = parseTime(input.bill_time);
   const discount = parseNullablePrice(input.discount ?? null);
   const taxCents = parseNullablePrice(input.tax);
   const printedTotalCents = parseNullablePrice(input.printed_total);
@@ -205,6 +220,7 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   const read = (charged: boolean): Extraction => ({
     place,
     billDate,
+    billTime,
     items: lines.map((l) => line(l.label, l.printed, l.confidence, l.modifiers, charged)),
     discountCents,
     taxCents,

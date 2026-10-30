@@ -6,6 +6,7 @@ import {
   addClaim,
   addParticipant,
   createBill,
+  deleteBill,
   getBill,
   getBillItems,
   getParticipants,
@@ -656,6 +657,125 @@ describe("followUp and ephemeral", () => {
       type: 4,
       data: { content: "with a button", flags: EPHEMERAL, components: [row] },
     });
+  });
+});
+
+describe("a receipt already on a confirmed bill", () => {
+  const REFUSED = "This receipt was already split.";
+  const timed = (overrides: Record<string, unknown> = {}) => () => toolUse(saigonToolInput({ bill_time: "19:42", ...overrides }));
+  const inOtherServer = (member: unknown = MEMBER) => ({ ...slashSplit(undefined, member), guild_id: "guild-2", channel_id: "chan-2" });
+  const lastReply = () => originalEdits().at(-1)!.body;
+  const billsNow = async () => (await db.prepare("SELECT id, guild_id, status FROM bills ORDER BY rowid").all<{ id: string; guild_id: string; status: string }>()).results;
+  const setStatus = (status: string) => db.prepare("UPDATE bills SET status = ?").bind(status).run();
+
+  beforeEach(() => {
+    anthropic = timed();
+  });
+
+  async function confirmedHere() {
+    await run(slashSplit());
+    await setStatus("confirmed");
+  }
+
+  it("refuses in another server and saves nothing", async () => {
+    await confirmedHere();
+    await run(inOtherServer());
+
+    expect(lastReply()).toEqual({ content: REFUSED, allowed_mentions: { parse: [] } });
+    expect(await billsNow()).toHaveLength(1);
+  });
+
+  it("refuses in the same server too", async () => {
+    await confirmedHere();
+    await run(slashSplit());
+
+    expect(lastReply().content).toBe(REFUSED);
+    expect(await billsNow()).toHaveLength(1);
+  });
+
+  it("refuses whoever runs it, since a receipt has one table", async () => {
+    await confirmedHere();
+    await run(inOtherServer({ ...MEMBER, user: { id: "marcus", username: "marcus", global_name: "Marcus" } }));
+
+    expect(lastReply().content).toBe(REFUSED);
+  });
+
+  it("knows the receipt from a second read with the lines reordered and the name read differently", async () => {
+    await confirmedHere();
+    anthropic = timed({ place: "SAIGON KITCHEN.", items: [...saigonToolInput().items].reverse() });
+    await run(inOtherServer());
+
+    expect(lastReply().content).toBe(REFUSED);
+  });
+
+  it("leaves the open draft in the refused channel alone", async () => {
+    await confirmedHere();
+    await seedDraft("open-there", { guildId: "guild-2", channelId: "chan-2", payerId: "gavin" });
+    await run(inOtherServer());
+
+    expect((await getBill(db, "open-there"))!.status).toBe("draft");
+    expect(discordCalls().some((c) => c.url.includes("msg-open-there"))).toBe(false);
+  });
+
+  it("isn't stopped by a draft of the same receipt, anywhere", async () => {
+    await run(slashSplit());
+    await run(inOtherServer({ ...MEMBER, user: { id: "marcus", username: "marcus", global_name: "Marcus" } }));
+
+    expect(lastReply().content).not.toBe(REFUSED);
+    expect((await billsNow()).map((b) => b.status)).toEqual(["draft", "draft"]);
+  });
+
+  it.each(["deleted", "superseded", "draft"])("isn't stopped once the bill is %s", async (status) => {
+    await confirmedHere();
+    await setStatus(status);
+    await run(inOtherServer());
+
+    expect(lastReply().content).not.toBe(REFUSED);
+    expect(await billsNow()).toHaveLength(2);
+  });
+
+  it("frees the receipt through the real delete", async () => {
+    await confirmedHere();
+    await deleteBill(db, (await billsNow())[0]!.id, 0);
+    await run(inOtherServer());
+
+    expect(lastReply().content).not.toBe(REFUSED);
+  });
+
+  it.each([
+    ["time", { bill_time: null }],
+    ["date", { bill_date: null }],
+    ["total", { printed_total: null }],
+  ])("lets a receipt with no printed %s through, rather than refuse a real one", async (_, missing) => {
+    anthropic = timed(missing);
+    await confirmedHere();
+    await run(inOtherServer());
+
+    expect(lastReply().content).not.toBe(REFUSED);
+    expect(await billsNow()).toHaveLength(2);
+  });
+
+  it("lets a receipt printed a minute later through", async () => {
+    await confirmedHere();
+    anthropic = timed({ bill_time: "19:43" });
+    await run(inOtherServer());
+
+    expect(await billsNow()).toHaveLength(2);
+  });
+
+  it("can't be matched against a bill from before keys existed", async () => {
+    await seedDraft("older", { billDate: "2026-10-28", printedTotalCents: 27382 });
+    await setStatus("confirmed");
+    await run(inOtherServer());
+
+    expect(lastReply().content).not.toBe(REFUSED);
+  });
+
+  it("still lets a rescan replace the payer's open draft in the channel", async () => {
+    await run(slashSplit());
+    await run(slashSplit());
+
+    expect((await billsNow()).map((b) => b.status)).toEqual(["superseded", "draft"]);
   });
 });
 

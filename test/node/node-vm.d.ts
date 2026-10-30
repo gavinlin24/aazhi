@@ -4,5 +4,5 @@ declare module "node:vm" {
   export class Script {
     constructor(code: string, options?: { filename?: string });
   }
-  export function runInNewContext(code: string): unknown;
+  export function runInNewContext(code: string, context?: object): unknown;
 }
