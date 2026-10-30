@@ -634,20 +634,16 @@ describe("renderPage", () => {
       expect(await select(view("marcus", { handles }), "[data-pay]")).toEqual([]);
     });
 
-    it("offers only apps a link can open, so Zelle never shows", async () => {
+    it("offers a button per app the payer has, and just I paid when they have none", async () => {
       const venmo = { method: "venmo" as const, handle: "gavin-l" };
       const cashapp = { method: "cashapp" as const, handle: "GavinL" };
-      const zelle = { method: "zelle" as const, handle: "gavin@example.com" };
 
-      const both = view("theo", { handles: [venmo, cashapp, zelle] });
+      const both = view("theo", { handles: [venmo, cashapp] });
       expect((await select(both, "[data-pay] a.pay")).map((x) => x.text)).toEqual(["Venmo", "Cash App"]);
-      expect(both).not.toContain("Zelle");
-      expect(both).not.toContain("gavin@example.com");
 
-      const zelleOnly = view("theo", { handles: [zelle] });
-      expect(await select(zelleOnly, "[data-pay]")).toEqual([]);
-      expect(await textOf(zelleOnly, "[data-you] [data-sent] [data-ask=sent]")).toBe("I paid");
-      expect(zelleOnly).not.toContain("Zelle");
+      const none = view("theo", { handles: [] });
+      expect(await select(none, "[data-pay]")).toEqual([]);
+      expect(await textOf(none, "[data-you] [data-sent] [data-ask=sent]")).toBe("I paid");
     });
 
     it("lets someone with something left record that they paid, or say something is wrong", async () => {

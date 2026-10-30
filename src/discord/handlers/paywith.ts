@@ -24,7 +24,7 @@ export const paywithCommand: InteractionHandler = async (body, env) => {
   const method = stringOption(body, "method");
   const raw = stringOption(body, "handle");
   if (!who || method === null || raw === null) return privately("That action is not supported.");
-  if (!PAY_METHODS.includes(method as PayMethod)) return privately("Pick Venmo, Cash App or Zelle.");
+  if (!PAY_METHODS.includes(method as PayMethod)) return privately("Pick Venmo or Cash App.");
   const payMethod = method as PayMethod;
 
   const handle = normalizeHandle(payMethod, raw);

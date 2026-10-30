@@ -65,11 +65,6 @@ describe("payLink", () => {
     expect(url.search).toBe("");
   });
 
-  it("has no link for Zelle, since none opens the bank's app with the amount filled in", () => {
-    expect(payLink("zelle", "gavin@example.com", 4446, NOTE)).toBeNull();
-    expect(payLink("zelle", "5551234567", 4446, NOTE)).toBeNull();
-  });
-
   it("formats every amount from integer cents, never through a float", () => {
     const random = seededRandom(9);
     const amounts = [1, 5, 10, 99, 100, 101, 4446, 32412, 100000, 123456789];
@@ -95,7 +90,6 @@ describe("payLink", () => {
   it("refuses to build a link from a handle that did not pass validation", () => {
     expect(() => payLink("venmo", "evil.com/x?", 4446, NOTE)).toThrow();
     expect(() => payLink("cashapp", "a/b", 4446, NOTE)).toThrow();
-    expect(() => payLink("zelle", "not a handle", 4446, NOTE)).toThrow();
   });
 });
 
@@ -105,9 +99,6 @@ describe("normalizeHandle", () => {
     expect(normalizeHandle("venmo", " @Gavin_Lin24 ")).toBe("Gavin_Lin24");
     expect(normalizeHandle("cashapp", "$GavinL")).toBe("GavinL");
     expect(normalizeHandle("cashapp", "gavin24")).toBe("gavin24");
-    expect(normalizeHandle("zelle", "Gavin.Lin+food@Example.com")).toBe("gavin.lin+food@example.com");
-    expect(normalizeHandle("zelle", "(555) 123-4567")).toBe("5551234567");
-    expect(normalizeHandle("zelle", "+1 555.123.4567")).toBe("5551234567");
   });
 
   it("rejects handles that are malformed or could break out of the link", () => {
@@ -128,13 +119,6 @@ describe("normalizeHandle", () => {
       ["cashapp", "gavin/1"],
       ["cashapp", "gavin?x=1"],
       ["cashapp", "$$gavin"],
-      ["zelle", "gavin"],
-      ["zelle", "gavin@"],
-      ["zelle", "gavin@example"],
-      ["zelle", "gavin lin@example.com"],
-      ["zelle", "12345"],
-      ["zelle", "555-123-456"],
-      ["zelle", "`gavin`@example.com"],
     ];
     for (const [method, handle] of bad) {
       expect(normalizeHandle(method, handle), `${method} ${JSON.stringify(handle)}`).toBeNull();
@@ -146,7 +130,5 @@ describe("describeHandle", () => {
   it("shows a stored handle the way each app writes it", () => {
     expect(describeHandle("venmo", "gavin-lin")).toBe("@gavin-lin");
     expect(describeHandle("cashapp", "GavinL")).toBe("$GavinL");
-    expect(describeHandle("zelle", "gavin@example.com")).toBe("gavin@example.com");
-    expect(describeHandle("zelle", "5551234567")).toBe("(555) 123-4567");
   });
 });

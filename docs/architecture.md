@@ -102,9 +102,9 @@ the owe card.
 
 **7. Paying.** `/paywith` stores the payer's handle (`src/db/handles.ts`).
 Once the bill is confirmed, the page shows Venmo or Cash App links for what
-you have left (`src/web/paylink.ts`). Zelle gets written instructions.
+you have left (`src/web/paylink.ts`).
 
-**8. Recording.** **I sent it** on the page (`POST /b/:billId/payment`)
+**8. Recording.** **I paid** on the page (`POST /b/:billId/payment`)
 inserts into `settlements` (`src/db/settlements.ts`). The checks run inside
 the insert, so racing taps cannot overpay, and the page's own id for the
 payment makes a retry land once. The payment is announced in the channel
@@ -151,7 +151,7 @@ sequenceDiagram
   B->>W: POST /b/:billId/confirm
   W->>DB: freeze shares
   W->>D: edit message to the owe card
-  Diner->>B: pay by link, then I sent it
+  Diner->>B: pay by link, then I paid
   B->>W: POST /b/:billId/payment
   W->>DB: insert settlement
   W->>D: payment announced

@@ -83,7 +83,7 @@ describe("/paywith", () => {
       ["method", true],
       ["handle", true],
     ]);
-    expect(command.options[0].choices.map((c: any) => c.value)).toEqual(["venmo", "cashapp", "zelle"]);
+    expect(command.options[0].choices.map((c: any) => c.value)).toEqual(["venmo", "cashapp"]);
   });
 
   it("saves a handle, replaces it on a second run, and answers privately", async () => {
@@ -98,11 +98,32 @@ describe("/paywith", () => {
 
   it("rejects a handle that is not valid for the method and stores nothing", async () => {
     const reply = await run(paywith("venmo", "evil.example/x?txn=charge", GAVIN));
-    const zelle = await run(paywith("zelle", "not an email", GAVIN));
+    const cash = await run(paywith("cashapp", "a/b", GAVIN));
 
     expect(reply.data.flags).toBe(EPHEMERAL);
     expect(reply.data.content).toMatch(/venmo/i);
-    expect(zelle.data.content).toMatch(/zelle/i);
+    expect(cash.data.content).toMatch(/cash app/i);
     expect(await getPaymentHandles(db, "gavin")).toEqual([]);
+  });
+
+  // A Discord client can still send zelle from the command list it cached
+  // before the choice went away.
+  it("turns down Zelle and stores nothing", async () => {
+    const reply = await run(paywith("zelle", "gavin@example.com", GAVIN));
+
+    expect(reply.data.flags).toBe(EPHEMERAL);
+    expect(reply.data.content).toBe("Pick Venmo or Cash App.");
+    expect(await getPaymentHandles(db, "gavin")).toEqual([]);
+  });
+
+  it("ignores a Zelle handle saved before Zelle was dropped", async () => {
+    await db
+      .prepare(
+        `INSERT INTO payment_handles (user_id, method, handle, updated_at) VALUES
+           ('gavin', 'zelle', 'gavin@example.com', '2026-10-28'), ('gavin', 'cashapp', 'GavinL', '2026-10-28')`,
+      )
+      .run();
+
+    expect(await getPaymentHandles(db, "gavin")).toEqual([{ method: "cashapp", handle: "GavinL" }]);
   });
 });

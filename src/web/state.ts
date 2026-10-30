@@ -107,10 +107,7 @@ function owingOf(shares: Share[], participants: Participant[], payer: Participan
 function payOptions(bill: BillRow, handles: PaymentHandle[], leftCents: Cents): PayOption[] {
   if (leftCents <= 0) return [];
   const note = clip(billName(bill), MAX_NOTE);
-  return handles.flatMap(({ method, handle }) => {
-    const link = payLink(method, handle, leftCents, note);
-    return link ? [{ method, name: METHOD_NAMES[method], url: link.url }] : [];
-  });
+  return handles.map(({ method, handle }) => ({ method, name: METHOD_NAMES[method], url: payLink(method, handle, leftCents, note).url }));
 }
 
 export function billState(
