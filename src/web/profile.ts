@@ -86,8 +86,11 @@ const FEET = 156;
 const TALLEST = 110;
 const LOWEST = 6;
 const WIDEST_STEP = WIDTH / 6;
-// Past this a name can't share a line with the tabs, or sit in a third of a card.
+// Past this a name can't sit in a third of a card.
 const LONG_NAME = 12;
+// Past this a name can't share a line with the 44px tabs at phone width: ten
+// Latin letters, or five Chinese characters, which are drawn twice as wide.
+const HEADER_ROOM = 10;
 const FAR_RANGE = "M-14 103L0 96C34 78 60 60 92 66C120 71 136 52 166 48C196 44 214 66 246 70C276 74 300 54 330 58C344 60 352 64 356 66L370 72V200H-14Z";
 
 function n(value: number): string {
@@ -126,6 +129,10 @@ function monthLabel(month: string, count: number): string {
 function monthLine(m: MonthSpend): string {
   const name = monthName(m.month);
   return m.outings === 0 ? `No outings in ${name}.` : `${formatCents(m.cents)} in ${name}, ${plural(m.outings, "outing")}.`;
+}
+
+function headerWidth(name: string): number {
+  return [...name].reduce((width, char) => width + (char.codePointAt(0)! >= 0x2e80 ? 2 : 1), 0);
 }
 
 function range(months: MonthSpend[], top: number): string {
@@ -230,7 +237,7 @@ export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: Logged
     : `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, p.name.length > LONG_NAME)}
+${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
@@ -339,7 +346,7 @@ const PROFILE_STYLES = `${RANK_FACE}
 .head h1 { display: flex; align-items: center; gap: 9px; }
 .head.is-long h1 { grid-column: 1 / -1; grid-row: 2; }
 .head.is-long .status { grid-column: 2; grid-row: 3; }
-.head.is-long .meta { grid-column: 1; grid-row: 3; align-self: center; }
+.head.is-long .meta { grid-column: 1; grid-row: 3; align-self: center; flex-wrap: wrap; }
 .tabs { display: inline-flex; padding: 2px; border: 1px solid var(--rule-strong); border-radius: 15px; background: color-mix(in srgb, var(--card) 70%, transparent); font-size: 14px; }
 .tabs a { padding: 2px 10px; border-radius: 12px; color: inherit; text-decoration: none; }
 .tabs a.on { background: var(--ink); color: var(--card); }

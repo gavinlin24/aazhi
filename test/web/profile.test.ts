@@ -165,6 +165,18 @@ describe("the profile page", () => {
     expect((await one(short, ".head")).attrs.class).toBe("head");
   });
 
+  it("moves a name off the tabs' line once it can't fit beside them", async () => {
+    const people: [string, string][] = [["chris", "Christopher"], ["wei", "黄伟明明"], ["ming", "欧阳黄伟明明"]];
+    for (const [id, name] of people) {
+      await seedOuting(db, { id: `h-${id}`, people: [[id, name]], alongside: ["gavin", "Gavin"], items: [["Pho", 2000, [id]]] });
+    }
+    const token = await viewerToken();
+    const classOf = async (id: string) => (await one(await (await get(`/g/guild-1/u/${id}?t=${token}`)).text(), ".head")).attrs.class;
+    expect(await classOf("chris")).toContain("is-long");
+    expect(await classOf("wei")).toBe("head");
+    expect(await classOf("ming")).toContain("is-long");
+  });
+
   it("links the companion tile to that person with the same token", async () => {
     const token = await viewerToken();
     const html = await (await get(`/g/guild-1?t=${token}`)).text();
