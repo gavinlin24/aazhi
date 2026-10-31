@@ -134,9 +134,6 @@ ${CEREMONY_SCRIPT}
     page.querySelectorAll("[data-list]").forEach((list) => {
       list.hidden = list.dataset.list !== board + ":" + span;
     });
-    page.querySelectorAll("[data-foot]").forEach((foot) => {
-      foot.hidden = foot.dataset.foot !== board;
-    });
     page.querySelectorAll("[data-tab]").forEach((tab) => tab.classList.toggle("on", tab.dataset.tab === board));
     page.querySelectorAll("[data-to]").forEach((tab) => tab.classList.toggle("on", tab.dataset.to === span));
     // These tabs were drawn for the board the page opened on.

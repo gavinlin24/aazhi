@@ -6,9 +6,9 @@ import {
 } from "discord-api-types/v10";
 import type { Env } from "../env";
 import { debtsCommand } from "./handlers/debts";
-import { leaderboardCommand, postLeaderboard } from "./handlers/leaderboard";
+import { leaderboardCommand } from "./handlers/leaderboard";
 import { logCommand } from "./handlers/log";
-import { postProfile, profileCommand } from "./handlers/profile";
+import { profileCommand } from "./handlers/profile";
 import { retired, voteOver } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
@@ -55,8 +55,6 @@ const RETIRED = [
 export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
-  "profile-post:": postProfile,
-  "leaderboard-post": postLeaderboard,
   // Old posts keep their Real and Fake buttons, so a tap still gets an answer.
   "logvote:": voteOver,
   ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),
