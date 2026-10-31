@@ -117,7 +117,9 @@ current revision, a matching total, every line claimed, another Discord member
 with a share above $0 and a receipt no other confirmed bill holds. Unclaimed lines can instead be split evenly between
 everyone who claimed something.
 `src/money/split.ts` splits each line between its claimants and gives the
-whole-bill discount, tax and tip in proportion to subtotal.
+whole-bill discount, tax and tip in proportion to subtotal. The payer can set
+the tip to split evenly instead. Then everyone with a line pays one equal
+part, guests included, and spare cents go out as they do on a shared line.
 Largest-remainder rounding (round everyone
 down, then give spare cents to the largest fractions) makes shares sum to the
 cent. The shares are frozen in the `shares` table, and the message becomes

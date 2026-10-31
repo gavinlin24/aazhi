@@ -527,6 +527,10 @@ button.row:active { background: var(--fill); }
 .edit-form [data-cancel] { grid-row: 2; grid-column: 1; justify-self: start; }
 .edit-form .go { grid-row: 2; grid-column: 2 / -1; justify-self: end; }
 .edit-form .field-msg { grid-column: 1 / -1; }
+/* The tip's split takes a row of its own, pushing the actions down one. */
+.edit-form .tip-split { grid-row: 2; grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
+.edit-form .tip-split ~ [data-cancel], .edit-form .tip-split ~ .go { grid-row: 3; }
+.tip-split .seg button { min-width: 0; padding: 0 12px; font-size: 15px; }
 .money-input {
   flex: 1;
   min-width: 0;
@@ -1492,6 +1496,13 @@ function withPercent(label: string, part: Cents, subtotal: Cents): string {
   return subtotal > 0 ? `${label} (${((part * 100) / subtotal).toFixed(1)}%)` : label;
 }
 
+// The word is for the payer alone, to see what they chose without opening the
+// tip. Everyone else just sees their amounts.
+function tipLabel(s: BillState): string {
+  const label = withPercent("Tip", s.tipCents, s.result.billSubtotalCents);
+  return s.editable === "all" && s.tipSplit === "even" && s.tipCents > 0 ? `${label}, evenly` : label;
+}
+
 // The payer's editable amounts are their own buttons, so the row reads as
 // plain figures to everyone else and as figures to fix to the one who paid.
 function amount(v: View, field: string, key: string, cents: Cents | null, label: string): string {
@@ -1526,7 +1537,7 @@ function totals(v: View): string {
     `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   );
   rows.push(
-    `<div class="trow" data-field-row="tip"><dt>${withPercent("Tip", s.tipCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
+    `<div class="trow" data-field-row="tip"><dt>${tipLabel(s)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {

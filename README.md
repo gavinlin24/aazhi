@@ -13,6 +13,7 @@ what they had. No accounts or installs: Discord already knows who everyone is.
    page. Shared plates split between whoever claims them.
 4. The payer confirms on the page. Each share includes proportional tax, tip
    and any whole-bill discount, in exact integer cents that sum to the total.
+   The payer can split the tip evenly instead, between everyone with a line.
 5. The page links to the payer's Venmo with your amount and a note filled in.
    **I paid** records the payment, and the bot tells the channel.
 
