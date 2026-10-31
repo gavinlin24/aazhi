@@ -540,6 +540,10 @@ button.row:active { background: var(--fill); }
 .edit-form [data-cancel] { grid-row: 2; grid-column: 1; justify-self: start; }
 .edit-form .go { grid-row: 2; grid-column: 2 / -1; justify-self: end; }
 .edit-form .field-msg { grid-column: 1 / -1; }
+/* The tip's split takes a row of its own, pushing the actions down one. */
+.edit-form .tip-split { grid-row: 2; grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); }
+.edit-form .tip-split ~ [data-cancel], .edit-form .tip-split ~ .go { grid-row: 3; }
+.tip-split .seg button { min-width: 0; padding: 0 12px; font-size: 15px; }
 .money-input {
   flex: 1;
   min-width: 0;

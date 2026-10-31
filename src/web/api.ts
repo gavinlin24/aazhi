@@ -455,7 +455,7 @@ api.patch(
   "/:billId",
   route(async (c, grant) => {
     const body = await readBody(c);
-    expectKeys(body, [], ["discount", "tax", "tip", "tipPercent", "printedTotal", "payer", "place"]);
+    expectKeys(body, [], ["discount", "tax", "tip", "tipPercent", "tipSplit", "printedTotal", "payer", "place"]);
     if (Object.keys(body).length === 0) bad("Nothing to change.");
     if ("place" in body) return changePlace(c, grant, body);
     if ((await getBill(c.env.DB, grant.billId))?.kind === "log") return refuse(409, NOT_ON_A_LOG);
@@ -467,6 +467,10 @@ api.patch(
     if ("tax" in body) amounts.taxCents = cents(body.tax, "tax", { signed: false });
     if ("tip" in body) amounts.tipCents = cents(body.tip, "tip", { signed: false });
     if ("tipPercent" in body) amounts.tipBasisPoints = basisPoints(body.tipPercent);
+    if ("tipSplit" in body) {
+      if (body.tipSplit !== "items" && body.tipSplit !== "even") bad('"tipSplit" must be "items" or "even".');
+      amounts.tipSplit = body.tipSplit;
+    }
     if ("printedTotal" in body) {
       amounts.printedTotalCents = body.printedTotal === null ? null : cents(body.printedTotal, "printed total", { signed: false });
     }

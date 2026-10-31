@@ -1,7 +1,7 @@
 import { reconciles } from "../extract/claude";
 import { groupByDebtor, groupOf, paidByDebtor, type Diner } from "../money/debtors";
 import { splitBill } from "../money/split";
-import type { Addon, BillInput, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Addon, BillInput, Cents, LineItem, ParticipantId, Share, SplitResult, TipSplit } from "../money/types";
 import { debtorOfSql, debtorSql, groupPaidSql } from "./debt";
 
 export type BillStatus = "draft" | "confirmed" | "superseded" | "deleted";
@@ -28,6 +28,7 @@ export interface BillRow {
   discountCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
+  tipSplit?: TipSplit;
   printedTotalCents: Cents | null;
   status: BillStatus;
   revision: number;
@@ -63,6 +64,7 @@ interface BillDbRow {
   discount_cents: number;
   tax_cents: number;
   tip_cents: number;
+  tip_split: TipSplit;
   printed_total_cents: number | null;
   status: BillStatus;
   revision: number;
@@ -87,7 +89,7 @@ interface ParticipantDbRow {
 }
 
 const BILL_COLUMNS = `id, guild_id, channel_id, message_id, payer_id, place, bill_date, bill_time, discount_cents,
-  tax_cents, tip_cents, printed_total_cents, status, revision, created_at, confirmed_at, kind`;
+  tax_cents, tip_cents, tip_split, printed_total_cents, status, revision, created_at, confirmed_at, kind`;
 
 function toBill(r: BillDbRow): BillRow {
   return {
@@ -102,6 +104,7 @@ function toBill(r: BillDbRow): BillRow {
     discountCents: r.discount_cents,
     taxCents: r.tax_cents,
     tipCents: r.tip_cents,
+    tipSplit: r.tip_split,
     printedTotalCents: r.printed_total_cents,
     status: r.status,
     revision: r.revision,
@@ -172,14 +175,18 @@ export class ReceiptAlreadySplitError extends Error {
 // sort themselves out at Confirm. Nor does a log: a split of the same receipt
 // takes over from the logs of the people on it. A null key equals nothing, so a
 // receipt without one always saves.
+//
+// Even is written here rather than set as the column default, so that a bill the
+// old Worker makes during a deploy stays by items, which is what it shows and
+// confirms.
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
-  const { receiptKey = null, kind = "split", billTime = null, ...bill } = b;
+  const { receiptKey = null, kind = "split", billTime = null, tipSplit = "even", ...bill } = b;
   const createdAt = new Date().toISOString();
   const { meta } = await db
     .prepare(
       `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
-         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time, tip_split)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
        WHERE NOT EXISTS (SELECT 1 FROM bills WHERE receipt_key = ?14 AND kind = 'split' AND status = 'confirmed')`,
     )
     .bind(
@@ -199,10 +206,11 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       receiptKey,
       kind,
       billTime,
+      tipSplit,
     )
     .run();
   if (meta.changes === 0) throw new ReceiptAlreadySplitError();
-  return { ...bill, billTime, kind, revision: 1, createdAt, confirmedAt: null };
+  return { ...bill, tipSplit, billTime, kind, revision: 1, createdAt, confirmedAt: null };
 }
 
 export async function getBill(db: D1Database, id: string): Promise<BillRow | null> {
@@ -396,6 +404,7 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
       discountCents: billRow.discount_cents,
       taxCents: billRow.tax_cents,
       tipCents: billRow.tip_cents,
+      tipSplit: billRow.tip_split,
       payer: billRow.payer_id,
       participants: sortedIds(people.map((p) => p.id)),
       pardoned: sortedIds(listed("pardoned")),
@@ -554,13 +563,14 @@ export interface BillAmounts {
   // A percentage in hundredths of a percent, applied to the bill subtotal
   // inside the write so the tip matches the lines as they stand when it lands.
   tipBasisPoints?: number;
+  tipSplit?: TipSplit;
   printedTotalCents?: number | null;
 }
 
 export async function setBillAmounts(db: D1Database, billId: string, amounts: BillAmounts): Promise<number> {
   const sets: string[] = [];
-  const values: (number | null)[] = [];
-  const set = (sql: string, value: number | null) => {
+  const values: (number | string | null)[] = [];
+  const set = (sql: string, value: number | string | null) => {
     values.push(value);
     sets.push(sql.replace("?", `?${values.length + 1}`));
   };
@@ -578,6 +588,7 @@ export async function setBillAmounts(db: D1Database, billId: string, amounts: Bi
       amounts.tipBasisPoints,
     );
   }
+  if (amounts.tipSplit !== undefined) set("tip_split = ?", amounts.tipSplit);
   if (amounts.printedTotalCents !== undefined) set("printed_total_cents = ?", amounts.printedTotalCents);
   if (sets.length === 0) throw new Error("no amounts to set");
 

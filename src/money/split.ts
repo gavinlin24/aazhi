@@ -64,14 +64,19 @@ function largestRemainder(
   return owed;
 }
 
+// One equal part each, with spare cents going one apiece in id order.
+function evenPieces(cents: Cents, people: ParticipantId[]): Map<ParticipantId, Cents> {
+  const ids = byId(people);
+  if (ids.length === 0) return new Map();
+  const base = floorDiv(cents, 1, ids.length);
+  const leftover = cents - base * ids.length;
+  return new Map(ids.map((p, i) => [p, base + (i < leftover ? 1 : 0)]));
+}
+
 // What each claimant's piece of one line is. Exported so anything that shows a
 // person their pieces shows the same cents the split itself used.
 export function itemPieces(item: LineItem): Map<ParticipantId, Cents> {
-  const claimants = byId(item.claimedBy);
-  if (claimants.length === 0) return new Map();
-  const base = floorDiv(item.cents, 1, claimants.length);
-  const leftover = item.cents - base * claimants.length;
-  return new Map(claimants.map((p, i) => [p, base + (i < leftover ? 1 : 0)]));
+  return evenPieces(item.cents, item.claimedBy);
 }
 
 // Whether a displayed slice points the way its exact value does: zero when
@@ -105,33 +110,44 @@ export function splitBill(input: BillInput): SplitResult {
   // is one more term of the same proration rather than a step of its own.
   const distributableCents = billSubtotalCents - input.discountCents + input.taxCents + input.tipCents;
   const fullyClaimed = input.items.every((item) => item.claimedBy.length > 0);
+  const tipEvenly = input.tipSplit === "even";
+  // A person is someone with a line, not a roster row: opening the link adds a
+  // row, and looking at the bill shouldn't cost anyone a part of the tip. A
+  // bill can't confirm with a line unclaimed, so until then this is a preview
+  // that drops as more people claim.
+  const tipParts = tipEvenly ? evenPieces(input.tipCents, input.items.flatMap((item) => item.claimedBy)) : new Map<ParticipantId, Cents>();
+  const tipPartsCents = [...tipParts.values()].reduce((total, cents) => total + cents, 0);
+  // An even tip has no proration, so it stays out of what follows subtotals.
+  const proratedCents = tipEvenly ? distributableCents - input.tipCents : distributableCents;
   const isZeroBill = billSubtotalCents === 0;
   // Distribute only the claimed slice of the bill. Rounding toward the full
   // distributable total would hand unclaimed money to whoever claimed first.
   const claimedTargetCents = isZeroBill
     ? 0
-    : roundDiv(claimedSubtotalCents, distributableCents, billSubtotalCents);
-  const owed = isZeroBill
+    : roundDiv(claimedSubtotalCents, proratedCents, billSubtotalCents);
+  const prorated = isZeroBill
     ? new Map(participants.map((p) => [p, 0]))
-    : largestRemainder(subtotals, distributableCents, billSubtotalCents, claimedTargetCents);
+    : largestRemainder(subtotals, proratedCents, billSubtotalCents, claimedTargetCents);
 
   const pardoned = new Set(input.pardoned);
   const shares: Share[] = participants.map((p) => {
     const subtotalCents = isZeroBill ? 0 : subtotals.get(p)!;
-    const owedCents = owed.get(p)!;
+    const proratedShare = prorated.get(p)!;
+    const owedCents = proratedShare + (tipParts.get(p) ?? 0);
     const slice = (cents: Cents) => (isZeroBill ? 0 : roundDiv(cents, subtotalCents, billSubtotalCents));
     const sign = (cents: Cents) => Math.sign(cents) * Math.sign(subtotalCents) * Math.sign(billSubtotalCents);
     // The tip line absorbs the rounding so the displayed lines add up to the
     // total; tip is the payer's own number, not one printed on paper. But a
     // stray cent must not show a -$0.01 tip on a no-tip bill, or any slice
     // pointing the opposite way from the person's real one, so then tax takes
-    // it, or the discount on a bill with neither.
+    // it, or the discount on a bill with neither. An even tip is an exact
+    // part, so there the same two always take it.
     let discountCents = slice(input.discountCents);
     let taxCents = slice(input.taxCents);
-    let tipCents = owedCents - subtotalCents + discountCents - taxCents;
-    if (!fits(tipCents, sign(input.tipCents))) {
-      const stray = tipCents;
-      tipCents = 0;
+    const stray = proratedShare - subtotalCents + discountCents - taxCents;
+    let tipCents = tipEvenly ? (tipParts.get(p) ?? 0) : stray;
+    if (tipEvenly || !fits(stray, sign(input.tipCents))) {
+      if (!tipEvenly) tipCents = 0;
       if (!fits(taxCents + stray, sign(input.taxCents)) && fits(discountCents - stray, sign(input.discountCents))) {
         discountCents -= stray;
       } else {
@@ -159,7 +175,7 @@ export function splitBill(input: BillInput): SplitResult {
     billSubtotalCents,
     distributableCents,
     claimedSubtotalCents,
-    unclaimedCents: distributableCents - claimedTargetCents,
+    unclaimedCents: distributableCents - claimedTargetCents - tipPartsCents,
     shares,
     payerCollectsCents,
     fullyClaimed,

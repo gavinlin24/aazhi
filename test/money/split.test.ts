@@ -286,3 +286,90 @@ describe("on 1,000 generated bills", () => {
     }
   });
 });
+
+describe("a tip split evenly", () => {
+  const dinner: BillInput = {
+    items: [
+      { id: "steak", label: "Steak", cents: 4200, claimedBy: ["ana"] },
+      { id: "salad", label: "Salad", cents: 900, claimedBy: ["cam"] },
+      { id: "soup", label: "Soup", cents: 1400, claimedBy: ["ben"] },
+      { id: "rice", label: "Rice", cents: 1500, claimedBy: ["dee"] },
+    ],
+    discountCents: 0,
+    taxCents: 712,
+    tipCents: 1800,
+    tipSplit: "even",
+    payer: "ana",
+    participants: ["ana", "ben", "cam", "dee", "eli"],
+    pardoned: [],
+  };
+  const shares = (bill: BillInput) => Object.fromEntries(splitBill(bill).shares.map((s) => [s.participant, s]));
+
+  it("gives each person with a line one part, and tax still follows food", () => {
+    const by = shares(dinner);
+    expect(["ana", "ben", "cam", "dee"].map((p) => by[p]!.tipCents)).toEqual([450, 450, 450, 450]);
+    expect(["ana", "ben", "cam", "dee"].map((p) => by[p]!.owedCents)).toEqual([5024, 1975, 1430, 2083]);
+    expect(Object.values(by).reduce((n, s) => n + s.taxCents, 0)).toBe(712);
+  });
+
+  it("charges nothing to someone on the bill who claimed nothing", () => {
+    expect(shares(dinner).eli).toMatchObject({ tipCents: 0, owedCents: 0 });
+  });
+
+  it("gives leftover cents the way a shared line does", () => {
+    const by = shares({ ...dinner, tipCents: 1003 });
+    expect(["ana", "ben", "cam", "dee"].map((p) => by[p]!.tipCents)).toEqual([251, 251, 251, 250]);
+  });
+
+  it("changes nothing with no tip", () => {
+    expect(splitBill({ ...dinner, tipCents: 0 })).toEqual(splitBill({ ...dinner, tipCents: 0, tipSplit: "items" }));
+  });
+
+  it("puts the whole tip on whoever has claimed so far", () => {
+    const partial = { ...dinner, items: dinner.items.map((i) => (i.id === "salad" || i.id === "soup" ? i : { ...i, claimedBy: [] })) };
+    const r = splitBill(partial);
+    expect(shares(partial).cam!.tipCents).toBe(900);
+    expect(shares(partial).ben!.tipCents).toBe(900);
+    expect(r.unclaimedCents + r.shares.reduce((n, s) => n + s.owedCents, 0)).toBe(r.distributableCents);
+  });
+
+  it("leaves the tip unclaimed until someone has a line", () => {
+    const r = splitBill({ ...dinner, items: dinner.items.map((i) => ({ ...i, claimedBy: [] })) });
+    expect(r.unclaimedCents).toBe(r.distributableCents);
+  });
+
+  it("splits a tip on a bill whose lines net to nothing", () => {
+    const r = splitBill({ ...dinner, taxCents: 0, items: [
+      { id: "meal", label: "Meal", cents: 1000, claimedBy: ["ana"] },
+      { id: "comp", label: "Comp", cents: -1000, claimedBy: ["ben"] },
+    ] });
+    expect(r.shares.reduce((n, s) => n + s.owedCents, 0)).toBe(r.distributableCents);
+    expect(r.unclaimedCents).toBe(0);
+  });
+
+  it("always adds up, down to each person's displayed lines", () => {
+    const random = seededRandom(424242);
+    for (let round = 0; round < 500; round++) {
+      const people = ["a", "b", "c", "d", "e", "f"].slice(0, randomInt(random, 1, 6));
+      const items: LineItem[] = Array.from({ length: randomInt(random, 1, 6) }, (_, i) => ({
+        id: `i${i}`,
+        label: "x",
+        cents: randomInt(random, -300, 5000),
+        claimedBy: shuffle(people, random).slice(0, randomInt(random, 1, people.length)),
+      }));
+      const subtotal = items.reduce((n, i) => n + i.cents, 0);
+      const r = splitBill({
+        items,
+        discountCents: subtotal > 0 ? randomInt(random, 0, Math.min(subtotal, 800)) : 0,
+        taxCents: randomInt(random, 0, 900),
+        tipCents: randomInt(random, 0, 5000),
+        tipSplit: "even",
+        payer: "a",
+        participants: people,
+        pardoned: [],
+      });
+      expect(r.shares.reduce((n, s) => n + s.owedCents, 0) + r.unclaimedCents).toBe(r.distributableCents);
+      for (const s of r.shares) expect(s.subtotalCents - s.discountCents + s.taxCents + s.tipCents).toBe(s.owedCents);
+    }
+  });
+});

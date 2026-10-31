@@ -525,9 +525,17 @@ export const CLIENT_SCRIPT = String.raw`
       el("div", { class: "money-input" + (percent ? " is-percent" : "") }, [el("span", { "data-unit": true, "aria-hidden": "true" }, percent ? "%" : field === "discount" ? "−$" : "$"), input]),
     ];
     if (field === "tip") {
+      const even = (editing.tipSplit || s.tipSplit) === "even";
       parts.push(el("div", { class: "seg", role: "group", "aria-label": "Enter the tip as" }, [
         el("button", { type: "button", "data-tip-mode": "dollars", "aria-pressed": String(!percent) }, "$"),
         el("button", { type: "button", "data-tip-mode": "percent", "aria-pressed": String(percent) }, "%"),
+      ]));
+      parts.push(el("div", { class: "tip-split" }, [
+        el("span", null, "Split tip"),
+        el("div", { class: "seg", role: "group", "aria-label": "Split tip" }, [
+          el("button", { type: "button", "data-tip-split": "items", "aria-pressed": String(!even) }, "By items"),
+          el("button", { type: "button", "data-tip-split": "even", "aria-pressed": String(even) }, "Evenly"),
+        ]),
       ]));
     }
     parts.push(
@@ -1931,6 +1939,13 @@ export const CLIENT_SCRIPT = String.raw`
     if (input) input.focus();
   }
 
+  // Marked in place rather than redrawn, so a tip half typed stays in the box.
+  // It lands with the amount, when the form is saved.
+  function setTipSplit(button) {
+    editing.tipSplit = button.dataset.tipSplit;
+    for (const node of button.parentNode.children) node.setAttribute("aria-pressed", String(node === button));
+  }
+
   async function saveField(form) {
     const name = form.dataset.field;
     const msg = form.querySelector(".field-msg");
@@ -1956,6 +1971,7 @@ export const CLIENT_SCRIPT = String.raw`
       body = {};
       body[name] = value;
     }
+    if (name === "tip" && editing.tipSplit) body.tipSplit = editing.tipSplit;
     setBusy(form, true);
     const failure = await write("PATCH", "", body);
     setBusy(form, false);
@@ -2309,6 +2325,8 @@ export const CLIENT_SCRIPT = String.raw`
     if (target.closest("[data-reopen]")) return toggle("reopen", "POST", "/reopen");
     const field = target.closest("[data-edit-field]");
     if (field) return startEdit(field.dataset.editField);
+    const split = target.closest("[data-tip-split]");
+    if (split) return setTipSplit(split);
     const mode = target.closest("[data-tip-mode]");
     if (mode) return setTipMode(mode.dataset.tipMode);
     const addAddon = target.closest("[data-add-addon]");
