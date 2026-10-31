@@ -35,27 +35,6 @@ export async function postChannelMessage(channelId: string, body: unknown, env: 
   return (await response.json<{ id: string }>()).id;
 }
 
-// Discord takes files only as multipart. Bytes rather than links, because the
-// post has to outlive the links an interaction's attachments arrive on.
-export async function postChannelFiles(channelId: string, body: unknown, urls: string[], env: Env): Promise<string> {
-  const form = new FormData();
-  form.set("payload_json", JSON.stringify(body));
-  await Promise.all(
-    urls.map(async (url, i) => {
-      const photo = await fetch(url);
-      if (!photo.ok) throw new Error(`could not fetch a receipt photo: ${photo.status}`);
-      form.set(`files[${i}]`, await photo.blob(), `receipt-${i + 1}.jpg`);
-    }),
-  );
-  const response = await fetch(`${API}/channels/${channelId}/messages`, {
-    method: "POST",
-    headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, "user-agent": USER_AGENT },
-    body: form,
-  });
-  if (!response.ok) throw new Error(`Discord channel files failed: ${response.status} ${await response.text()}`);
-  return (await response.json<{ id: string }>()).id;
-}
-
 export async function editChannelMessage(channelId: string, messageId: string, body: unknown, env: Env): Promise<void> {
   await discord(env, "channel message edit", "PATCH", `/channels/${channelId}/messages/${messageId}`, body, "bot");
 }
@@ -80,20 +59,6 @@ export async function guildName(guildId: string, env: Env): Promise<string | nul
     return name ?? null;
   } catch (error) {
     console.error("could not look up the server name", error);
-    return null;
-  }
-}
-
-// Approximate, and it counts bots, which is all Discord offers without a
-// privileged intent. Null if the lookup is slow: a vote must still answer inside
-// Discord's three seconds.
-export async function guildMemberCount(guildId: string, env: Env): Promise<number | null> {
-  try {
-    const response = await discord(env, "guild count", "GET", `/guilds/${guildId}?with_counts=true`, undefined, "bot", AbortSignal.timeout(GUILD_LOOKUP_MS));
-    const { approximate_member_count: count } = await response.json<{ approximate_member_count?: number }>();
-    return count ?? null;
-  } catch (error) {
-    console.error("could not count the server's members", error);
     return null;
   }
 }

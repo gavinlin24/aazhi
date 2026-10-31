@@ -3,7 +3,11 @@ import { getBill } from "../../db/bills";
 import type { InteractionHandler } from "../interactions";
 import { editBillMessage, ephemeral } from "../rest";
 
+const VOTE_OVER = "This vote is over.";
+
 export const MOVED = "That moved to the page. Tap Open the split to do it there.";
+
+export const voteOver: InteractionHandler = async () => Response.json(ephemeral(VOTE_OVER));
 
 // Every custom_id these buttons and forms carried started with the bill id
 // after their prefix, and bill ids are UUIDs, so the id runs to the first colon.

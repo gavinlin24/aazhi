@@ -24,6 +24,8 @@ import { ALREADY_SPLIT, attachedImages, context, NOT_IN_SERVER, READ_DEADLINE_MS
 const NO_PHOTO = "I need a photo of the receipt. Attach it to /log.";
 const CANT_POST = "I can't post in this channel, so I can't log here. Run /log in a channel I can post in.";
 const NO_TOTAL = "Not logged. I can't find a total on this receipt.";
+const LOOKS_FAKE = "This receipt looks fake, so I didn't log it.";
+const NOT_CHECKED = "I couldn't check this receipt, so try again.";
 const STANDING: Record<ReceiptStanding, string> = {
   split: ALREADY_SPLIT,
   mine: "You already logged this receipt.",
@@ -34,12 +36,11 @@ const DRAFT_LIFE_MS = 30 * 60 * 1000;
 
 const THREADS: (ChannelType | undefined)[] = [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread];
 
-// Asked every time rather than only for a flagged receipt, so whether /log
-// works here can't give away that a receipt was flagged. Checked before the
-// read, which is the one step that costs money.
+// Log it posts here, so this is checked before the read, which is the one step
+// that costs money.
 function canPost(body: APIInteraction): boolean {
   const send = THREADS.includes(body.channel?.type) ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages;
-  const needed = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.AttachFiles | send;
+  const needed = PermissionFlagsBits.ViewChannel | send;
   return (BigInt(body.app_permissions) & needed) === needed;
 }
 
@@ -81,12 +82,18 @@ async function readAndOffer(permit: ReadPermit, guildId: string, channelId: stri
 
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(new DOMException("receipt read timed out", "TimeoutError")), READ_DEADLINE_MS);
-  // Side by side so the check adds no wait. Its answer stays out of everything
-  // the person sees until Log it posts the photo.
-  const [read, flagged] = await Promise.all([
-    extractReceipt(permit, env.ANTHROPIC_API_KEY, { signal: deadline.signal }),
-    looksFake(permit, env.ANTHROPIC_API_KEY, { signal: deadline.signal }),
-  ]).finally(() => clearTimeout(timer));
+  // Side by side so the check adds no wait. A refusal doesn't wait for the read
+  // either, and stops it, since nothing it finds would change the answer.
+  const reading = extractReceipt(permit, env.ANTHROPIC_API_KEY, { signal: deadline.signal });
+  const verdict = await looksFake(permit, env.ANTHROPIC_API_KEY, { signal: deadline.signal });
+  if (verdict !== "real") {
+    clearTimeout(timer);
+    deadline.abort();
+    await say(verdict === "fake" ? LOOKS_FAKE : NOT_CHECKED);
+    await reading;
+    return;
+  }
+  const read = await reading.finally(() => clearTimeout(timer));
   if (!read.ok) {
     await say(READ_FAILED[read.reason]);
     return;
@@ -107,7 +114,7 @@ async function readAndOffer(permit: ReadPermit, guildId: string, channelId: stri
       await say(STANDING[standing]);
       return;
     }
-    const billId = await saveDraft(e, guildId, channelId, invoker, env.DB, { receiptKey: key, photoUrls: flagged ? permit.imageUrls : null });
+    const billId = await saveDraft(e, guildId, channelId, invoker, env.DB, { receiptKey: key });
     await clearStaleLogDrafts(env.DB, billId, invoker.id, key, new Date(now - DRAFT_LIFE_MS).toISOString());
     const token = await mintToken(billId, invoker.id, env.TOKEN_SIGNING_KEY, now);
     await editOriginal(interactionToken, offer(e, `${origin}/b/${encodeURIComponent(billId)}?t=${token}`), env);

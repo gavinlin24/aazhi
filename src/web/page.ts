@@ -990,9 +990,6 @@ button.owe[aria-pressed="false"] .mark { display: none; }
 .l-act[aria-busy="true"] { cursor: progress; opacity: 0.75; }
 .l-discard { justify-content: center; margin-top: 8px; border-bottom: 0; }
 .l-note { display: flex; gap: 9px; margin-top: 12px; padding: 10px 13px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--card) var(--grain); font-size: 15px; line-height: 1.35; }
-.l-done-line { padding: 12px 13px; font-size: 16px; line-height: 1.4; }
-.l-done-line b { display: block; font-size: 18px; font-weight: 600; }
-.l-done-line span { color: var(--muted); }
 .hero .l-sub { margin-top: 3px; color: var(--muted); font-size: 16px; }
 .mine .card-h { display: flex; align-items: center; gap: 7px; padding: 9px 0 2px; color: var(--muted); font-size: 15px; font-weight: 600; }
 .mine .card-h .ic { width: 17px; height: 17px; }
@@ -1258,11 +1255,9 @@ export function renderBillNotFound(): string {
   );
 }
 
-export function renderBillGone(bill: Pick<BillRow, "status" | "kind" | "vote">): string {
+export function renderBillGone(bill: Pick<BillRow, "status" | "kind">): string {
   if (bill.kind === "log") {
-    return bill.vote === "fake"
-      ? notice("Voted fake", "The server voted, and this receipt doesn't count.")
-      : notice("This log was removed", "It no longer counts. If you undid it, you can run <strong>/log</strong> again inside the 8 hours.");
+    return notice("This log was removed", "It no longer counts. If you undid it, you can run <strong>/log</strong> again inside the 8 hours.");
   }
   return bill.status === "superseded"
     ? notice(
@@ -1395,12 +1390,10 @@ function payerChip(v: View): string {
 }
 
 function logWord(s: BillState): string {
-  if (s.status === "confirmed") return "Logged";
-  return s.vote === "open" ? "Up for a vote" : "Your items";
+  return s.status === "confirmed" ? "Logged" : "Your items";
 }
 
-// Mirrors renderHeader in the client. The name can be fixed until a post has it
-// up for a vote, and a draft shows that right on the name.
+// Mirrors renderHeader in the client. A draft's name can be fixed right on it.
 function logHeader(v: View): string {
   const s = v.s;
   const name = escapeHtml(s.place?.trim() || "Receipt");
@@ -2022,13 +2015,10 @@ ${v.s.postMissing ? `<p class="l-note" data-log-part>Logged, but I couldn't post
 // draws these same sections.
 function logBody(v: View): string {
   const s = v.s;
-  const ask = `<div data-log-ask>${s.status === "draft" && !s.vote ? logAsk(s) : ""}</div>`;
+  const ask = `<div data-log-ask>${s.status === "draft" ? logAsk(s) : ""}</div>`;
   if (s.status === "confirmed") {
     const acts = `<button type="button" class="l-act" data-fix-name>Fix name${icon("chev")}</button><button type="button" class="l-act dan" data-remove-log>Undo${icon("chev")}</button>`;
     return `${ask}${logged(v)}<section class="card acts needs-js" data-actions aria-label="Log actions">${acts}</section>`;
-  }
-  if (s.vote === "open") {
-    return `<section class="card" aria-label="Vote"><p class="l-done-line"><b>Posted for a vote.</b> <span>The server is voting on this receipt. It doesn't count unless they vote real.</span></p></section>`;
   }
   return `${ask}${logItems(v)}<section class="acts l-acts needs-js" data-actions aria-label="Log it">${logConfirm(s)}</section>${logBar(s)}`;
 }

@@ -128,7 +128,7 @@ describe("confirmBill", () => {
     await seedSaigon(db, BILL);
     const before = await revision();
 
-    expect(await confirmBill(db, BILL, before, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [], vote: false });
+    expect(await confirmBill(db, BILL, before, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [] });
 
     const bill = (await getBill(db, BILL))!;
     expect(bill.status).toBe("confirmed");
@@ -192,7 +192,7 @@ describe("splitOrphansEvenly", () => {
     expect(items.find((i) => i.id === item("water"))!.claimedBy).toEqual(everyoneButZoe);
     expect(items.find((i) => i.id === item("noodles"))!.claimedBy).toEqual(["dani"]);
 
-    expect(await confirmBill(db, BILL, now, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [], vote: false });
+    expect(await confirmBill(db, BILL, now, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [] });
     const frozen = await frozenShares();
     expect(frozen.reduce((sum, s) => sum + s.owedCents, 0)).toBe(32412);
     expect(frozen.find((s) => s.participant === "zoe")!.owedCents).toBe(0);
@@ -255,7 +255,7 @@ describe("reopenBill", () => {
     expect(await frozenShares()).toEqual(frozen);
 
     // And it can be confirmed again as it stands.
-    expect(await confirmBill(db, BILL, bill.revision, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [], vote: false });
+    expect(await confirmBill(db, BILL, bill.revision, "gavin")).toEqual({ ok: true, changes: [], removedLogs: [] });
   });
 
   it("refuses to reopen a bill that is not confirmed", async () => {

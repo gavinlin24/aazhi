@@ -17,7 +17,7 @@ const EPHEMERAL = 1 << 6;
 const SUPPRESS_EMBEDS = 1 << 2;
 // 7:30pm in Los Angeles on the day of the receipt below.
 const NOW = Date.parse("2026-10-30T02:30:00Z");
-const VIEW_SEND_ATTACH = (1n << 10n) | (1n << 11n) | (1n << 15n);
+const VIEW_SEND = (1n << 10n) | (1n << 11n);
 
 const LUNCH = {
   is_receipt: true,
@@ -45,20 +45,16 @@ interface Call {
   url: string;
   method: string;
   body: any;
-  form: FormData | null;
 }
 
 let calls: Call[];
 let read: unknown;
-let flagged: boolean;
+let check: () => Response;
 let channelFailures: number;
-let members: number;
-let photoStatus: number;
 
-function requestBody(init?: RequestInit): { body: any; form: FormData | null } {
-  if (init?.body instanceof FormData) return { body: JSON.parse(String(init.body.get("payload_json"))), form: init.body };
-  return { body: init?.body ? JSON.parse(String(init.body)) : undefined, form: null };
-}
+const answer = (fields: Record<string, unknown>) => Response.json({ content: [{ type: "text", text: JSON.stringify(fields) }] });
+const REAL = { medium: "photo_of_paper", edited: false, till_printed: true };
+const FAKE = { ...REAL, edited: true };
 
 beforeEach(async () => {
   await ready;
@@ -66,23 +62,16 @@ beforeEach(async () => {
   await db.prepare("DELETE FROM receipt_reads").run();
   calls = [];
   read = LUNCH;
-  flagged = false;
+  check = () => answer(REAL);
   channelFailures = 0;
-  members = 6;
-  photoStatus = 200;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    calls.push({ url, method: init?.method ?? "GET", ...requestBody(init) });
+    calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.startsWith("https://api.anthropic.com")) {
       const sent = JSON.parse(String(init!.body));
-      if (sent.output_config) {
-        const verdict = { medium: "photo_of_paper", edited: flagged, till_printed: true };
-        return Response.json({ content: [{ type: "text", text: JSON.stringify(verdict) }] });
-      }
+      if (sent.output_config) return check();
       return Response.json({ content: [{ type: "tool_use", id: "t", name: EXTRACT_TOOL_NAME, input: read }], stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } });
     }
-    if (url === RECEIPT_URL) return new Response(photoStatus === 200 ? "photo-bytes" : "gone", { status: photoStatus, headers: { "content-type": "image/jpeg" } });
-    if (url.includes("/guilds/")) return Response.json({ approximate_member_count: members });
     if (url.includes("/channels/") && channelFailures > 0) {
       channelFailures--;
       return new Response("upstream sad", { status: 500 });
@@ -120,7 +109,7 @@ function slashLog(id = "gavin", overrides: Record<string, unknown> = {}) {
     guild_id: "guild-1",
     channel_id: "chan-1",
     channel: { id: "chan-1", type: 0 },
-    app_permissions: String(VIEW_SEND_ATTACH),
+    app_permissions: String(VIEW_SEND),
     member: member(id),
     data: {
       id: "cmd-1",
@@ -201,6 +190,25 @@ function press(side: "real" | "fake", id: string, who: string) {
   });
 }
 
+async function receiptKey(): Promise<string> {
+  const d = await startLog("keymaker");
+  const { receipt_key: key } = (await db.prepare("SELECT receipt_key FROM bills WHERE id = ?").bind(d.id).first<{ receipt_key: string }>())!;
+  await db.prepare("DELETE FROM bills WHERE id = ?").bind(d.id).run();
+  calls = [];
+  return key;
+}
+
+// A row as the old code left it. Nothing writes these any more.
+async function insertVoted(id: string, status: string, vote: string | null, photos: string | null = null, key?: string) {
+  await db
+    .prepare(
+      `INSERT INTO bills (id, guild_id, channel_id, payer_id, status, created_at, receipt_key, kind, vote, photo_urls)
+       VALUES (?, 'guild-1', 'chan-1', 'gavin', ?, '2026-10-29', ?, 'log', ?, ?)`,
+    )
+    .bind(id, status, key ?? (await receiptKey()), vote, photos)
+    .run();
+}
+
 describe("/log", () => {
   it("answers privately and hands back a link, with nothing in the channel yet", async () => {
     const response = await run(slashLog());
@@ -220,15 +228,19 @@ describe("/log", () => {
   it.each([
     ["Send Messages", 1n << 11n],
     ["View Channel", 1n << 10n],
-    ["Attach Files", 1n << 15n],
   ])("won't start in a channel where it lacks %s, before paying for a read", async (_, missing) => {
-    const response: any = await (await run(slashLog("gavin", { app_permissions: String(VIEW_SEND_ATTACH & ~missing) }))).json();
+    const response: any = await (await run(slashLog("gavin", { app_permissions: String(VIEW_SEND & ~missing) }))).json();
     expect(response.data).toEqual({ content: "I can't post in this channel, so I can't log here. Run /log in a channel I can post in.", flags: EPHEMERAL });
     expect(calls).toHaveLength(0);
   });
 
+  it("doesn't need Attach Files", async () => {
+    await run(slashLog("gavin", { app_permissions: String(VIEW_SEND) }));
+    expect(lastReply().content).toContain("Pick what you had.");
+  });
+
   it("asks for Send Messages in Threads in a thread instead", async () => {
-    const threads = (VIEW_SEND_ATTACH & ~(1n << 11n)) | (1n << 38n);
+    const threads = (VIEW_SEND & ~(1n << 11n)) | (1n << 38n);
     await run(slashLog("gavin", { app_permissions: String(threads), channel: { id: "chan-1", type: 11 } }));
     expect(lastReply().content).toContain("Pick what you had.");
   });
@@ -451,14 +463,6 @@ describe("a log and a /split of the same receipt", () => {
     expect((await getBill(db, d.id))!.status).toBe("confirmed");
   });
 
-  it("takes a log's vote with it, and a late button says it's over", async () => {
-    flagged = true;
-    const d = await logged("gavin");
-    await confirmedSplit(["gavin", "marcus"]);
-    const pressed: any = await (await press("real", d.id, "priya")).json();
-    expect(pressed.data.content).toBe("This vote is over.");
-  });
-
   it("refuses Log it on a draft whose receipt was split since", async () => {
     const d = await startLog("priya");
     await pick(d, "priya");
@@ -549,157 +553,100 @@ describe("after logging", () => {
   });
 });
 
-describe("a flagged receipt", () => {
-  beforeEach(() => {
-    flagged = true;
+describe("the fake check", () => {
+  it("refuses a fake privately, before the items page, and saves nothing", async () => {
+    check = () => answer(FAKE);
+    const response = await run(slashLog());
+    expect(await response.json()).toEqual({ type: 5, data: { flags: EPHEMERAL } });
+    expect(lastReply()).toEqual({ content: "This receipt looks fake, so I didn't log it.", allowed_mentions: { parse: [] } });
+    expect(await billCount()).toBe(0);
+    expect(posts()).toHaveLength(0);
   });
 
-  async function flaggedLog(who = "gavin"): Promise<Draft> {
-    const d = await startLog(who);
-    await pick(d, who);
-    return d;
-  }
-
-  it("gives nothing away before Log it", async () => {
-    const d = await flaggedLog();
-    expect(lastReply().content).toBe("Pick what you had.\nSaigon Kitchen, $30.00 on the receipt.");
-    const state: any = await (await web(`${d.path}/state`, d.token)).json();
-    expect(JSON.stringify(state)).not.toContain("flagged");
-    expect(state.vote).toBeNull();
-    expect(state.editable).toBe("self");
+  it("refuses when the check fails, and asks for another try", async () => {
+    check = () => new Response("no", { status: 500 });
+    await run(slashLog());
+    expect(lastReply()).toEqual({ content: "I couldn't check this receipt, so try again.", allowed_mentions: { parse: [] } });
+    expect(await billCount()).toBe(0);
+    expect(posts()).toHaveLength(0);
   });
 
-  it("posts the photo as sent with Real and Fake, and counts for nothing yet", async () => {
-    const d = await flaggedLog();
-    const state: any = await (await logIt(d)).json();
-    expect(state).toMatchObject({ status: "draft", vote: "open", editable: "none" });
-
-    const [post] = posts();
-    expect(post!.body.content).toBe("<@gavin> spent $20.00 at Saigon Kitchen\nThis receipt looks fake. Real or fake?");
-    expect(post!.body.components[0].components.map((c: any) => [c.label, c.custom_id])).toEqual([
-      ["Real", `logvote:real:${d.id}`],
-      ["Fake", `logvote:fake:${d.id}`],
-    ]);
-    expect(await (post!.form!.get("files[0]") as File).text()).toBe("photo-bytes");
-    expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
-    expect(await db.prepare("SELECT photo_urls FROM bills").first()).toEqual({ photo_urls: null });
+  it("takes a retry once a clearer photo passes", async () => {
+    check = () => answer(FAKE);
+    await run(slashLog());
+    check = () => answer(REAL);
+    await run(slashLog());
+    expect(lastReply().content).toContain("Pick what you had.");
   });
 
-  it("can't be withdrawn or changed once it's up", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    expect((await web(d.path, d.token, "DELETE", { paid: "0.00" })).status).toBe(409);
-    expect((await web(d.path, d.token, "PATCH", { place: "Elsewhere" })).status).toBe(409);
-    const [item] = await getBillItems(db, d.id);
-    expect((await web(`${d.path}/claim`, d.token, "POST", { itemId: item!.id, participantId: "gavin", claimed: false })).status).toBe(409);
-    expect((await getBill(db, d.id))!.vote).toBe("open");
+  it("answers before the read does", async () => {
+    let finishRead = () => {};
+    const stalled = new Promise<void>((resolve) => (finishRead = resolve));
+    const stub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://api.anthropic.com") && !JSON.parse(String(init!.body)).output_config) await stalled;
+      const response = await stub(input, init);
+      if (String(input).includes("/webhooks/")) finishRead();
+      return response;
+    });
+    check = () => answer(FAKE);
+    await run(slashLog());
+    expect(replies().map((r) => r.body.content)).toEqual(["This receipt looks fake, so I didn't log it."]);
   });
 
-  it("goes back to a draft to try again if the post fails", async () => {
-    const d = await flaggedLog();
-    photoStatus = 404;
-    const refused = await logIt(d);
-    expect(await refused.json()).toMatchObject({ error: "I couldn't post this one in the channel. Try Log it again." });
-    expect((await getBill(db, d.id))!.vote).toBeNull();
-    photoStatus = 200;
-    expect((await logIt(d)).status).toBe(200);
-    expect((await getBill(db, d.id))!.vote).toBe("open");
-  });
-
-  it("counts at two Real votes", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    const first: any = await (await press("real", d.id, "marcus")).json();
-    expect(first.type).toBe(7);
-    expect(first.data.content).toContain("Real 1 · Fake 0");
-    expect(first.data.components).toHaveLength(1);
-    expect((await getBill(db, d.id))!.status).toBe("draft");
-
-    const second: any = await (await press("real", d.id, "priya")).json();
-    expect(second.data.content).toBe("<@gavin> spent $20.00 at Saigon Kitchen\nVoted real. It counts.");
-    expect(second.data.components).toEqual([]);
-    expect(second.data.allowed_mentions).toEqual({ parse: [] });
-    expect((await getBill(db, d.id))!).toMatchObject({ status: "confirmed", vote: "real" });
-    expect((await personSummary(db, "guild-1", "gavin"))!.spentCents).toBe(2000);
-  });
-
-  it("is thrown out at two Fake votes, and the receipt stays burned", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    await press("fake", d.id, "marcus");
-    const last: any = await (await press("fake", d.id, "priya")).json();
-    expect(last.data.content).toBe("<@gavin> spent $20.00 at Saigon Kitchen\nVoted fake. This one doesn't count.");
-    expect((await getBill(db, d.id))!).toMatchObject({ status: "deleted", vote: "fake" });
-    expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
-
-    expect((await web(`${d.path}/state`, d.token)).status).toBe(410);
-    await run(slashLog("gavin"));
-    expect(lastReply().content).toBe("You already logged this receipt.");
+  it("no longer holds a receipt voted fake, which the check now decides", async () => {
+    await insertVoted("voted-fake", "deleted", "fake");
     await run(slashLog("marcus"));
-    expect(lastReply().content).toBe("This receipt was already logged.");
+    expect(lastReply().content).toContain("Pick what you had.");
+  });
+});
+
+describe("the old vote", () => {
+  it.each(["real", "fake"] as const)("answers a tap on %s and changes nothing", async (side) => {
+    const d = await logged();
+    const before = await getBill(db, d.id);
+    const tap: any = await (await press(side, d.id, "marcus")).json();
+    expect(tap).toEqual({ type: 4, data: { content: "This vote is over.", flags: EPHEMERAL } });
+    expect(await getBill(db, d.id)).toEqual(before);
   });
 
-  it("lets one vote settle it in a two-person server", async () => {
-    members = 3;
-    const d = await flaggedLog();
-    await logIt(d);
-    await press("real", d.id, "marcus");
-    expect((await getBill(db, d.id))!.status).toBe("confirmed");
-  });
+  describe("the migration", () => {
+    const close = async () => {
+      const migration = workerEnv.TEST_MIGRATIONS.find((m) => m.name.startsWith("0011"))!;
+      for (const query of migration.queries) await db.prepare(query).run();
+    };
+    const row = (id: string) => db.prepare("SELECT status, vote, photo_urls FROM bills WHERE id = ?").bind(id).first();
 
-  it("waits for two when the server's size can't be read", async () => {
-    vi.stubGlobal("fetch", ((real) => async (input: RequestInfo | URL, init?: RequestInit) =>
-      String(input).includes("/guilds/") ? new Response("no", { status: 500 }) : real(input, init))(globalThis.fetch));
-    members = 3;
-    const d = await flaggedLog();
-    await logIt(d);
-    await press("real", d.id, "marcus");
-    expect((await getBill(db, d.id))!.status).toBe("draft");
-  });
+    it("closes an open vote so it counts for nothing and frees the receipt", async () => {
+      await insertVoted("open-one", "draft", "open");
+      await close();
+      expect(await row("open-one")).toEqual({ status: "deleted", vote: null, photo_urls: null });
+      expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
+      await logged("marcus");
+      expect((await personSummary(db, "guild-1", "marcus"))!.spentCents).toBe(2000);
+    });
 
-  it("won't take the logger's own vote, a second vote, or a vote after the end", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    const own: any = await (await press("real", d.id, "gavin")).json();
-    expect(own.data).toEqual({ content: "You can't vote on your own receipt.", flags: EPHEMERAL });
+    it("removes a draft the old check flagged, which could otherwise be logged", async () => {
+      await insertVoted("flagged", "draft", null, '["https://cdn.discordapp.com/r.jpg"]');
+      await close();
+      expect(await row("flagged")).toEqual({ status: "deleted", vote: null, photo_urls: null });
+    });
 
-    await press("real", d.id, "marcus");
-    const again: any = await (await press("fake", d.id, "marcus")).json();
-    expect(again.data).toEqual({ content: "You already voted.", flags: EPHEMERAL });
+    it("leaves the receipts that were already voted on", async () => {
+      await insertVoted("won", "confirmed", "real");
+      await insertVoted("lost", "deleted", "fake", null, "other-key");
+      await close();
+      expect(await row("won")).toEqual({ status: "confirmed", vote: "real", photo_urls: null });
+      expect(await row("lost")).toEqual({ status: "deleted", vote: "fake", photo_urls: null });
+    });
 
-    await press("real", d.id, "priya");
-    const late: any = await (await press("fake", d.id, "sam")).json();
-    expect(late.data).toEqual({ content: "This vote is over.", flags: EPHEMERAL });
-    expect((await getBill(db, d.id))!.status).toBe("confirmed");
-  });
-
-  it("settles once when the last two votes land together", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    await press("real", d.id, "marcus");
-    await press("fake", d.id, "sam");
-    await Promise.all([press("real", d.id, "priya"), press("fake", d.id, "ana")]);
-    const bill = (await getBill(db, d.id))!;
-    expect(["real", "fake"]).toContain(bill.vote);
-    expect(bill.status).toBe(bill.vote === "real" ? "confirmed" : "deleted");
-  });
-
-  it("holds the receipt while the vote runs", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    flagged = false;
-    await run(slashLog("marcus"));
-    expect(lastReply().content).toBe("This receipt was already logged.");
-  });
-
-  it("keeps the verdict on the post through a rename", async () => {
-    const d = await flaggedLog();
-    await logIt(d);
-    await press("real", d.id, "marcus");
-    await press("real", d.id, "priya");
-    await web(d.path, d.token, "PATCH", { place: "Pho Hoa" });
-    const edit = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/messages/msg-post"))!;
-    expect(edit.body.content).toBe("<@gavin> spent $20.00 at Pho Hoa\nVoted real. It counts.");
+    it("can run twice", async () => {
+      await insertVoted("open-one", "draft", "open");
+      await close();
+      const once = await db.prepare("SELECT revision FROM bills WHERE id = 'open-one'").first();
+      await close();
+      expect(await db.prepare("SELECT revision FROM bills WHERE id = 'open-one'").first()).toEqual(once);
+    });
   });
 });
 
@@ -720,12 +667,12 @@ describe("the log page", () => {
     expect(html).toContain("I couldn't read the name of this place.");
   });
 
-  it("shows a flagged receipt the same as any other until Log it", async () => {
-    const plain = (await open(await startLog())).replace(/[0-9a-f-]{36}|\.[\w-]{20,}/g, "");
-    await db.prepare("DELETE FROM bills").run();
-    flagged = true;
-    const suspect = (await open(await startLog())).replace(/[0-9a-f-]{36}|\.[\w-]{20,}/g, "");
-    expect(suspect).toBe(plain);
+  it("never mentions a vote", async () => {
+    const d = await startLog();
+    const body = await open(d);
+    expect(body).not.toContain("Up for a vote");
+    const state: any = await (await web(`${d.path}/state`, d.token)).json();
+    expect(state).not.toHaveProperty("vote");
   });
 });
 
