@@ -96,8 +96,12 @@ export const CEREMONY_SCRIPT = String.raw`
     }
 
     function update(unseen) {
+      const current = unseen || [];
+      // A page holding one back mustn't play it once another page has shown it.
+      const still = new Set(current.map((stamp) => stamp.key));
+      waiting = waiting.filter((stamp) => still.has(stamp.key));
       const queued = new Set(waiting.map((stamp) => stamp.key));
-      const fresh = (unseen || []).filter((stamp) => !shown.has(stamp.key) && !queued.has(stamp.key));
+      const fresh = current.filter((stamp) => !shown.has(stamp.key) && !queued.has(stamp.key));
       if (fresh.length > 0) loadFont();
       waiting = waiting.concat(fresh);
       pump();
