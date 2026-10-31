@@ -22,6 +22,7 @@ function env(): Env {
 
 const viewerToken = (viewer = "gavin", guild = "guild-1", at = Date.now()) => mintViewerToken(guild, viewer, "Friday Table", KEY, at);
 const get = (path: string) => app.request(path, {}, env());
+const hrefOf = (a: { attrs: Record<string, string> }) => a.attrs.href!.replaceAll("&amp;", "&");
 
 beforeEach(async () => {
   await db.prepare("DELETE FROM bills").run();
@@ -164,6 +165,18 @@ describe("the profile page", () => {
     expect((await one(short, ".head")).attrs.class).toBe("head");
   });
 
+  it("moves a name off the tabs' line once it can't fit beside them", async () => {
+    const people: [string, string][] = [["chris", "Christopher"], ["wei", "黄伟明明"], ["ming", "欧阳黄伟明明"]];
+    for (const [id, name] of people) {
+      await seedOuting(db, { id: `h-${id}`, people: [[id, name]], alongside: ["gavin", "Gavin"], items: [["Pho", 2000, [id]]] });
+    }
+    const token = await viewerToken();
+    const classOf = async (id: string) => (await one(await (await get(`/g/guild-1/u/${id}?t=${token}`)).text(), ".head")).attrs.class;
+    expect(await classOf("chris")).toContain("is-long");
+    expect(await classOf("wei")).toBe("head");
+    expect(await classOf("ming")).toContain("is-long");
+  });
+
   it("links the companion tile to that person with the same token", async () => {
     const token = await viewerToken();
     const html = await (await get(`/g/guild-1?t=${token}`)).text();
@@ -224,10 +237,84 @@ describe("the profile page", () => {
     expect((await select(html, ".fig")).map((f) => f.text)).toEqual(["2", "1", "1"]);
   });
 
-  it("tells a viewer with no bills so, and still lets them reach the boards", async () => {
+  it("tells a viewer with no bills so, and still lets them reach the leaderboard", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken("noor")}`)).text();
     expect(await textOf(html, ".pair-none")).toBe("You have no bills yet.");
-    expect((await select(html, ".tabs a")).map((a) => a.text)).toEqual(["Profile", "Boards"]);
+    expect((await select(html, ".tabs a")).map((a) => a.text)).toEqual(["You", "Leaderboard"]);
+  });
+});
+
+describe("the tabs", () => {
+  const lit = async (html: string) => (await select(html, ".tabs.nav a.on")).map((a) => a.text);
+
+  it("names them You and Leaderboard, and lights the page you're on", async () => {
+    const token = await viewerToken();
+    const self = await (await get(`/g/guild-1?t=${token}`)).text();
+    expect((await select(self, ".tabs.nav a")).map((a) => a.text)).toEqual(["You", "Leaderboard"]);
+    expect(await lit(self)).toEqual(["You"]);
+    expect(await lit(await (await get(`/g/guild-1/boards?t=${token}`)).text())).toEqual(["Leaderboard"]);
+  });
+
+  it("lights neither on someone else's page", async () => {
+    const token = await viewerToken();
+    expect(await lit(await (await get(`/g/guild-1/u/marcus?t=${token}`)).text())).toEqual([]);
+    const proof = await mintMemberProof(token, "priya", KEY);
+    expect(await lit(await (await get(`/g/guild-1/u/priya?t=${token}&m=${proof}`)).text())).toEqual([]);
+  });
+
+  it("gives the Leaderboard page the long-name header", async () => {
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    expect((await one(html, ".head")).attrs.class).toContain("is-long");
+    expect(await textOf(html, "h1")).toBe("Leaderboard");
+  });
+
+  it("keeps the Leaderboard tab on the last board from every page", async () => {
+    const token = await viewerToken();
+    const place = "board=spent&span=all";
+    const board = `/g/guild-1/boards?t=${token}&${place}`;
+    const tabsOf = async (path: string) => (await select(await (await get(path)).text(), ".tabs.nav a")).map(hrefOf);
+
+    expect(await tabsOf(board)).toEqual([`/g/guild-1?t=${token}&${place}`, board]);
+    expect(await tabsOf(`/g/guild-1?t=${token}&${place}`)).toContain(board);
+    expect(await tabsOf(`/g/guild-1/u/marcus?t=${token}&${place}&from=leaderboard`)).toContain(board);
+  });
+});
+
+describe("coming back from a name on the board", () => {
+  it("carries the board and span through the tap, and the chip returns there", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/boards?t=${token}&board=spent&span=all`)).text();
+    const row = hrefOf((await select(html, '[data-list="spent:all"] .rank-row'))[0]!);
+    expect(row).toBe(`/g/guild-1/u/marcus?t=${token}&board=spent&span=all&from=leaderboard`);
+
+    const friend = await (await get(row)).text();
+    const chip = await one(friend, ".chip-back");
+    expect(chip.text).toContain("Back to leaderboard");
+    expect(hrefOf(chip)).toBe(`/g/guild-1/boards?t=${token}&board=spent&span=all`);
+  });
+
+  it("gives every list's rows that list's own board", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/boards?t=${token}`)).text();
+    const hidden = (await select(html, '[data-list="visits:all"] .rank-row')).map(hrefOf);
+    expect(hidden).toContain(`/g/guild-1/u/marcus?t=${token}&board=visits&span=all&from=leaderboard`);
+  });
+
+  it("keeps the board for your own row, which has no chip to read", async () => {
+    const token = await viewerToken();
+    const html = await (await get(`/g/guild-1/boards?t=${token}&board=spent&span=all`)).text();
+    const mine = hrefOf(await one(html, '[data-list="spent:all"] .is-me .rank-row'));
+    expect(mine).toBe(`/g/guild-1?t=${token}&board=spent&span=all`);
+    expect(await select(await (await get(mine)).text(), ".chip-back")).toHaveLength(0);
+  });
+
+  it("still says Back to you for a friend opened from your own page", async () => {
+    const token = await viewerToken();
+    const self = await (await get(`/g/guild-1?t=${token}&board=spent&span=all`)).text();
+    const tile = hrefOf(await one(self, "a.tile2"));
+    expect(tile).toBe(`/g/guild-1/u/marcus?t=${token}&board=spent&span=all`);
+    const friend = await (await get(tile)).text();
+    expect((await one(friend, ".chip-back")).text).toContain("Back to you");
   });
 });
 
@@ -260,7 +347,7 @@ describe("the boards page", () => {
     const token = await viewerToken();
     const html = await (await get(`/g/guild-1/boards?t=${token}&board=spent`)).text();
     const rows = await select(html, '[data-list="spent:month"] .rank-row');
-    expect(rows.map((r) => r.attrs.href)).toEqual([`/g/guild-1/u/marcus?t=${token}`, `/g/guild-1?t=${token}`]);
+    expect(rows.map(hrefOf)).toEqual([`/g/guild-1/u/marcus?t=${token}&board=spent&span=month&from=leaderboard`, `/g/guild-1?t=${token}&board=spent&span=month`]);
     expect((await one(html, '[data-list="spent:month"] .is-me')).text).toContain("you");
   });
 
@@ -282,7 +369,6 @@ describe("the boards page", () => {
 
   it("says so when a board has nobody on it", async () => {
     const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
-    expect(await textOf(html, '[data-list="visits:month"] .card-h')).toContain("different places");
     expect((await select(html, '[data-list="hosted:all"] .rank-row .nm')).map((n) => n.text).join()).toContain("Gavin");
     await db.prepare("DELETE FROM bills").run();
     const empty = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
@@ -293,7 +379,29 @@ describe("the boards page", () => {
     const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}&board=spent`)).text();
     expect(html).toContain("$129.00");
     expect(html).not.toMatch(/Belayer|Theo/);
-    expect((await select(html, ".foot")).map((f) => f.text)).toContain("Everyone with a bill in this server. Their numbers count every server.");
+    expect((await select(html, ".foot")).map((f) => f.text)).toContain("Totals include meals in other servers.");
+  });
+
+  it("calls the third board Places", async () => {
+    const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
+    expect((await select(html, ".tabs.wide a")).map((a) => a.text)).toEqual(["Hosted", "Spent", "Places"]);
+    expect(html).not.toContain("Unique visits");
+  });
+
+  it("moves Month and All time into each card header, leaving two rows of tabs", async () => {
+    const t = await viewerToken();
+    const html = await (await get(`/g/guild-1/boards?t=${t}&board=spent&span=all`)).text();
+    expect(await select(html, "div.tabs")).toHaveLength(1);
+    const spans = await select(html, '[data-list="spent:all"] .card-h .tabs.span a');
+    expect(spans.map((a) => a.text)).toEqual(["Month", "All time"]);
+    expect(hrefOf(spans[0]!)).toBe(`/g/guild-1/boards?t=${t}&board=spent&span=month`);
+    expect(spans[1]!.attrs.class).toBe("on");
+  });
+
+  it("sends an expired link back to /leaderboard", async () => {
+    const res = await get(`/g/guild-1/boards?t=${await viewerToken("gavin", "guild-1", Date.now() - TOKEN_TTL_MS - 1)}`);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("/leaderboard");
   });
 
   it("carries the server's name, and copes without it", async () => {

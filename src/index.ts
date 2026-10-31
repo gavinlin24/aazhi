@@ -8,7 +8,7 @@ import type { Env } from "./env";
 import { api } from "./web/api";
 import { logsApi } from "./web/logs";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
-import { renderBoards, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
+import { renderBoards, renderBoardsRefused, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
 import { pageData } from "./web/state";
 import { checkMemberProof, readToken, readViewerToken } from "./web/token";
 
@@ -68,6 +68,8 @@ app.get("/b/:billId", async (c) => {
 // The page's script talks to these with the same token, as a bearer header.
 app.route("/b", api);
 
+const BOARDS: readonly string[] = ["hosted", "spent", "visits"] satisfies BoardName[];
+
 // As with a bill, the token is checked first and every failure looks the same.
 // The server in the path must be the one in the token: the numbers cross
 // servers, but a link only ever opens from the server it was asked for in.
@@ -75,7 +77,16 @@ async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
   const token = c.req.query("t") ?? "";
   const grant = await readViewerToken(token, c.env.TOKEN_SIGNING_KEY, Date.now());
   if (!grant || grant.guildId !== c.req.param("guildId")) return null;
-  return { ...grant, token };
+  const board = c.req.query("board") ?? "";
+  return {
+    ...grant,
+    token,
+    place: {
+      board: (BOARDS.includes(board) ? board : "hosted") as BoardName,
+      span: (c.req.query("span") === "all" ? "all" : "month") as BoardSpan,
+    },
+    fromBoard: c.req.query("from") === "leaderboard",
+  };
 }
 
 // Numbers cross servers, so this is the check that stops a link from walking
@@ -103,17 +114,10 @@ async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) 
 app.get("/g/:guildId", (c) => profilePage(c, (viewer) => viewer.viewerId));
 app.get("/g/:guildId/u/:userId", (c) => profilePage(c, () => c.req.param("userId")!));
 
-const BOARDS: readonly string[] = ["hosted", "spent", "visits"] satisfies BoardName[];
-
 app.get("/g/:guildId/boards", async (c) => {
   const viewer = await viewerOf(c);
-  if (!viewer) return page(renderProfileRefused(), 403);
-  const board = c.req.query("board") ?? "";
-  const shown = {
-    board: (BOARDS.includes(board) ? board : "hosted") as BoardName,
-    span: (c.req.query("span") === "all" ? "all" : "month") as BoardSpan,
-  };
-  return page(renderBoards(await serverBoards(c.env.DB, viewer.guildId, Date.now()), viewer, shown), 200);
+  if (!viewer) return page(renderBoardsRefused(), 403);
+  return page(renderBoards(await serverBoards(c.env.DB, viewer.guildId, Date.now()), viewer), 200);
 });
 
 app.route("/g", logsApi);

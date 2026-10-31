@@ -18,9 +18,9 @@ import { escapeMarkdown } from "../render";
 import { ephemeral, guildName } from "../rest";
 
 const POST_PREFIX = "profile-post:";
-const MAX_NAME = 40;
+export const MAX_NAME = 40;
 
-function privately(content: string, components?: unknown[]): Response {
+export function privately(content: string, components?: unknown[]): Response {
   return Response.json(ephemeral(content, components));
 }
 
@@ -53,6 +53,10 @@ function profileUrl(origin: string, guildId: string, person: string, viewer: str
   return `${origin}/g/${encodeURIComponent(guildId)}${path}?t=${token}${proof ? `&m=${proof}` : ""}`;
 }
 
+export function leaderboardUrl(origin: string, guildId: string, token: string): string {
+  return `${origin}/g/${encodeURIComponent(guildId)}/boards?t=${token}`;
+}
+
 // The reply is private because the link in it belongs to one viewer. It works
 // from a Discord user id, so someone who has left is still reachable by anyone
 // who can name them. The no-bills reply means none anywhere, so it names no
@@ -83,6 +87,7 @@ export const profileCommand: InteractionHandler = async (body, env, _ctx, origin
       type: ComponentType.ActionRow,
       components: [
         { type: ComponentType.Button, style: ButtonStyle.Link, label: "Open profile", url: profileUrl(origin, guildId, person, who.id, token, proof) },
+        { type: ComponentType.Button, style: ButtonStyle.Link, label: "Leaderboard", url: leaderboardUrl(origin, guildId, token) },
         { type: ComponentType.Button, style: ButtonStyle.Secondary, label: "Post it here", custom_id: `${POST_PREFIX}${person}` },
       ],
     },

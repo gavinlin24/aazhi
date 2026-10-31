@@ -1,12 +1,10 @@
 import type { LoggedRow } from "../db/bills";
 import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profile, Ranked } from "../db/stats";
 import { RECEIPT_TIME_ZONE, receiptStamp } from "../extract/receipt-time";
-import { formatCents } from "../format";
+import { formatCents, monthName } from "../format";
 import { RANK_FACE } from "./fonts";
 import { escapeHtml, hills, hueOf, icon, initialOf, notice, shell, sprite } from "./page";
 import { PROFILE_SCRIPT } from "./profile-client";
-
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 // The token is the viewer, so every link on these pages carries it. The
 // shell's no-referrer policy keeps it from leaking through a tap.
@@ -15,26 +13,35 @@ export interface Viewer {
   viewerId: string;
   guildName: string | null;
   token: string;
+  // The board last open. It rides on every link so the Leaderboard tab can
+  // return to it from any page, with no per-viewer state on the server.
+  place: BoardPlace;
+  fromBoard: boolean;
+}
+
+export interface BoardPlace {
+  board: BoardName;
+  span: BoardSpan;
 }
 
 function base(v: Viewer): string {
   return `/g/${encodeURIComponent(v.guildId)}`;
 }
 
+function placeQuery({ board, span }: BoardPlace): string {
+  return board === "hosted" && span === "month" ? "" : `&board=${board}&span=${span}`;
+}
+
 function selfUrl(v: Viewer): string {
-  return `${base(v)}?t=${v.token}`;
+  return `${base(v)}?t=${v.token}${placeQuery(v.place)}`;
 }
 
 function personUrl(v: Viewer, id: string): string {
-  return id === v.viewerId ? selfUrl(v) : `${base(v)}/u/${encodeURIComponent(id)}?t=${v.token}`;
+  return id === v.viewerId ? selfUrl(v) : `${base(v)}/u/${encodeURIComponent(id)}?t=${v.token}${placeQuery(v.place)}`;
 }
 
-function boardsUrl(v: Viewer, board: BoardName = "hosted", span: BoardSpan = "month"): string {
+function boardsUrl(v: Viewer, { board, span }: BoardPlace = v.place): string {
   return `${base(v)}/boards?t=${v.token}&board=${board}&span=${span}`;
-}
-
-function monthName(month: string): string {
-  return MONTHS[Number(month.slice(5, 7)) - 1] ?? month;
 }
 
 function plural(n: number, noun: string): string {
@@ -55,13 +62,16 @@ function avatar(id: string, name: string, size: number, self = false): string {
   return `<span class="av hue-${hueOf(id)}${self ? " me" : ""}" style="--s:${size}px" aria-hidden="true">${escapeHtml(initialOf(name))}</span>`;
 }
 
-function tabs(v: Viewer, on: "profile" | "boards"): string {
+// Someone else's page lights neither tab, since You leads to the viewer's own.
+type Tab = "you" | "leaderboard" | null;
+
+function tabs(v: Viewer, on: Tab): string {
   const tab = (name: string, href: string, active: boolean) =>
-    `<a class="${active ? "on" : ""}" href="${escapeHtml(href)}"${active ? ' aria-current="page"' : ""}>${name}</a>`;
-  return `<span class="status"><span class="tabs">${tab("Profile", selfUrl(v), on === "profile")}${tab("Boards", boardsUrl(v), on === "boards")}</span></span>`;
+    `<a class="${active ? "on" : ""}" href="${escapeHtml(href)}" data-keep${active ? ' aria-current="page"' : ""}>${name}</a>`;
+  return `<span class="status"><span class="tabs nav">${tab("You", selfUrl(v), on === "you")}${tab("Leaderboard", boardsUrl(v), on === "leaderboard")}</span></span>`;
 }
 
-function head(v: Viewer, title: string, on: "profile" | "boards", meta: string, long = false): string {
+function head(v: Viewer, title: string, on: Tab, meta: string, long = false): string {
   return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}<p class="meta">${meta}</p></header>`;
 }
 
@@ -76,8 +86,11 @@ const FEET = 156;
 const TALLEST = 110;
 const LOWEST = 6;
 const WIDEST_STEP = WIDTH / 6;
-// Past this a name can't share a line with the tabs, or sit in a third of a card.
+// Past this a name can't sit in a third of a card.
 const LONG_NAME = 12;
+// Past this a name can't share a line with the 44px tabs at phone width: ten
+// Latin letters, or five Chinese characters, which are drawn twice as wide.
+const HEADER_ROOM = 10;
 const FAR_RANGE = "M-14 103L0 96C34 78 60 60 92 66C120 71 136 52 166 48C196 44 214 66 246 70C276 74 300 54 330 58C344 60 352 64 356 66L370 72V200H-14Z";
 
 function n(value: number): string {
@@ -116,6 +129,10 @@ function monthLabel(month: string, count: number): string {
 function monthLine(m: MonthSpend): string {
   const name = monthName(m.month);
   return m.outings === 0 ? `No outings in ${name}.` : `${formatCents(m.cents)} in ${name}, ${plural(m.outings, "outing")}.`;
+}
+
+function headerWidth(name: string): number {
+  return [...name].reduce((width, char) => width + (char.codePointAt(0)! >= 0x2e80 ? 2 : 1), 0);
 }
 
 function range(months: MonthSpend[], top: number): string {
@@ -215,10 +232,12 @@ function logsCard(logs: LoggedRow[], v: Viewer, nowMs: number): string {
 export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: LoggedRow[] = []): string {
   const self = p.id === v.viewerId;
   const title = `${avatar(p.id, p.name, 30, self)}${escapeHtml(p.name)}`;
-  const back = `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
+  const back = v.fromBoard
+    ? `<a class="chip-back" href="${escapeHtml(boardsUrl(v))}">${icon("back")}Back to leaderboard</a>`
+    : `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, "profile", `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, p.name.length > LONG_NAME)}
+${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
@@ -229,13 +248,13 @@ ${self ? logsCard(logs, v, nowMs) : ""}
   return shell(`${p.name} · AAzhi`, main, PROFILE_STYLES);
 }
 
-// Reached by the Profile tab or a stale link, never from the reply, which gives
+// Reached by the You tab or a stale link, never from the reply, which gives
 // no button in this case. It means no bills anywhere.
 export function renderNoBills(v: Viewer, self: boolean): string {
   const line = self ? "You have no bills yet." : "No bills yet.";
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, "Profile", "profile", "Every server")}
+${head(v, "Profile", self ? "you" : null, "Every server")}
 <section class="card pair-card"><p class="pair-none">${line}</p></section>
 </main>`;
   return shell("Profile · AAzhi", main, PROFILE_STYLES);
@@ -249,8 +268,11 @@ export function renderProfileRefused(): string {
   return notice("This link has expired", "Profile links last 30 minutes and only work for the person who asked. Run <strong>/profile</strong> again for a fresh one.");
 }
 
+export function renderBoardsRefused(): string {
+  return notice("This link has expired", "Leaderboard links last 30 minutes and only work for the person who asked. Run <strong>/leaderboard</strong> again for a fresh one.");
+}
+
 const NUMERALS = ["一", "二", "三"];
-const UNITS: Record<BoardName, string> = { hosted: "times hosted", spent: "own share", visits: "different places" };
 const FOOTS: Record<BoardName, string> = {
   hosted: "Hosted means you paid the bill and at least one other person came.",
   spent: "Spent is your own share, counted when the bill is confirmed.",
@@ -259,7 +281,7 @@ const FOOTS: Record<BoardName, string> = {
 const BOARD_TABS: [BoardName, string][] = [
   ["hosted", "Hosted"],
   ["spent", "Spent"],
-  ["visits", "Unique visits"],
+  ["visits", "Places"],
 ];
 const SPAN_TABS: [BoardSpan, string][] = [
   ["month", "Month"],
@@ -272,41 +294,49 @@ function rankMark(rank: number): string {
   return `<svg class="sl" viewBox="0 0 100 100" width="28" height="28" role="img" aria-label="Rank ${rank}"><rect class="sl-line" x="5" y="5" width="90" height="90" rx="7"/><g class="sl-red"><text x="50" y="53" font-size="64">${numeral}</text></g></svg>`;
 }
 
-function rankRow(row: Ranked, board: BoardName, v: Viewer): string {
+function rankRow(row: Ranked, place: BoardPlace, v: Viewer): string {
   const self = row.id === v.viewerId;
-  const value = board === "spent" ? formatCents(row.value) : String(row.value);
-  return `<li${self ? ' class="is-me"' : ""}><a class="rank-row" href="${escapeHtml(personUrl(v, row.id))}">${rankMark(row.rank)}${avatar(row.id, row.name, 30, self)}<span class="nm"><span class="nm-t">${escapeHtml(row.name)}</span>${self ? '<span class="you">you</span>' : ""}</span><span class="num">${value}</span>${icon("chev", "go-ic")}</a></li>`;
+  const value = place.board === "spent" ? formatCents(row.value) : String(row.value);
+  // Each list is drawn ahead of the tabs, so a row carries its own board. Your
+  // own page has no back chip, so only a friend's link says where it came from.
+  const href = `${personUrl({ ...v, place }, row.id)}${self ? "" : "&from=leaderboard"}`;
+  return `<li${self ? ' class="is-me"' : ""}><a class="rank-row" href="${escapeHtml(href)}">${rankMark(row.rank)}${avatar(row.id, row.name, 30, self)}<span class="nm"><span class="nm-t">${escapeHtml(row.name)}</span>${self ? '<span class="you">you</span>' : ""}</span><span class="num">${value}</span>${icon("chev", "go-ic")}</a></li>`;
 }
 
-function boardList(boards: Boards, board: BoardName, span: BoardSpan, heading: string, shown: boolean, v: Viewer): string {
+function boardTab(attr: string, value: string, label: string, on: boolean, href: string): string {
+  return `<a class="${on ? "on" : ""}" href="${escapeHtml(href)}" data-${attr}="${value}">${label}</a>`;
+}
+
+function boardList(boards: Boards, place: BoardPlace, heading: string, v: Viewer): string {
+  const { board, span } = place;
+  const shown = board === v.place.board && span === v.place.span;
   const rows = boards.lists[`${board}:${span}`];
   const list =
     rows.length > 0
-      ? `<ol class="ranks">${rows.map((row) => rankRow(row, board, v)).join("")}</ol>`
+      ? `<ol class="ranks">${rows.map((row) => rankRow(row, place, v)).join("")}</ol>`
       : `<p class="pair-none">${span === "month" ? `Nobody is on this board for ${heading} yet.` : "Nobody is on this board yet."}</p>`;
-  return `<div data-list="${board}:${span}"${shown ? "" : " hidden"}><p class="card-h">${heading}<span class="sub">${UNITS[board]}</span></p>${list}</div>`;
+  const spans = SPAN_TABS.map(([s, label]) => boardTab("to", s, label, s === span, boardsUrl(v, { board, span: s }))).join("");
+  return `<div data-list="${board}:${span}"${shown ? "" : " hidden"}><p class="card-h">${heading}<span class="tabs span">${spans}</span></p>${list}</div>`;
 }
 
-export function renderBoards(boards: Boards, v: Viewer, shown: { board: BoardName; span: BoardSpan }): string {
+export function renderBoards(boards: Boards, v: Viewer): string {
+  const shown = v.place;
   const headingOf = (span: BoardSpan) =>
     span === "month" ? monthName(boards.month) : boards.firstMonth ? `Since ${monthName(boards.firstMonth).slice(0, 3)}` : "All time";
   const lists = BOARD_TABS.flatMap(([board]) =>
-    SPAN_TABS.map(([span]) => boardList(boards, board, span, headingOf(span), board === shown.board && span === shown.span, v)),
+    SPAN_TABS.map(([span]) => boardList(boards, { board, span }, headingOf(span), v)),
   );
-  const tab = (attr: string, value: string, label: string, on: boolean, href: string) =>
-    `<a class="${on ? "on" : ""}" href="${escapeHtml(href)}" data-${attr}="${value}">${label}</a>`;
   const main = `${sprite()}
 <main class="page" id="boards" data-board="${shown.board}" data-span="${shown.span}">
-${head(v, "Boards", "boards", v.guildName ? escapeHtml(v.guildName) : "This server")}
-<div class="tabs wide">${BOARD_TABS.map(([b, label]) => tab("tab", b, label, b === shown.board, boardsUrl(v, b, shown.span))).join("")}</div>
-<div class="tabs wide">${SPAN_TABS.map(([s, label]) => tab("to", s, label, s === shown.span, boardsUrl(v, shown.board, s))).join("")}</div>
+${head(v, "Leaderboard", "leaderboard", v.guildName ? escapeHtml(v.guildName) : "This server", true)}
+<div class="tabs wide">${BOARD_TABS.map(([b, label]) => boardTab("tab", b, label, b === shown.board, boardsUrl(v, { board: b, span: shown.span }))).join("")}</div>
 <section class="card board">${lists.join("")}</section>
 ${BOARD_TABS.map(([b]) => `<p class="foot" data-foot="${b}"${b === shown.board ? "" : " hidden"}>${FOOTS[b]}</p>`).join("")}
-<p class="foot">Everyone with a bill in this server. Their numbers count every server.</p>
+<p class="foot">Totals include meals in other servers.</p>
 <p class="foot">Tap a name to open that profile.</p>
 </main>
 <script>${PROFILE_SCRIPT}</script>`;
-  return shell("Boards · AAzhi", main, PROFILE_STYLES);
+  return shell("Leaderboard · AAzhi", main, PROFILE_STYLES);
 }
 
 // Only these pages use these rules, so they stay out of the bill page. The
@@ -316,12 +346,20 @@ const PROFILE_STYLES = `${RANK_FACE}
 .head h1 { display: flex; align-items: center; gap: 9px; }
 .head.is-long h1 { grid-column: 1 / -1; grid-row: 2; }
 .head.is-long .status { grid-column: 2; grid-row: 3; }
-.head.is-long .meta { grid-column: 1; grid-row: 3; align-self: center; }
+.head.is-long .meta { grid-column: 1; grid-row: 3; align-self: center; flex-wrap: wrap; }
 .tabs { display: inline-flex; padding: 2px; border: 1px solid var(--rule-strong); border-radius: 15px; background: color-mix(in srgb, var(--card) 70%, transparent); font-size: 14px; }
 .tabs a { padding: 2px 10px; border-radius: 12px; color: inherit; text-decoration: none; }
 .tabs a.on { background: var(--ink); color: var(--card); }
+.head .status { height: auto; }
+.tabs.nav { padding: 1px; border-radius: 24px; font-size: 15px; }
+.tabs.nav a { display: grid; place-items: center; min-height: 44px; padding: 0 13px; border-radius: 22px; }
+.tabs.span { margin-left: auto; padding: 1px; border-radius: 18px; font-weight: 400; }
+.tabs.span a { display: grid; place-items: center; min-height: 34px; padding: 0 11px; border-radius: 15px; }
 .tabs.wide { display: flex; width: 100%; margin: 0 0 8px; padding: 3px; border-radius: 20px; font-size: 15px; }
 .tabs.wide a { display: grid; place-items: center; flex: 1 1 auto; min-height: 34px; padding: 0 6px; border-radius: 16px; white-space: nowrap; }
+/* The approved 34px pills, with a hit area that reaches the 44px the rest of the app uses. */
+.tabs.wide a, .tabs.span a { position: relative; }
+.tabs.wide a::after, .tabs.span a::after { content: ""; position: absolute; inset: -5px 0; }
 .dot { margin: 0 6px; }
 .meta { gap: 0; }
 .card + .tiles, .tiles + .card, .card + .card { margin-top: 12px; }

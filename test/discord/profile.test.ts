@@ -108,16 +108,18 @@ describe("/profile", () => {
     expect(profile.options).toEqual([{ type: 6, name: "user", description: expect.any(String) }]);
   });
 
-  it("answers privately with one line, an Open profile link and Post it here", async () => {
+  it("answers privately with one line, Open profile, Leaderboard and Post it here", async () => {
     await twoBills();
     const reply = await send(profileBody());
 
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBe(EPHEMERAL);
     expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times.");
-    const [link, post] = reply.data.components[0].components;
+    const [link, board, post] = reply.data.components[0].components;
     expect(link.label).toBe("Open profile");
     expect(link.url).toMatch(/\/g\/guild-1\?t=[\w-]+\.[\w-]+$/);
+    expect(board.label).toBe("Leaderboard");
+    expect(board.url).toMatch(/\/g\/guild-1\/boards\?t=[\w-]+\.[\w-]+$/);
     expect(post).toMatchObject({ label: "Post it here", custom_id: "profile-post:gavin" });
   });
 
