@@ -12,8 +12,9 @@ const VERDICT_SCHEMA = {
   properties: {
     medium: {
       type: "string",
-      enum: ["photo_of_paper", "computer_image"],
-      description: "A camera photo of a physical printed slip, or an image made on a screen or computer.",
+      enum: ["photo_of_paper", "digital_receipt", "imitation_of_paper"],
+      description:
+        "photo_of_paper: a camera photo or scan of a physical printed slip. digital_receipt: a screenshot of, saved copy of, or photo of a screen showing an order in an app, on a website or in an email, with that app's or sender's own layout. imitation_of_paper: made on a computer to look like a paper slip or a photo of one.",
     },
     edited: {
       type: "boolean",
@@ -23,7 +24,7 @@ const VERDICT_SCHEMA = {
     till_printed: {
       type: "boolean",
       description:
-        "true if the type looks printed by a real receipt printer: thermal dots or ink, uneven fading, a till's own layout. false if it looks like a word processor or receipt generator font.",
+        "Only matters for paper. true if the type looks printed by a real receipt printer: thermal dots or ink, uneven fading, a till's own layout. false if it looks like a word processor or receipt generator font.",
     },
   },
   required: ["medium", "edited", "till_printed"],
@@ -31,7 +32,7 @@ const VERDICT_SCHEMA = {
 } as const;
 
 const PROMPT =
-  "People send photos of restaurant receipts to claim credit for a meal, and some forge them. Examine the image(s) as a document examiner would, then give your verdict. Most are genuine: faded, creased, crooked and old receipts are normal and are not evidence. Look at the type itself, and look hardest at the total, the prices and the date and time.";
+  "People send photos of restaurant receipts, or screenshots of e-receipts, to claim credit for a meal, and some forge them. Examine the image(s) as a document examiner would, then give your verdict. Most are genuine: faded, creased, crooked and old receipts are normal and are not evidence, and neither is a screenshot of an order or an emailed receipt. Look at the type itself, and look hardest at the total, the prices and the date and time.";
 
 // Three separate questions, because asked once for "is this fake" the model
 // says no to nearly everything.
@@ -42,7 +43,7 @@ function isFlagged(text: string): boolean {
   } catch {
     return false;
   }
-  return verdict.medium === "computer_image" || verdict.edited === true || verdict.till_printed === false;
+  return verdict.medium === "imitation_of_paper" || verdict.edited === true || (verdict.medium === "photo_of_paper" && verdict.till_printed === false);
 }
 
 // A failed check is not flagged: the worst it does is let one receipt through

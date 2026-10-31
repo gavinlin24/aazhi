@@ -29,10 +29,17 @@ describe("the fake check", () => {
     expect(await looksFake(PERMIT, "key")).toBe(false);
   });
 
+  // A screenshot never came from a till, so that answer can't count against it.
+  it("passes a digital receipt", async () => {
+    answer = () => verdict({ medium: "digital_receipt", edited: false, till_printed: false });
+    expect(await looksFake(PERMIT, "key")).toBe(false);
+  });
+
   it.each([
-    ["was made on a computer", { ...clean, medium: "computer_image" }],
+    ["imitates paper", { ...clean, medium: "imitation_of_paper" }],
     ["was edited", { ...clean, edited: true }],
-    ["didn't come from a till", { ...clean, till_printed: false }],
+    ["is a digital receipt that was edited", { medium: "digital_receipt", edited: true, till_printed: false }],
+    ["is on paper but didn't come from a till", { ...clean, till_printed: false }],
   ])("flags one that %s", async (_, fields) => {
     answer = () => verdict(fields);
     expect(await looksFake(PERMIT, "key")).toBe(true);
