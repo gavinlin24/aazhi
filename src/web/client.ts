@@ -353,8 +353,7 @@ export const CLIENT_SCRIPT = String.raw`
 
   function logWord(s) {
     if (logGone) return logGone === "discarded" ? "Discarded" : "Undone";
-    if (s.status === "confirmed") return "Logged";
-    return s.vote === "open" ? "Up for a vote" : "Your items";
+    return s.status === "confirmed" ? "Logged" : "Your items";
   }
 
   // Mirrors logHeader in page.ts.
@@ -1699,8 +1698,7 @@ export const CLIENT_SCRIPT = String.raw`
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
-    // Nothing is left to read on a log that's gone, and the server's page says
-    // why, where a note here would sit on top of a vote that's over.
+    // Nothing is left to read on a log that's gone, and the server's page says why.
     if (state.kind === "log") {
       location.reload();
       return;

@@ -34,7 +34,6 @@ const bill: BillRow = {
   confirmedAt: null,
   billTime: null,
   kind: "split",
-  vote: null,
 };
 
 function participantsOf(input: BillInput): Participant[] {

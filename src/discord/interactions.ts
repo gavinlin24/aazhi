@@ -7,9 +7,8 @@ import {
 import type { Env } from "../env";
 import { debtsCommand } from "./handlers/debts";
 import { logCommand } from "./handlers/log";
-import { logVote } from "./handlers/log-vote";
 import { postProfile, profileCommand } from "./handlers/profile";
-import { retired } from "./handlers/retired";
+import { retired, voteOver } from "./handlers/retired";
 import { openSplit, pickRoster } from "./handlers/roster";
 import { splitCommand, splitMessageCommand } from "./handlers/split";
 
@@ -55,7 +54,8 @@ export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
   "profile-post:": postProfile,
-  "logvote:": logVote,
+  // Old posts keep their Real and Fake buttons, so a tap still gets an answer.
+  "logvote:": voteOver,
   ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),
 };
 // A modal's submit is its own interaction type, keyed the same way by the

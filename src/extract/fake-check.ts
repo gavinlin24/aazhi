@@ -34,23 +34,27 @@ const VERDICT_SCHEMA = {
 const PROMPT =
   "People send photos of restaurant receipts, or screenshots of e-receipts, to claim credit for a meal, and some forge them. Examine the image(s) as a document examiner would, then give your verdict. Most are genuine: faded, creased, crooked and old receipts are normal and are not evidence, and neither is a screenshot of an order or an emailed receipt. Look at the type itself, and look hardest at the total, the prices and the date and time.";
 
+export type Verdict = "real" | "fake" | "unchecked";
+
 // Three separate questions, because asked once for "is this fake" the model
 // says no to nearly everything.
-function isFlagged(text: string): boolean {
+function judge(text: string): Verdict {
   let verdict: { medium?: unknown; edited?: unknown; till_printed?: unknown };
   try {
     verdict = JSON.parse(text);
   } catch {
-    return false;
+    return "unchecked";
   }
-  return verdict.medium === "imitation_of_paper" || verdict.edited === true || (verdict.medium === "photo_of_paper" && verdict.till_printed === false);
+  if (typeof verdict.medium !== "string" || typeof verdict.edited !== "boolean" || typeof verdict.till_printed !== "boolean") return "unchecked";
+  const fake = verdict.medium === "imitation_of_paper" || verdict.edited || (verdict.medium === "photo_of_paper" && !verdict.till_printed);
+  return fake ? "fake" : "real";
 }
 
-// A failed check is not flagged: the worst it does is let one receipt through
-// unchecked, where flagging would put an honest person on blast over an outage.
-// It spends the read its permit already counted and never retries, so a /log
-// uses one read like a /split does, though it costs more.
-export async function looksFake(permit: ReadPermit, apiKey: string, options: { signal?: AbortSignal } = {}): Promise<boolean> {
+// A failed check refuses the receipt, because the refusal is private and costs
+// one retry, where letting it through would leave an outage unchecked. It spends
+// the read its permit already counted and never retries, so a /log uses one read
+// like a /split does, though it costs more.
+export async function looksFake(permit: ReadPermit, apiKey: string, options: { signal?: AbortSignal } = {}): Promise<Verdict> {
   try {
     const response = await fetch(MESSAGES_URL, {
       method: "POST",
@@ -72,12 +76,12 @@ export async function looksFake(permit: ReadPermit, apiKey: string, options: { s
         ],
       }),
     });
-    if (!response.ok) return false;
+    if (!response.ok) return "unchecked";
     const body: { content?: { type?: string; text?: string }[]; usage?: unknown } = await response.json();
     console.log("fake check usage", JSON.stringify(body.usage));
     const text = body.content?.find((block) => block.type === "text")?.text;
-    return typeof text === "string" && isFlagged(text);
+    return typeof text === "string" ? judge(text) : "unchecked";
   } catch {
-    return false;
+    return "unchecked";
   }
 }

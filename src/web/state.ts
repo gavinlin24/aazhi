@@ -21,7 +21,6 @@ export interface BillState {
   place: string | null;
   // "Oct 30, 6:12 PM", for a log's header.
   stamp: string | null;
-  vote: BillRow["vote"];
   // A confirmed log whose post never made it to the channel.
   postMissing: boolean;
   payerId: ParticipantId;
@@ -105,10 +104,10 @@ export type StateExtras = { hasPayments?: boolean; paid?: ParticipantId[] } & Gu
 // Someone holding a link to a bill they are not on (they opened it while it
 // was confirmed, and it was reopened since) gets nothing to tap: claiming
 // needs a roster row, and only Open the split adds one. On a log the one person
-// picks their own lines and nothing else, until it is logged or up for a vote.
+// picks their own lines and nothing else, until it is logged.
 export function editableFor(bill: BillRow, participants: Pick<Participant, "id">[], viewer: ParticipantId): Editable {
   if (bill.status !== "draft") return "none";
-  if (bill.kind === "log") return viewer === bill.payerId && !bill.vote ? "self" : "none";
+  if (bill.kind === "log") return viewer === bill.payerId ? "self" : "none";
   if (viewer === bill.payerId) return "all";
   return participants.some((p) => p.id === viewer) ? "self" : "none";
 }
@@ -160,7 +159,6 @@ export function billState(
     kind: bill.kind ?? "split",
     place: bill.place,
     stamp: receiptStamp(bill.billDate, bill.billTime ?? null),
-    vote: bill.vote ?? null,
     postMissing: bill.kind === "log" && bill.status === "confirmed" && !bill.messageId,
     payerId: bill.payerId,
     viewer,

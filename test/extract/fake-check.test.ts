@@ -26,13 +26,13 @@ afterEach(() => {
 describe("the fake check", () => {
   it("passes a receipt that looks like paper from a till", async () => {
     answer = () => verdict(clean);
-    expect(await looksFake(PERMIT, "key")).toBe(false);
+    expect(await looksFake(PERMIT, "key")).toBe("real");
   });
 
   // A screenshot never came from a till, so that answer can't count against it.
   it("passes a digital receipt", async () => {
     answer = () => verdict({ medium: "digital_receipt", edited: false, till_printed: false });
-    expect(await looksFake(PERMIT, "key")).toBe(false);
+    expect(await looksFake(PERMIT, "key")).toBe("real");
   });
 
   it.each([
@@ -40,21 +40,22 @@ describe("the fake check", () => {
     ["was edited", { ...clean, edited: true }],
     ["is a digital receipt that was edited", { medium: "digital_receipt", edited: true, till_printed: false }],
     ["is on paper but didn't come from a till", { ...clean, till_printed: false }],
-  ])("flags one that %s", async (_, fields) => {
+  ])("calls one fake that %s", async (_, fields) => {
     answer = () => verdict(fields);
-    expect(await looksFake(PERMIT, "key")).toBe(true);
+    expect(await looksFake(PERMIT, "key")).toBe("fake");
   });
 
-  // Flagging posts someone's receipt to the whole server, so an outage must
-  // never do that to them.
+  // A failure has to stay apart from a fake call: it's the difference between
+  // "try again" and telling someone their receipt looks forged.
   it.each([
     ["the API refuses", () => new Response("no", { status: 500 })],
     ["the reply isn't JSON", () => Response.json({ content: [{ type: "text", text: "looks fine to me" }] })],
     ["the reply is empty", () => Response.json({ content: [] })],
+    ["the reply leaves out an answer", () => verdict({ medium: "photo_of_paper", edited: false })],
     ["the network drops", () => Promise.reject(new Error("gone"))],
-  ])("doesn't flag when %s", async (_, failing) => {
+  ])("reports unchecked when %s", async (_, failing) => {
     answer = failing;
-    expect(await looksFake(PERMIT, "key")).toBe(false);
+    expect(await looksFake(PERMIT, "key")).toBe("unchecked");
   });
 
   it("asks Sonnet for a structured verdict, since it refuses a forced tool", async () => {

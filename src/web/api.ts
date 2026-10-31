@@ -49,7 +49,7 @@ import {
   setGuestPaidToPayer,
   undoPaid,
 } from "../db/settlements";
-import { onePlace, postLog, postVote, removeLogPost } from "../discord/log-post";
+import { onePlace, postLog, removeLogPost } from "../discord/log-post";
 import { guestPaidNotice, markedPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
@@ -74,8 +74,6 @@ const GONE: Partial<Record<BillRow["status"], string>> = {
   deleted: "This split was deleted, so there's nothing left to change on it.",
 };
 const NOT_ON_A_LOG = "A log is just you and your items, so that can't be changed here.";
-const VOTE_RUNNING = "This receipt is up for a vote in the channel, so it can't be changed now.";
-const VOTED_FAKE = "Voted fake. This receipt doesn't count.";
 const LOG_GONE = "This log was removed, so there's nothing left to change on it.";
 
 // $999,999.99. Far past any bill, and it keeps every sum of lines well
@@ -114,7 +112,7 @@ function payerName(snapshot: BillSnapshot): string {
 }
 
 function goneReason(bill: BillRow): string | undefined {
-  if (bill.kind === "log" && bill.status === "deleted") return bill.vote === "fake" ? VOTED_FAKE : LOG_GONE;
+  if (bill.kind === "log" && bill.status === "deleted") return LOG_GONE;
   return GONE[bill.status];
 }
 
@@ -127,13 +125,10 @@ function notDraft(bill: BillRow | null): Response {
   );
 }
 
-// Only the person logging ever opens a log, and nobody takes one back once the
-// channel is voting on it. Bill tokens are per bill, so this is what holds that
-// to one person even if a token for someone else ever turned up.
+// Only the person logging ever opens a log. Bill tokens are per bill, so this is
+// what holds that to one person even if a token for someone else ever turned up.
 function logRefusal(bill: BillRow, grant: Grant): Response | null {
-  if (bill.kind !== "log") return null;
-  if (grant.participantId !== bill.payerId) return refuse(403, LINK_REFUSED);
-  return bill.vote === "open" ? refuse(409, VOTE_RUNNING) : null;
+  return bill.kind === "log" && grant.participantId !== bill.payerId ? refuse(403, LINK_REFUSED) : null;
 }
 
 async function readBody(c: Ctx): Promise<Record<string, unknown>> {
@@ -416,7 +411,7 @@ async function changePlace(c: Ctx, grant: Grant, body: Record<string, unknown>):
   if (snapshot instanceof Response) return snapshot;
   const { bill } = snapshot;
   if (bill.kind !== "log") return refuse(409, "Only a log takes a new name.");
-  if (!(await setLogPlace(c.env.DB, grant.billId, place))) return refuse(409, VOTE_RUNNING);
+  if (!(await setLogPlace(c.env.DB, grant.billId, place))) return refuse(409, LOG_GONE);
   if (bill.status === "confirmed") c.executionCtx.waitUntil(renamePost({ ...bill, place }, c.env));
   return currentState(c, grant);
 }
@@ -785,14 +780,11 @@ const CONFIRM_REFUSED = {
   "over-total": "Your items add up to more than the receipt's total.",
 };
 
-// Save, then post, inside the tap, so the page can say if the post failed. A
-// flagged receipt looks just the same up to here: nothing warns the person, and
-// from here on nothing can be withdrawn.
-async function finishLog(c: Ctx, grant: Grant, vote: boolean): Promise<Response> {
+// Save, then post, inside the tap, so the page can say if the post failed.
+async function finishLog(c: Ctx, grant: Grant): Promise<Response> {
   const bill = await getBill(c.env.DB, grant.billId);
   if (!bill) return refuse(404, NOT_FOUND);
-  if (!vote) await postLog(bill, c.env);
-  else if (!(await postVote(bill, c.env))) return refuse(409, "I couldn't post this one in the channel. Try Log it again.");
+  await postLog(bill, c.env);
   return currentState(c, grant);
 }
 
@@ -841,7 +833,7 @@ api.post(
           return refuse(409, CONFIRM_REFUSED[result.reason]);
       }
     }
-    if (snapshot.bill.kind === "log") return finishLog(c, grant, result.vote);
+    if (snapshot.bill.kind === "log") return finishLog(c, grant);
     for (const log of result.removedLogs) c.executionCtx.waitUntil(removeLogPost(log, c.env));
     announce(c, snapshot.bill, reconfirmNotice(snapshot.bill, snapshot.participants, result.changes));
     return currentState(c, grant);

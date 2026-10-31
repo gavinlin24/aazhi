@@ -6,7 +6,6 @@ import { debtorOfSql, debtorSql, groupPaidSql } from "./debt";
 
 export type BillStatus = "draft" | "confirmed" | "superseded" | "deleted";
 export type BillKind = "split" | "log";
-export type LogVote = "open" | "real" | "fake";
 
 export interface Participant {
   billId: string;
@@ -35,17 +34,12 @@ export interface BillRow {
   createdAt: string;
   confirmedAt: string | null;
   kind: BillKind;
-  vote: LogVote | null;
 }
 
-// `photoUrls` marks a log the fake check flagged, and is what gets posted for
-// the vote. It stays out of BillRow because the person logging must not learn
-// their receipt was flagged until it is posted.
-export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt" | "kind" | "vote" | "billTime"> & {
+export type NewBill = Omit<BillRow, "revision" | "createdAt" | "confirmedAt" | "kind" | "billTime"> & {
   receiptKey?: string | null;
   kind?: BillKind;
   billTime?: string | null;
-  photoUrls?: string[] | null;
 };
 
 export interface NewItem {
@@ -75,7 +69,6 @@ interface BillDbRow {
   created_at: string;
   confirmed_at: string | null;
   kind: BillKind;
-  vote: LogVote | null;
 }
 
 interface SnapshotBillDbRow extends BillDbRow {
@@ -94,7 +87,7 @@ interface ParticipantDbRow {
 }
 
 const BILL_COLUMNS = `id, guild_id, channel_id, message_id, payer_id, place, bill_date, bill_time, discount_cents,
-  tax_cents, tip_cents, printed_total_cents, status, revision, created_at, confirmed_at, kind, vote`;
+  tax_cents, tip_cents, printed_total_cents, status, revision, created_at, confirmed_at, kind`;
 
 function toBill(r: BillDbRow): BillRow {
   return {
@@ -115,7 +108,6 @@ function toBill(r: BillDbRow): BillRow {
     createdAt: r.created_at,
     confirmedAt: r.confirmed_at,
     kind: r.kind,
-    vote: r.vote,
   };
 }
 
@@ -181,13 +173,13 @@ export class ReceiptAlreadySplitError extends Error {
 // takes over from the logs of the people on it. A null key equals nothing, so a
 // receipt without one always saves.
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
-  const { receiptKey = null, kind = "split", billTime = null, photoUrls = null, ...bill } = b;
+  const { receiptKey = null, kind = "split", billTime = null, ...bill } = b;
   const createdAt = new Date().toISOString();
   const { meta } = await db
     .prepare(
       `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
-         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time, photo_urls)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
        WHERE NOT EXISTS (SELECT 1 FROM bills WHERE receipt_key = ?14 AND kind = 'split' AND status = 'confirmed')`,
     )
     .bind(
@@ -207,11 +199,10 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       receiptKey,
       kind,
       billTime,
-      photoUrls && JSON.stringify(photoUrls),
     )
     .run();
   if (meta.changes === 0) throw new ReceiptAlreadySplitError();
-  return { ...bill, billTime, kind, vote: null, revision: 1, createdAt, confirmedAt: null };
+  return { ...bill, billTime, kind, revision: 1, createdAt, confirmedAt: null };
 }
 
 export async function getBill(db: D1Database, id: string): Promise<BillRow | null> {
@@ -327,14 +318,11 @@ export interface BillSnapshot {
   // Whether anyone has paid against this bill, which is what stops the payer
   // being handed to someone else.
   hasPayments: boolean;
-  // Another bill of the same kind already credits this receipt, so this one
-  // can't: a confirmed one, or a log the server is voting on.
+  // A confirmed bill of the same kind already credits this receipt, so this one
+  // can't.
   receiptTaken: boolean;
   // A log only: a confirmed split has this receipt.
   receiptSplit: boolean;
-  // A log only: the fake check flagged it, so Log it starts a vote. Never sent
-  // to the page, which must not tip the person off.
-  flagged: boolean;
   // Everyone who answers for a share and has a payment against it: their own,
   // or a guest of theirs paying the payer directly.
   paid: ParticipantId[];
@@ -353,13 +341,12 @@ function snapshotStatements(db: D1Database, billId: string): D1PreparedStatement
            EXISTS (
              SELECT 1 FROM bills other
              WHERE other.receipt_key = bills.receipt_key AND other.id <> bills.id AND other.kind = bills.kind
-               AND (other.status = 'confirmed' OR other.vote IN ('open', 'fake'))
+               AND other.status = 'confirmed'
            ) AS receipt_taken,
            bills.kind = 'log' AND EXISTS (
              SELECT 1 FROM bills other
              WHERE other.receipt_key = bills.receipt_key AND other.kind = 'split' AND other.status = 'confirmed'
-           ) AS receipt_split,
-           photo_urls IS NOT NULL AS flagged
+           ) AS receipt_split
          FROM bills WHERE id = ?`,
       )
       .bind(billId),
@@ -416,7 +403,6 @@ function assembleSnapshot(results: D1Result[]): BillSnapshot | null {
     hasPayments: billRow.has_payments === 1,
     receiptTaken: billRow.receipt_taken === 1,
     receiptSplit: billRow.receipt_split === 1,
-    flagged: billRow.flagged === 1,
     paid: listed("paid"),
     paidToPayer: listed("paidToPayer"),
     paidToHost: listed("paidToHost"),
@@ -807,7 +793,7 @@ export interface RemovedLog {
 }
 
 export type ConfirmResult =
-  | { ok: true; changes: AmountChange[]; removedLogs: RemovedLog[]; vote: boolean }
+  | { ok: true; changes: AmountChange[]; removedLogs: RemovedLog[] }
   | { ok: false; reason: ConfirmRefusal };
 
 function refused(reason: ConfirmRefusal): ConfirmResult {
@@ -845,7 +831,6 @@ export async function confirmBill(
   if (actor !== bill.payerId) return refused("not-payer");
   if (bill.revision !== revision) return refused("stale");
   const isLog = bill.kind === "log";
-  if (bill.vote === "open") return refused("not-draft");
   const split = splitBill(input);
   const blocked = isLog ? logBlock(snapshot, split) : splitBlock(snapshot, split);
   if (blocked) return refused(blocked);
@@ -869,18 +854,12 @@ export async function confirmBill(
        owed_cents = excluded.owed_cents`,
   );
   const now = new Date().toISOString();
-  // A flagged log stays a draft while the server votes, so no stat can count it.
-  const vote = isLog && snapshot.flagged;
-  const freeze = vote
-    ? db
-        .prepare("UPDATE bills SET vote = 'open', revision = revision + 1 WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision")
-        .bind(billId, revision)
-    : db
-        .prepare(
-          `UPDATE bills SET status = 'confirmed', confirmed_at = ?3, revision = revision + 1
-           WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision`,
-        )
-        .bind(billId, revision, now);
+  const freeze = db
+    .prepare(
+      `UPDATE bills SET status = 'confirmed', confirmed_at = ?3, revision = revision + 1
+       WHERE id = ?1 AND status = 'draft' AND revision = ?2 RETURNING revision`,
+    )
+    .bind(billId, revision, now);
   // Two Confirms at once both pass the read above. The unique index lets one
   // land, and the failed batch takes the other's shares back with it.
   const written = await db.batch([
@@ -899,7 +878,7 @@ export async function confirmBill(
     return refused(now?.status === "draft" ? "stale" : "not-draft");
   }
   const removed = (isLog ? [] : written[split.shares.length + 2]!.results) as { id: string; channel_id: string; message_id: string | null }[];
-  return { ok: true, changes, vote, removedLogs: removed.map((r) => ({ id: r.id, channelId: r.channel_id, messageId: r.message_id })) };
+  return { ok: true, changes, removedLogs: removed.map((r) => ({ id: r.id, channelId: r.channel_id, messageId: r.message_id })) };
 }
 
 function splitBlock(snapshot: BillSnapshot, split: SplitResult): ConfirmRefusal | null {
@@ -928,11 +907,11 @@ function logBlock(snapshot: BillSnapshot, split: SplitResult): ConfirmRefusal | 
 // Whoever is on a confirmed split has their share of the receipt there, so their
 // log of it would count them twice. Someone not on the split keeps theirs. It
 // runs in the confirm's own batch, after the freeze, so it does nothing unless
-// the split really landed. Clearing `vote` frees the unique index.
+// the split really landed.
 function supersedeLogsStatement(db: D1Database, billId: string): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE bills SET status = 'deleted', vote = NULL, revision = revision + 1
+      `UPDATE bills SET status = 'deleted', revision = revision + 1
        WHERE kind = 'log' AND status IN ('draft', 'confirmed')
          AND receipt_key = (SELECT receipt_key FROM bills WHERE id = ?1 AND status = 'confirmed')
          AND payer_id IN (SELECT participant_id FROM shares WHERE bill_id = ?1 AND owed_cents > 0)
@@ -1267,16 +1246,14 @@ export async function setPardon(
 
 export type ReceiptStanding = "split" | "mine" | "logged";
 
-// Why a log of this receipt can't start, or null. A vote that ended Fake still
-// holds its receipt, or a forger could post it again until a vote went their
-// way. An undone log doesn't: Undo gives the receipt back. Refusing here keeps
-// a refused receipt from leaving a row. Log it can still lose a race, and the
-// unique index settles that one.
+// Why a log of this receipt can't start, or null. An undone log doesn't hold it:
+// Undo gives the receipt back. Refusing here keeps a refused receipt from leaving
+// a row. Log it can still lose a race, and the unique index settles that one.
 export async function receiptStanding(db: D1Database, key: string, payerId: ParticipantId): Promise<ReceiptStanding | null> {
   const { results } = await db
     .prepare(
       `SELECT kind, payer_id FROM bills
-       WHERE receipt_key = ?1 AND (status = 'confirmed' OR vote IN ('open', 'fake'))`,
+       WHERE receipt_key = ?1 AND status = 'confirmed'`,
     )
     .bind(key)
     .all<{ kind: BillKind; payer_id: string }>();
@@ -1292,7 +1269,7 @@ export async function clearStaleLogDrafts(db: D1Database, keep: string, payerId:
   await db
     .prepare(
       `DELETE FROM bills
-       WHERE kind = 'log' AND status = 'draft' AND vote IS NULL AND payer_id = ?1 AND id <> ?2
+       WHERE kind = 'log' AND status = 'draft' AND payer_id = ?1 AND id <> ?2
          AND (receipt_key = ?3 OR created_at < ?4)`,
     )
     .bind(payerId, keep, key, olderThan)
@@ -1310,90 +1287,25 @@ export async function claimEverything(db: D1Database, billId: string, participan
   return mutateDraft(db, billId, [db.prepare(write).bind(billId, participantId)]);
 }
 
-// Discard. An open vote can't be taken back, which the WHERE holds to.
 export async function discardLog(db: D1Database, billId: string): Promise<boolean> {
   const { meta } = await db
-    .prepare("DELETE FROM bills WHERE id = ? AND kind = 'log' AND status = 'draft' AND vote IS NULL")
+    .prepare("DELETE FROM bills WHERE id = ? AND kind = 'log' AND status = 'draft'")
     .bind(billId)
     .run();
   return meta.changes === 1;
 }
 
 // The one change a log takes after it is logged, because a misread name would
-// otherwise sit on the profile for good. Not during a vote: the post being voted
-// on says what it says.
+// otherwise sit on the profile for good.
 export async function setLogPlace(db: D1Database, billId: string, place: string): Promise<boolean> {
   const { meta } = await db
     .prepare(
       `UPDATE bills SET place = ?2, revision = revision + 1
-       WHERE id = ?1 AND kind = 'log' AND (status = 'confirmed' OR (status = 'draft' AND vote IS NULL))`,
+       WHERE id = ?1 AND kind = 'log' AND status IN ('confirmed', 'draft')`,
     )
     .bind(billId, place)
     .run();
   return meta.changes === 1;
-}
-
-export async function logPhotos(db: D1Database, billId: string): Promise<string[]> {
-  const row = await db.prepare("SELECT photo_urls FROM bills WHERE id = ?").bind(billId).first<{ photo_urls: string | null }>();
-  return row?.photo_urls ? (JSON.parse(row.photo_urls) as string[]) : [];
-}
-
-// The vote's post is up, so the photos are the channel's now.
-export async function setVotePosted(db: D1Database, billId: string, messageId: string): Promise<void> {
-  await db.prepare("UPDATE bills SET message_id = ?2, photo_urls = NULL WHERE id = ?1").bind(billId, messageId).run();
-}
-
-// The post failed, so nobody can vote and the log would hang open for good.
-// Back to a plain draft, frozen rows and all, so Log it can run again.
-export async function reopenVote(db: D1Database, billId: string): Promise<void> {
-  await db.prepare("UPDATE bills SET vote = NULL, revision = revision + 1 WHERE id = ?1 AND vote = 'open' AND message_id IS NULL").bind(billId).run();
-}
-
-export interface VoteTally {
-  vote: LogVote;
-  real: number;
-  fake: number;
-  // False if they'd voted already, or the vote closed under them.
-  landed: boolean;
-  bill: BillRow;
-}
-
-// One batch, so two last votes landing together can't both end it, and neither
-// can a vote on a vote that already ended: the first write to find it open
-// closes it. `needed` comes from the caller because it depends on the server's
-// size, which only Discord knows.
-export async function castVote(
-  db: D1Database,
-  billId: string,
-  voterId: ParticipantId,
-  real: boolean,
-  needed: number,
-): Promise<VoteTally | null> {
-  const now = new Date().toISOString();
-  const count = (side: 0 | 1) => `(SELECT COUNT(*) FROM log_votes WHERE bill_id = ?1 AND real = ${side})`;
-  const [inserted, , , bill, tally] = await db.batch<unknown>([
-    db
-      .prepare(
-        `INSERT INTO log_votes (bill_id, voter_id, real, voted_at)
-         SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM bills WHERE id = ?1 AND vote = 'open' AND payer_id <> ?2)
-         ON CONFLICT DO NOTHING RETURNING voter_id`,
-      )
-      .bind(billId, voterId, real ? 1 : 0, now),
-    db
-      .prepare(
-        `UPDATE bills SET status = 'confirmed', confirmed_at = ?2, vote = 'real', revision = revision + 1
-         WHERE id = ?1 AND vote = 'open' AND ${count(1)} >= ?3`,
-      )
-      .bind(billId, now, needed),
-    db
-      .prepare(`UPDATE bills SET status = 'deleted', vote = 'fake', revision = revision + 1 WHERE id = ?1 AND vote = 'open' AND ${count(0)} >= ?2`)
-      .bind(billId, needed),
-    db.prepare(`SELECT ${BILL_COLUMNS} FROM bills WHERE id = ?`).bind(billId),
-    db.prepare(`SELECT ${count(1)} AS real, ${count(0)} AS fake`).bind(billId),
-  ]);
-  const row = bill!.results[0] as BillDbRow | undefined;
-  if (!row?.vote) return null;
-  return { ...(tally!.results[0] as { real: number; fake: number }), vote: row.vote, landed: inserted!.results.length === 1, bill: toBill(row) };
 }
 
 export interface LoggedRow {

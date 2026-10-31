@@ -21,8 +21,8 @@ The payer can mark someone paid on the page when they're handed cash.
 
 Run `/log` with a receipt for a meal nobody else in the server was at. You pick
 the items you had, and the bot tells the channel what you spent and where. It
-has to be within 8 hours of the time on the receipt. A receipt that looks fake
-goes up in the channel for the server to vote on, and only counts if it wins.
+has to be within 8 hours of the time on the receipt. If the bot thinks a receipt
+looks fake, it tells only you and logs nothing.
 
 Run `/profile` to see your months, your favorite place and who you go out with.
 `/profile @someone` shows theirs. Your numbers count every server you eat with.

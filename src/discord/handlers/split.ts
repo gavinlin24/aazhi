@@ -127,7 +127,7 @@ export async function saveDraft(
   channelId: string,
   payer: Invoker,
   db: D1Database,
-  log: { receiptKey: string; photoUrls: string[] | null } | null = null,
+  log: { receiptKey: string } | null = null,
 ) {
   const bill = await createBill(db, {
     id: crypto.randomUUID(),
@@ -143,7 +143,7 @@ export async function saveDraft(
     tipCents: 0,
     printedTotalCents: e.printedTotalCents,
     status: "draft",
-    ...(log ? { kind: "log" as const, receiptKey: log.receiptKey, photoUrls: log.photoUrls } : { receiptKey: await receiptKey(e) }),
+    ...(log ? { kind: "log" as const, receiptKey: log.receiptKey } : { receiptKey: await receiptKey(e) }),
   });
   await insertItems(
     db,

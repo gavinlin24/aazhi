@@ -12,7 +12,7 @@ credentials are in [setup.md](setup.md). Technology choices are in [stack.md](st
 - **Discord**: forwards every command and button tap to the Worker's
   *interaction endpoint* (`POST /interactions`) and needs a reply within 3 s.
 - **Claude Haiku** (Anthropic API): reads the receipt into structured data.
-- **Claude Sonnet** (Anthropic API): for `/log` only, judges whether the
+- **Claude Sonnet** (Anthropic API): for `/log` only, decides whether the
   receipt photo is real (`src/extract/fake-check.ts`).
 - **Split page**: HTML and a JSON API served by the same Worker at `/b/<bill id>`.
 - **Profile pages**: read-only HTML from the same Worker at `/g/<server id>`.
@@ -223,14 +223,14 @@ and requires a place, at least one item, and items no higher than the printed
 total. The bot posts `@person spent $X at Place` to the channel, without
 pinging anyone. The log still stands if that post fails, and the page says so.
 
-**5. A receipt that looks fake.** The verdict never reaches the logger's page.
-At Log it, the bill stays a draft with `vote = 'open'`, and the photo is posted
-as sent, with Real and Fake buttons (`src/discord/handlers/log-vote.ts`). The
-photo URLs are cleared once posted, since Discord's attachment links expire.
-It counts for nothing until the vote ends, and it can't be withdrawn or
-changed. The logger can't vote. Two votes for one side end it, or one in a
-two-person server. Real confirms the log. Fake deletes it, and the key stays
-held so the same receipt can't be logged again.
+**5. A receipt that looks fake.** The check runs beside the read and is acted
+on as soon as it answers, before the items page. A fake call replies privately,
+"This receipt looks fake, so I didn't log it." A failed check replies "I couldn't
+check this receipt, so try again." Either way nothing is saved and nothing reaches
+the channel. To correct a wrong call, run `/log` again with a clearer photo. The
+old Real and Fake buttons only answer "This vote is over." The `bills.vote` and
+`bills.photo_urls` columns and the `log_votes` table are unused until a later
+migration drops them.
 
 **6. A log and a split.** Confirming a split of the same receipt removes the
 logs of the people on that split and deletes their posts, because the split
