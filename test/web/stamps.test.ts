@@ -31,7 +31,7 @@ const post = (path: string, token: string, body: unknown) =>
 async function give(who: string, ...keys: string[]): Promise<void> {
   for (const key of keys) {
     await db
-      .prepare("INSERT INTO stamps (guild_id, user_id, key, earned_at, seen_at) VALUES ('guild-1', ?, ?, '2026-08-28T18:00:00.000Z', '2026-08-28T18:00:00.000Z')")
+      .prepare("INSERT INTO stamps (user_id, key, earned_at, seen_at) VALUES (?, ?, '2026-08-28T18:00:00.000Z', '2026-08-28T18:00:00.000Z')")
       .bind(who, key)
       .run();
   }
@@ -57,11 +57,17 @@ describe("the stamps card", () => {
     expect(await select(page, ".stamps-grid .is-on")).toHaveLength(0);
   });
 
-  it("names the server the stamps are from", async () => {
+  it("names no server, and shows it opens with an arrow", async () => {
     const page = await html(`/g/guild-1?t=${await viewerToken()}`);
-    expect(await textOf(page, ".stamps-foot")).toBe("Friday Table. Tap to see them all.");
-    const unnamed = await html(`/g/guild-1?t=${await viewerToken("gavin", "guild-1", null)}`);
-    expect(await textOf(unnamed, ".stamps-foot")).toBe("This server. Tap to see them all.");
+    expect(page).not.toContain("Friday Table");
+    expect(await select(page, ".stamps-card .card-h .go-ic")).toHaveLength(1);
+    expect(await select(page, ".stamps-foot")).toHaveLength(0);
+  });
+
+  it("shows the same stamps from every server", async () => {
+    await give("gavin", "host");
+    const page = await html(`/g/guild-2?t=${await viewerToken("gavin", "guild-2", "Climbing")}`);
+    expect(await textOf(page, ".stamps-card .sub")).toBe("1 of 10");
   });
 
   it("puts what's earned first", async () => {
@@ -100,8 +106,9 @@ describe("the Stamps page", () => {
     const page = await html(`/g/guild-1/stamps?t=${await viewerToken()}`);
     const rows = await select(page, ".stamp-list li");
     expect(rows).toHaveLength(10);
-    expect(await textOf(page, ".stamp-list li:first-child")).toMatch(/^初席First SeatEarned Aug 28Your first outing in this server\.$/);
-    expect(await textOf(page, ".meta")).toBe("Friday Table · 1 of 10");
+    expect(await textOf(page, ".stamp-list li:first-child")).toMatch(/^初席First SeatEarned Aug 28Your first outing\.$/);
+    expect(await textOf(page, ".meta")).toBe("1 of 10");
+    expect(page).not.toContain("Friday Table");
     expect(await textOf(page, "h1")).toBe("Stamps");
     expect(await textOf(page, ".tabs.nav .on")).toBe("You");
     expect(await textOf(page, ".chip-back")).toBe("Back to you");
@@ -149,6 +156,15 @@ describe("the Ceremony", () => {
     expect(await data()).toEqual([]);
   });
 
+  it("plays once across servers: seen in one, gone from the other", async () => {
+    await earn();
+    const elsewhere = await viewerToken("gavin", "guild-2", "Climbing");
+    const data = async () => JSON.parse(await textOf(await html(`/g/guild-2?t=${elsewhere}`), "#stamps-ceremony")).unseen;
+    expect(await data()).toHaveLength(1);
+    expect((await post("/g/guild-1/stamps/seen", await viewerToken(), { keys: ["first-seat"] })).status).toBe(200);
+    expect(await data()).toEqual([]);
+  });
+
   it("gives the Stamps page no link to itself", async () => {
     const page = await html(`/g/guild-1/stamps?t=${await viewerToken()}`);
     expect(JSON.parse(await textOf(page, "#stamps-ceremony")).see).toBeUndefined();
@@ -160,7 +176,7 @@ describe("the Ceremony", () => {
     const state = await (await app.request("/b/a1/state", { headers: { authorization: `Bearer ${token}` } }, env())).json<{ unseen: unknown[] }>();
     expect(state.unseen).toHaveLength(1);
     expect((await post("/b/a1/stamps/seen", token, { keys: ["first-seat"] })).status).toBe(200);
-    expect(await unseenStamps(db, "guild-1", "gavin")).toEqual([]);
+    expect(await unseenStamps(db, "gavin")).toEqual([]);
   });
 
   it("won't take a viewer token from another server, or anything that isn't a stamp", async () => {
@@ -168,13 +184,13 @@ describe("the Ceremony", () => {
     expect((await post("/g/guild-1/stamps/seen", await viewerToken("gavin", "guild-2"), { keys: ["first-seat"] })).status).toBe(403);
     const token = await mintToken("a1", "gavin", KEY, Date.now());
     expect((await post("/b/a1/stamps/seen", token, { keys: ["nope"] })).status).toBe(400);
-    expect(await unseenStamps(db, "guild-1", "gavin")).toHaveLength(1);
+    expect(await unseenStamps(db, "gavin")).toHaveLength(1);
   });
 
   it("can only ever mark the viewer's own", async () => {
     await earnStamps(db, (await getBill(db, "a1"))!, ["gavin", "marcus"]);
     await post("/g/guild-1/stamps/seen", await viewerToken("gavin"), { keys: ["first-seat"] });
-    expect(await unseenStamps(db, "guild-1", "marcus")).toHaveLength(1);
+    expect(await unseenStamps(db, "marcus")).toHaveLength(1);
   });
 
   it("sends a bill link on to the same person's Stamps page", async () => {

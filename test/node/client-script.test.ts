@@ -33,6 +33,55 @@ describe("the page script", () => {
 
 });
 
+// A stamp is seen once everywhere, so a page waiting for someone to finish paying
+// has to let go of one that another page has shown in the meantime.
+describe("the Ceremony on a page holding one back", () => {
+  const stamp = { key: "first-seat", glyph: "初", name: "First Seat", line: "You went on your first outing." };
+
+  function page() {
+    const timers: (() => void)[] = [];
+    let plays = 0;
+    let held = true;
+    const node = {
+      setAttribute() {},
+      append() {},
+      addEventListener() {},
+      remove() {},
+      focus() {},
+      classList: { add() {} },
+      showModal: () => {
+        plays += 1;
+      },
+    };
+    const { stampCeremony } = lift<{ stampCeremony: (options: unknown) => { update: (unseen: unknown[]) => void; pump: () => void } }>(["stampCeremony"], {
+      document: { createElement: () => node, body: { append() {} } },
+      fetch: async () => ({ arrayBuffer: async () => new ArrayBuffer(0) }),
+      setTimeout: (run: () => void) => timers.push(run),
+    });
+    const ceremony = stampCeremony({ held: () => held, seen() {} });
+    const release = () => {
+      held = false;
+      ceremony.pump();
+      timers.shift()?.();
+      return plays;
+    };
+    return { ceremony, release };
+  }
+
+  it("plays it when the hold ends", () => {
+    const { ceremony, release } = page();
+    ceremony.update([stamp]);
+    expect(release()).toBe(1);
+  });
+
+  it("drops it once another page has shown it", () => {
+    const { ceremony, release } = page();
+    ceremony.update([stamp]);
+    ceremony.update([]);
+    expect(release()).toBe(0);
+  });
+});
+
 // Every open page polls, and a bill confirmed elsewhere changes nothing on this
 // bill but its answer to "is the receipt taken". The redraw has to notice that.
 describe("the actions card on an open page", () => {

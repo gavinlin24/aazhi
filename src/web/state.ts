@@ -65,7 +65,7 @@ export interface BillState {
   // one back or see what deleting the bill would throw away. Only the payer's
   // view carries them: they were paid to the payer.
   payments: Payment[];
-  // Stamps the viewer hasn't had the Ceremony for, in this bill's server.
+  // Stamps the viewer hasn't had the Ceremony for, from any server.
   unseen: UnseenStamp[];
 }
 
@@ -243,12 +243,12 @@ export async function pageData(
   viewer: ParticipantId,
 ): Promise<{ result: SplitResult; extras: StateExtras }> {
   const { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
-  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, snapshot.bill.guildId, viewer)]);
+  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, viewer)]);
   return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit, unseen, ...pay } };
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
   const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
-  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, bill.guildId, viewer)]);
+  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, viewer)]);
   return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken, receiptSplit, unseen });
 }
