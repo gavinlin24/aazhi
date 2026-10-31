@@ -6,7 +6,7 @@ import { reconciles } from "../extract/claude";
 import { receiptStamp } from "../extract/receipt-time";
 import { groupByDebtor, paidByDebtor } from "../money/debtors";
 import { splitBill } from "../money/split";
-import type { Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import type { Cents, LineItem, ParticipantId, Share, SplitResult, TipSplit } from "../money/types";
 import { payLinks, payNote } from "./paylink";
 
 export type Editable = "all" | "self" | "none";
@@ -40,6 +40,7 @@ export interface BillState {
   discountCents: Cents;
   taxCents: Cents;
   tipCents: Cents;
+  tipSplit: TipSplit;
   printedTotalCents: Cents | null;
   reconciles: { ok: boolean; discrepancyCents: Cents | null };
   items: LineItem[];
@@ -174,6 +175,7 @@ export function billState(
     discountCents: bill.discountCents,
     taxCents: bill.taxCents,
     tipCents: bill.tipCents,
+    tipSplit: bill.tipSplit ?? "items",
     printedTotalCents: bill.printedTotalCents,
     reconciles: reconciles({ ...bill, items }),
     items,

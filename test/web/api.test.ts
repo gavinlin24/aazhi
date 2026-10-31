@@ -398,6 +398,46 @@ describe("tax, tip and the printed total", () => {
     expect(reply.body.result.distributableCents).toBe(32412);
   });
 
+  it("lets the payer split the tip evenly, and keeps the choice when the tip changes", async () => {
+    await seedSaigon(db, BILL);
+    const before = await revision();
+
+    const even = await patch("gavin", { tipSplit: "even" });
+    expect(even.status).toBe(200);
+    expect(even.body.tipSplit).toBe("even");
+    expect(await revision()).toBe(before + 1);
+    const tips = even.body.result.shares.filter((s: { subtotalCents: number }) => s.subtotalCents > 0).map((s: { tipCents: number }) => s.tipCents);
+    expect(Math.max(...tips) - Math.min(...tips)).toBeLessThanOrEqual(1);
+
+    await patch("gavin", { tip: "60.00" });
+    expect((await getBill(db, BILL))!.tipSplit).toBe("even");
+    await patch("gavin", { tipPercent: 20 });
+    expect((await getBill(db, BILL))!.tipSplit).toBe("even");
+    await patch("gavin", { tip: "0" });
+    expect((await getBill(db, BILL))!.tipSplit).toBe("even");
+  });
+
+  it("takes the split and the amount in one write, either way the tip is entered", async () => {
+    await seedSaigon(db, BILL, { bill: { tipCents: 0 } });
+
+    const reply = await patch("gavin", { tipPercent: 20, tipSplit: "even" });
+
+    expect(reply.status).toBe(200);
+    expect(reply.body.tipCents).toBe(5030);
+    expect(reply.body.tipSplit).toBe("even");
+    expect(reply.body.result.shares.reduce((n: number, s: { tipCents: number }) => n + s.tipCents, 0)).toBe(5030);
+  });
+
+  it("refuses anything else or anyone but the payer", async () => {
+    await seedSaigon(db, BILL);
+
+    for (const tipSplit of ["evenly", "", null, true, 1]) {
+      expect((await patch("gavin", { tipSplit })).status, String(tipSplit)).toBe(400);
+    }
+    expect((await patch("marcus", { tipSplit: "even" })).status).toBe(403);
+    expect((await getBill(db, BILL))!.tipSplit).toBe("items");
+  });
+
   it("converts a tip percentage against the pre-tax subtotal", async () => {
     await seedSaigon(db, BILL, { bill: { tipCents: 0 } });
 

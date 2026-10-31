@@ -640,6 +640,7 @@ describe("taking someone off a draft", () => {
       discountCents: 0,
       taxCents: 300,
       tipCents: 300,
+      tipSplit: "items",
       printedTotalCents: 3300,
       status: "draft",
     });
