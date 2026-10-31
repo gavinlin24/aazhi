@@ -327,7 +327,7 @@ export function renderNoBills(v: Viewer, self: boolean): string {
   const main = `${sprite()}
 <main class="page" id="profile">
 ${head(v, "Profile", self ? "you" : null, null)}
-<section class="card">${emptyState(line)}</section>
+<section class="card is-empty">${emptyState(line)}</section>
 </main>`;
   return shell("Profile · AAzhi", main, PROFILE_STYLES);
 }

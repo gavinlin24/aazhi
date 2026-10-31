@@ -488,6 +488,19 @@ button.row:active { background: var(--fill); }
 /* No lines yet: a lone boat on still water. */
 .empty-lines { display: grid; justify-items: center; gap: 4px; padding: 14px 16px 2px; color: var(--muted); text-align: center; }
 .empty-lines[hidden] { display: none; }
+/* A page with nothing else on it gives the boat the rest of the screen. :has
+   keeps this live, so it follows the board tabs. dvh
+   keeps a phone's sliding browser bars from adding a scrollbar. */
+.page:has(> .is-empty, > .board > [data-list]:not([hidden]) > .empty-lines) {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-height: 100dvh;
+}
+.page > .is-empty,
+.page > .board:has(> [data-list]:not([hidden]) > .empty-lines),
+.board > [data-list]:not([hidden]):has(> .empty-lines) { flex: 1; display: flex; flex-direction: column; }
+.is-empty > .empty-lines, [data-list] > .empty-lines { flex: 1; align-content: center; }
 .boat { width: 184px; height: 58px; }
 .boat .hull, .boat .figure { fill: var(--ink); opacity: 0.82; }
 .boat .rod { fill: none; stroke: var(--ink); stroke-width: 1; opacity: 0.55; }
