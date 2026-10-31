@@ -86,8 +86,8 @@ function tabs(v: Viewer, on: Tab): string {
   return `<span class="status"><span class="tabs nav">${tab("You", selfUrl(v), on === "you")}${tab("Leaderboard", boardsUrl(v), on === "leaderboard")}</span></span>`;
 }
 
-function head(v: Viewer, title: string, on: Tab, meta: string, long = false): string {
-  return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}<p class="meta">${meta}</p></header>`;
+function head(v: Viewer, title: string, on: Tab, meta: string | null, long = false): string {
+  return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}${meta ? `<p class="meta">${meta}</p>` : ""}</header>`;
 }
 
 
@@ -308,7 +308,7 @@ export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: Logged
     : `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
+${head(v, title, self ? "you" : null, `Since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${stampsCard(v, p.id, stamps)}
@@ -330,7 +330,7 @@ export function renderNoBills(v: Viewer, self: boolean): string {
   const line = self ? "You have no bills yet." : "No bills yet.";
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, "Profile", self ? "you" : null, "Every server")}
+${head(v, "Profile", self ? "you" : null, null)}
 <section class="card">${emptyState(line)}</section>
 </main>`;
   return shell("Profile · AAzhi", main, PROFILE_STYLES);
@@ -482,7 +482,7 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .stamp-list .s { flex: none; color: var(--muted); font-size: 14px; }
 .stamp-list .s.on { color: var(--ink); }
 .stamp-list .l { display: block; color: var(--muted); font-size: 14px; }
-.card .empty-lines { padding-bottom: 18px; }
+.card .empty-lines { gap: 10px; padding: 22px 16px; }
 .pair-none { padding: 10px var(--edge) 14px; color: var(--muted); font-size: 15px; }
 .figures { display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 4px 9px; text-align: center; }
 .figures > div { display: flex; flex-direction: column; min-width: 0; }

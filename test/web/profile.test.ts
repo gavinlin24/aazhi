@@ -133,9 +133,9 @@ describe("the profile page", () => {
     expect(html).not.toMatch(/seal-strip|seal-card/);
   });
 
-  it("says it counts every server, and names none of them", async () => {
+  it("gives only the start date, and names no server", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
-    expect(await textOf(html, ".meta")).toMatch(/^Every server · since [A-Z]/);
+    expect(await textOf(html, ".meta")).toMatch(/^Since [A-Z]/);
     expect(await textOf(html, ".head")).not.toContain("Friday Table");
   });
 
