@@ -1538,11 +1538,16 @@ function totals(v: View): string {
 }
 
 // The box is centered on the hull, not the water, so the boat sits over the text below it.
-export const BOAT =
+const BOAT =
   '<svg class="boat" viewBox="20 25 184 58" aria-hidden="true" focusable="false">' +
   '<path class="hull" d="M70 56c20 5 60 5 84-1 2-.5 3 1 1.6 2.4-6 6-20 9.5-42 9.5-21 0-35-3.6-45-8.6-1.4-.7-.6-2.7 1.4-2.3z"/>' +
   '<path class="figure" d="M98 41.5l9-4.2 9 4.2zM102 42.5c.4 4-.2 8.6-1.8 12.5h12.2c-1.4-3.9-2-8.5-1.6-12.5z"/>' +
   '<path class="rod" d="M112 46l44-20M156 26l2 44"/><path class="w" d="M40 72h44M130 74h50M70 80h30M150 82h26M20 64h26"/></svg>';
+
+// What every page and list shows when it has nothing to show.
+export function emptyState(line: string, attrs = ""): string {
+  return `<div class="empty-lines"${attrs}>${BOAT}<p>${line}</p></div>`;
+}
 
 function receipt(v: View): string {
   const list = v.s.items.length > 0 ? `<ul class="items">${v.s.items.map((i) => itemRow(v, i)).join("\n")}</ul>` : "";
@@ -1550,7 +1555,7 @@ function receipt(v: View): string {
     v.s.editable === "all"
       ? `<div class="add-line needs-js" data-add-line><button type="button" class="add-row" data-add-open aria-label="Add a line">${icon("plus")}</button></div>`
       : "";
-  const empty = `<div class="empty-lines" data-empty-lines${v.s.items.length > 0 ? " hidden" : ""}>${BOAT}<p>No lines yet.</p></div>`;
+  const empty = emptyState("No lines yet.", ` data-empty-lines${v.s.items.length > 0 ? " hidden" : ""}`);
   return `<section class="card receipt${v.s.editable === "all" ? " is-editable" : ""}" data-items aria-label="Receipt">
 ${list}
 ${empty}

@@ -4,7 +4,7 @@ import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profil
 import { RECEIPT_TIME_ZONE, receiptStamp } from "../extract/receipt-time";
 import { formatCents, monthName } from "../format";
 import { RANK_FACE, STAMP_FACE } from "./fonts";
-import { BOAT, escapeHtml, hills, hueOf, icon, initialOf, notice, scriptJson, shell, sprite } from "./page";
+import { emptyState, escapeHtml, hills, hueOf, icon, initialOf, notice, scriptJson, shell, sprite } from "./page";
 import { PROFILE_SCRIPT } from "./profile-client";
 
 // The token is the viewer, so every link on these pages carries it. The
@@ -195,7 +195,7 @@ ${range(p.months, top)}
 // `pair` is the viewer seen from the profile being read, so theyHosted is the viewer.
 function pairCard(p: Profile, pair: Companion | undefined): string {
   const name = escapeHtml(p.name);
-  if (!pair) return `<section class="card pair-card"><p class="card-h">You and ${name}</p><p class="pair-none">No outings together yet.</p></section>`;
+  if (!pair) return `<section class="card pair-card"><p class="card-h">You and ${name}</p>${emptyState("No outings together yet.")}</section>`;
   const figure = (value: number, label: string) => `<div><span class="fig">${value}</span><span class="fl">${label}</span></div>`;
   return `<section class="card pair-card"><p class="card-h">You and ${name}</p><div class="figures">${figure(pair.outings, `${pair.outings === 1 ? "outing" : "outings"} together`)}${figure(pair.personHosted, `${p.name.length > LONG_NAME ? "they" : name} hosted`)}${figure(pair.theyHosted, "you hosted")}</div></section>`;
 }
@@ -322,10 +322,6 @@ ${ceremonyData(v)}
 }
 
 // It means no bills anywhere, so it names no server.
-function emptyState(line: string): string {
-  return `<div class="empty-lines">${BOAT}<p>${line}</p></div>`;
-}
-
 export function renderNoBills(v: Viewer, self: boolean): string {
   const line = self ? "You have no bills yet." : "No bills yet.";
   const main = `${sprite()}
@@ -483,7 +479,6 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .stamp-list .s.on { color: var(--ink); }
 .stamp-list .l { display: block; color: var(--muted); font-size: 14px; }
 .card .empty-lines { gap: 10px; padding: 22px 16px; }
-.pair-none { padding: 10px var(--edge) 14px; color: var(--muted); font-size: 15px; }
 .figures { display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 4px 9px; text-align: center; }
 .figures > div { display: flex; flex-direction: column; min-width: 0; }
 .figures > div + div { border-left: 1px solid var(--rule); }
