@@ -1537,7 +1537,7 @@ function totals(v: View): string {
   return `<dl class="totals" data-totals>${rows.join("")}</dl>`;
 }
 
-const BOAT =
+export const BOAT =
   '<svg class="boat" viewBox="0 0 220 90" aria-hidden="true" focusable="false">' +
   '<path class="hull" d="M70 56c20 5 60 5 84-1 2-.5 3 1 1.6 2.4-6 6-20 9.5-42 9.5-21 0-35-3.6-45-8.6-1.4-.7-.6-2.7 1.4-2.3z"/>' +
   '<path class="figure" d="M98 41.5l9-4.2 9 4.2zM102 42.5c.4 4-.2 8.6-1.8 12.5h12.2c-1.4-3.9-2-8.5-1.6-12.5z"/>' +
