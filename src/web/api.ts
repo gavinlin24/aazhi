@@ -39,6 +39,7 @@ import {
   type Participant,
 } from "../db/bills";
 import { setVenmoHandle } from "../db/handles";
+import { earnStamps, markStampsSeen, stampOf, type Earned } from "../db/stamps";
 import {
   GuestPaidRefusedError,
   outstanding,
@@ -50,7 +51,7 @@ import {
   undoPaid,
 } from "../db/settlements";
 import { onePlace, postLog, removeLogPost } from "../discord/log-post";
-import { guestPaidNotice, markedPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice } from "../discord/notices";
+import { guestPaidNotice, markedPaidNotice, paymentNotice, pardonNotice, reconfirmNotice, reopenNotice, undoNotice, withStamps } from "../discord/notices";
 import { editBillMessage, postChannelMessage } from "../discord/rest";
 import type { Env } from "../env";
 import { parsePriceCents } from "../extract/schema";
@@ -148,6 +149,11 @@ function expectKeys(body: Record<string, unknown>, required: string[], optional:
   for (const key of required) if (!(key in body)) bad(`Missing field "${key}".`);
 }
 
+function stampKeys(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((key) => typeof key === "string" && stampOf(key))) bad('"keys" must be a list of stamps.');
+  return value as string[];
+}
+
 function text(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) bad(`"${field}" must be a non-empty string.`);
   return value;
@@ -228,6 +234,21 @@ function announce(c: Ctx, bill: BillRow, content: string | null): void {
   );
 }
 
+// A stamp follows a write that has already landed, so a failure here is logged
+// and costs nothing: the same rows earn it on that person's next bill.
+async function earn(env: Env, bill: BillRow, people: ParticipantId[], options?: { forgave?: boolean }): Promise<Earned[]> {
+  try {
+    return await earnStamps(env.DB, bill, people, options);
+  } catch (error) {
+    console.error("could not award stamps", error);
+    return [];
+  }
+}
+
+function membersOf(snapshot: BillSnapshot): ParticipantId[] {
+  return snapshot.participants.filter((p) => p.kind === "member").map((p) => p.id);
+}
+
 async function commit(c: Ctx, grant: Grant, bill: BillRow, write: () => Promise<number>): Promise<Response> {
   try {
     await write();
@@ -274,6 +295,20 @@ function splitRoute(handler: (c: Ctx, grant: Grant) => Promise<Response>) {
 export const api = new Hono<{ Bindings: Env }>();
 
 api.get("/:billId/state", route(currentState));
+
+// Marked when the sheet appears, so a dropped network means seeing it twice
+// rather than never. The stamp is the viewer's, whatever bill the link is for.
+api.post(
+  "/:billId/stamps/seen",
+  route(async (c, grant) => {
+    const body = await readBody(c);
+    expectKeys(body, ["keys"]);
+    const bill = await getBill(c.env.DB, grant.billId);
+    if (!bill) return refuse(404, NOT_FOUND);
+    await markStampsSeen(c.env.DB, bill.guildId, grant.participantId, stampKeys(body.keys));
+    return reply({ seen: true });
+  }),
+);
 
 api.post(
   "/:billId/claim",
@@ -615,12 +650,12 @@ api.post(
 // Said in the channel like any payment, so the member who added the guest
 // hears that part of what they owe was paid. A failed post is logged and the
 // mark stands.
-async function announceGuestPaid(env: Env, billId: string, guestId: ParticipantId, cents: Cents, paid: boolean): Promise<void> {
+async function announceGuestPaid(env: Env, billId: string, guestId: ParticipantId, cents: Cents, paid: boolean, earned: Earned[]): Promise<void> {
   const [bill, participants, standing] = await Promise.all([getBill(env.DB, billId), getParticipants(env.DB, billId), outstanding(env.DB, billId)]);
   const guest = participants.find((p) => p.id === guestId);
   if (!bill || !guest) return;
   const row = standing.find((o) => o.participant === debtorOf(guest, bill.payerId));
-  const content = guestPaidNotice(bill, participants, guestId, cents, paid, row ? row.owedCents - row.settledCents : 0);
+  const content = withStamps(guestPaidNotice(bill, participants, guestId, cents, paid, row ? row.owedCents - row.settledCents : 0), participants, earned);
   if (!content) return;
   await postChannelMessage(bill.channelId, { content, allowed_mentions: { parse: [] } }, env);
 }
@@ -657,8 +692,9 @@ api.post(
         }
         const done = await setGuestPaidToPayer(c.env.DB, grant.billId, guest.id, paid);
         if (done === null) return snapshot.bill.revision;
+        const earned = paid ? await earn(c.env, snapshot.bill, []) : [];
         c.executionCtx.waitUntil(
-          announceGuestPaid(c.env, grant.billId, guest.id, done.cents, paid).catch((error) =>
+          announceGuestPaid(c.env, grant.billId, guest.id, done.cents, paid, earned).catch((error) =>
             console.error("could not announce the guest's payment", error),
           ),
         );
@@ -696,13 +732,13 @@ api.post(
 // channel. The rows are read after the write, so the amounts are the ones now
 // in force. Like a failed card edit, a failed post is logged and the pardon
 // stands.
-async function announcePardon(env: Env, billId: string, participantId: ParticipantId, pardoned: boolean): Promise<void> {
+async function announcePardon(env: Env, billId: string, participantId: ParticipantId, pardoned: boolean, earned: Earned[]): Promise<void> {
   const [bill, participants, shares] = await Promise.all([
     getBill(env.DB, billId),
     getParticipants(env.DB, billId),
     getShares(env.DB, billId),
   ]);
-  const content = bill && pardonNotice(bill, participants, shares, participantId, pardoned);
+  const content = bill && withStamps(pardonNotice(bill, participants, shares, participantId, pardoned), participants, earned);
   if (!bill || !content) return;
   await postChannelMessage(bill.channelId, { content, allowed_mentions: { parse: [] } }, env);
 }
@@ -738,8 +774,9 @@ api.post(
       return await commit(c, grant, snapshot.bill, async () => {
         const revision = await setPardon(c.env.DB, grant.billId, participantId, pardoned);
         if (revision === null) return snapshot.bill.revision;
+        const earned = pardoned ? await earn(c.env, snapshot.bill, [], { forgave: true }) : [];
         c.executionCtx.waitUntil(
-          announcePardon(c.env, grant.billId, participantId, pardoned).catch((error) => console.error("could not announce the pardon", error)),
+          announcePardon(c.env, grant.billId, participantId, pardoned, earned).catch((error) => console.error("could not announce the pardon", error)),
         );
         return revision;
       });
@@ -781,10 +818,10 @@ const CONFIRM_REFUSED = {
 };
 
 // Save, then post, inside the tap, so the page can say if the post failed.
-async function finishLog(c: Ctx, grant: Grant): Promise<Response> {
+async function finishLog(c: Ctx, grant: Grant, earned: Earned[]): Promise<Response> {
   const bill = await getBill(c.env.DB, grant.billId);
   if (!bill) return refuse(404, NOT_FOUND);
-  await postLog(bill, c.env);
+  await postLog(bill, c.env, earned);
   return currentState(c, grant);
 }
 
@@ -833,9 +870,10 @@ api.post(
           return refuse(409, CONFIRM_REFUSED[result.reason]);
       }
     }
-    if (snapshot.bill.kind === "log") return finishLog(c, grant);
+    const earned = await earn(c.env, snapshot.bill, membersOf(snapshot));
+    if (snapshot.bill.kind === "log") return finishLog(c, grant, earned);
     for (const log of result.removedLogs) c.executionCtx.waitUntil(removeLogPost(log, c.env));
-    announce(c, snapshot.bill, reconfirmNotice(snapshot.bill, snapshot.participants, result.changes));
+    announce(c, snapshot.bill, withStamps(reconfirmNotice(snapshot.bill, snapshot.participants, result.changes), snapshot.participants, earned));
     return currentState(c, grant);
   }),
 );
@@ -930,7 +968,8 @@ api.post(
     if (recorded) {
       refreshMessage(c, bill);
       const after = await leftFor(c.env, grant.billId, grant.participantId);
-      announce(c, bill, paymentNotice(bill, participants, grant.participantId, amount, after));
+      const earned = await earn(c.env, bill, [grant.participantId]);
+      announce(c, bill, withStamps(paymentNotice(bill, participants, grant.participantId, amount, after), participants, earned));
     }
     return currentState(c, grant);
   }),
@@ -985,7 +1024,8 @@ api.post(
     }
     if (recorded) {
       refreshMessage(c, bill);
-      announce(c, bill, markedPaidNotice(bill, participants, who, amount, await leftFor(c.env, grant.billId, who)));
+      const earned = await earn(c.env, bill, []);
+      announce(c, bill, withStamps(markedPaidNotice(bill, participants, who, amount, await leftFor(c.env, grant.billId, who)), participants, earned));
     }
     return currentState(c, grant);
   }),

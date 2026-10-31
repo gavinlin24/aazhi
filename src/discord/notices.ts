@@ -1,4 +1,5 @@
 import type { AmountChange, BillRow, Participant } from "../db/bills";
+import { stampOf, type Earned } from "../db/stamps";
 import { formatCents, formatDate } from "../format";
 import { debtorOf, groupByDebtor, groupOf } from "../money/debtors";
 import type { Cents, ParticipantId, Share } from "../money/types";
@@ -33,6 +34,22 @@ export function nameOf(participants: Participant[], id: string): string {
 export function list(parts: string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+// "Mei earned 常 Regular." One line for each person who earned something. It only
+// ever rides on a post that was going out anyway, so a stamp is never a message.
+export function stampLines(participants: Participant[], earned: Earned[]): string[] {
+  const people = [...new Set(earned.map((e) => e.who))];
+  return people.map((who) => {
+    const stamps = earned.filter((e) => e.who === who).flatMap((e) => stampOf(e.key) ?? []);
+    const name = escapeMarkdown(clip(participants.find((p) => p.id === who)?.displayName ?? "Someone", MAX_NAME));
+    return `${name} earned ${list(stamps.map((s) => `${s.glyph} ${s.name}`))}.`;
+  });
+}
+
+export function withStamps(content: string | null, participants: Participant[], earned: Earned[]): string | null {
+  if (!content) return content;
+  return clip([content, ...stampLines(participants, earned)].join("\n"), MAX_CONTENT);
 }
 
 // "Marcus paid $44.46 and now owes $41.10, so Gavin owes Marcus $3.36." Names

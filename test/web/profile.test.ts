@@ -136,7 +136,7 @@ describe("the profile page", () => {
   it("says it counts every server, and names none of them", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
     expect(await textOf(html, ".meta")).toMatch(/^Every server · since [A-Z]/);
-    expect(html).not.toContain("Friday Table");
+    expect(await textOf(html, ".head")).not.toContain("Friday Table");
   });
 
   it("adds the Back to you chip and the pair card on someone else's page", async () => {

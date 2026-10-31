@@ -6,6 +6,8 @@
 //
 // The markup it draws mirrors page.ts, which draws the same state on first
 // load; a change to either needs the same change in the other.
+import { CEREMONY_SCRIPT } from "./ceremony";
+
 export const CLIENT_SCRIPT = String.raw`
 (() => {
   "use strict";
@@ -824,11 +826,13 @@ export const CLIENT_SCRIPT = String.raw`
   const SLAM_MS = 1000;
 
   function slam(seal) {
+    slamming = true;
     const mark = el("div", { class: "slam", "aria-hidden": "true" }, seal);
     document.body.appendChild(mark);
     setTimeout(() => {
       mark.remove();
       slamming = false;
+      ceremony.pump();
     }, SLAM_MS);
   }
 
@@ -1189,6 +1193,7 @@ export const CLIENT_SCRIPT = String.raw`
   function closeSheet() {
     const dialog = root.querySelector("dialog[data-sheet]");
     if (dialog && dialog.open) dialog.close();
+    ceremony.pump();
   }
 
   function sheetHead(v, id, title, amountText, extra, doomed) {
@@ -1650,6 +1655,7 @@ export const CLIENT_SCRIPT = String.raw`
     renderActions(v);
     renderLog(v);
     renderSheet(v);
+    ceremony.update(state.unseen);
   }
 
   // The layout and every control on it are drawn for one status and one set
@@ -2424,6 +2430,17 @@ export const CLIENT_SCRIPT = String.raw`
   });
 
   window.addEventListener("hashchange", showView);
+
+${CEREMONY_SCRIPT}
+  // Someone who still owes is here to pay, and a stamp would get between them and
+  // the button. It plays the moment they've paid, or on the next page they open.
+  const ceremony = stampCeremony({
+    seeHref: base + "/stamps?t=" + encodeURIComponent(token),
+    seen: (key) => send("POST", "/stamps/seen", { keys: [key] }),
+    held: () =>
+      stopped || slamming || sheet !== null || editing !== null || addingGuest ||
+      (state.status === "confirmed" && !state.viewerIsPayer && leftOf(model(view()), state.viewer) > 0),
+  });
 
   // Polling keeps a shared page honest about other people's claims. A hidden
   // tab skips its turn and catches up the moment it is shown again.

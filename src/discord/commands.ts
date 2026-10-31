@@ -91,7 +91,7 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     ...guildOnly,
     name: "profile",
     type: ApplicationCommandType.ChatInput,
-    description: "See your stats, or someone else's",
+    description: "See your stats and stamps, or someone else's",
     options: [
       {
         type: ApplicationCommandOptionType.User,

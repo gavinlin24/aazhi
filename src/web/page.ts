@@ -3,6 +3,7 @@ import { formatAddons, formatCents, formatDate } from "../format";
 import { debtorOf } from "../money/debtors";
 import { itemPieces } from "../money/split";
 import type { Addon, Cents, LineItem, ParticipantId, Share, SplitResult } from "../money/types";
+import { CEREMONY_STYLES } from "./ceremony";
 import { CLIENT_SCRIPT } from "./client";
 import { FONT_FACES } from "./fonts";
 import { billState, type BillState, type StateParticipant, type StateExtras } from "./state";
@@ -23,7 +24,7 @@ export function escapeHtml(text: string): string {
 // JSON inside a script element is raw text to the HTML parser, so the only
 // way out of it is a "<" starting "</script" or "<!--"; escaping every "<"
 // closes both, and JSON.parse reads < back as "<".
-function scriptJson(value: unknown): string {
+export function scriptJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
@@ -114,7 +115,7 @@ function ripple(color: string): string {
 // carries meaning was checked against WCAG: 4.5:1 for text, 3:1 for the tick
 // rings and seals. The avatar hues are mineral pigments, each a wash with its
 // own ink, so an initial always reads.
-const STYLES = `${FONT_FACES}
+const STYLES = `${FONT_FACES}${CEREMONY_STYLES}
 :root {
   color-scheme: light dark;
   --paper: #efe7d6;

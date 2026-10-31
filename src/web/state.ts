@@ -1,5 +1,6 @@
 import { getSettled, getShares, hasSplitPartner, type BillRow, type BillSnapshot, type Participant, type Settled } from "../db/bills";
 import { getVenmoHandles } from "../db/handles";
+import { unseenStamps, type UnseenStamp } from "../db/stamps";
 import { listSettlements, type Settlement } from "../db/settlements";
 import { reconciles } from "../extract/claude";
 import { receiptStamp } from "../extract/receipt-time";
@@ -64,6 +65,8 @@ export interface BillState {
   // one back or see what deleting the bill would throw away. Only the payer's
   // view carries them: they were paid to the payer.
   payments: Payment[];
+  // Stamps the viewer hasn't had the Ceremony for, in this bill's server.
+  unseen: UnseenStamp[];
 }
 
 export type Payment = Pick<Settlement, "id" | "participant" | "cents" | "recordedAt">;
@@ -96,6 +99,7 @@ export interface PayExtras {
 export interface StateFlags {
   receiptTaken?: boolean;
   receiptSplit?: boolean;
+  unseen?: UnseenStamp[];
 }
 
 // Everything renderPage takes besides the bill, in one bag.
@@ -188,6 +192,7 @@ export function billState(
       viewer === bill.payerId
         ? (payExtras.payments ?? []).map(({ id, participant, cents, recordedAt }) => ({ id, participant, cents, recordedAt }))
         : [],
+    unseen: flags.unseen ?? [],
   };
 }
 
@@ -238,12 +243,12 @@ export async function pageData(
   viewer: ParticipantId,
 ): Promise<{ result: SplitResult; extras: StateExtras }> {
   const { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
-  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit, ...pay } };
+  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, snapshot.bill.guildId, viewer)]);
+  return { result, extras: { hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit, unseen, ...pay } };
 }
 
 export async function stateOf(db: D1Database, snapshot: BillSnapshot, viewer: ParticipantId): Promise<BillState> {
   const { bill, input, participants, hasPayments, paid, paidToPayer, paidToHost, receiptTaken, receiptSplit } = snapshot;
-  const [result, pay] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer)]);
-  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken, receiptSplit });
+  const [result, pay, unseen] = await Promise.all([pageResult(db, snapshot), payExtrasOf(db, snapshot, viewer), unseenStamps(db, bill.guildId, viewer)]);
+  return billState(bill, result, input.items, participants, viewer, hasPayments, paid, { paidToPayer, paidToHost }, pay, { receiptTaken, receiptSplit, unseen });
 }

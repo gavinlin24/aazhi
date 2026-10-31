@@ -60,6 +60,7 @@ beforeEach(async () => {
   await ready;
   await db.prepare("DELETE FROM bills").run();
   await db.prepare("DELETE FROM receipt_reads").run();
+  await db.prepare("DELETE FROM stamps").run();
   calls = [];
   read = LUNCH;
   check = () => answer(REAL);
@@ -297,7 +298,7 @@ describe("logging", () => {
 
     expect(posts()).toHaveLength(1);
     expect(posts()[0]!.url).toContain("/channels/chan-1/messages");
-    expect(posts()[0]!.body).toEqual({ content: "<@gavin> spent $20.00 at Saigon Kitchen", allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
+    expect(posts()[0]!.body).toEqual({ content: "<@gavin> spent $20.00 at Saigon Kitchen\ngavin earned 初席 First Seat.", allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
     const bill = (await getBill(db, d.id))!;
     expect(bill).toMatchObject({ status: "confirmed", messageId: "msg-post" });
     expect((await getShares(db, d.id)).map((s) => [s.participant, s.owedCents])).toEqual([["gavin", 2000]]);
@@ -316,7 +317,7 @@ describe("logging", () => {
   it("escapes the name, so a receipt can't format the post", async () => {
     read = { ...LUNCH, place: "**Bold** @everyone" };
     await logged();
-    expect(posts()[0]!.body.content).toBe("<@gavin> spent $20.00 at \\*\\*Bold\\*\\* @everyone");
+    expect(posts()[0]!.body.content).toBe("<@gavin> spent $20.00 at \\*\\*Bold\\*\\* @everyone\ngavin earned 初席 First Seat.");
     expect(posts()[0]!.body.allowed_mentions).toEqual({ parse: [] });
   });
 
@@ -374,7 +375,7 @@ describe("a place the read couldn't name", () => {
     const named: any = await (await web(d.path, d.token, "PATCH", { place: "  Pho\n Hoa  " })).json();
     expect(named.place).toBe("Pho Hoa");
     expect((await logIt(d)).status).toBe(200);
-    expect(posts()[0]!.body.content).toBe("<@gavin> spent $20.00 at Pho Hoa");
+    expect(posts()[0]!.body.content).toBe("<@gavin> spent $20.00 at Pho Hoa\ngavin earned 初席 First Seat.");
   });
 
   it("refuses an empty name", async () => {
@@ -526,7 +527,7 @@ describe("after logging", () => {
     const state: any = await (await web(d.path, d.token, "PATCH", { place: "Pho Hoa" })).json();
     expect(state.place).toBe("Pho Hoa");
     const edit = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/channels/chan-1/messages/msg-post"))!;
-    expect(edit.body).toEqual({ content: "<@gavin> spent $20.00 at Pho Hoa", allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
+    expect(edit.body).toEqual({ content: "<@gavin> spent $20.00 at Pho Hoa\ngavin earned 初席 First Seat.", allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
   });
 
   it("undoes the log and the post", async () => {
@@ -561,6 +562,7 @@ describe("the fake check", () => {
     expect(lastReply()).toEqual({ content: "This receipt looks fake, so I didn't log it.", allowed_mentions: { parse: [] } });
     expect(await billCount()).toBe(0);
     expect(posts()).toHaveLength(0);
+    expect((await db.prepare("SELECT COUNT(*) AS n FROM stamps").first<{ n: number }>())!.n).toBe(0);
   });
 
   it("refuses when the check fails, and asks for another try", async () => {
@@ -687,6 +689,17 @@ describe("Your logs", () => {
     expect(mine).toContain("Saigon Kitchen");
     expect(mine).toContain("$20.00");
     expect(await open("/g/guild-1/u/gavin", await viewer("marcus"))).not.toContain("Your logs");
+  });
+
+  it("keeps a stamp's line on the post through a rename, and earns it only once", async () => {
+    const d = await startLog();
+    await pick(d);
+    await logIt(d);
+    expect(posts()[0]!.body.content).toContain("earned 初席 First Seat.");
+    const token = await mintViewerToken("guild-1", "gavin", null, env().TOKEN_SIGNING_KEY, Date.now());
+    await web(`/g/guild-1/logs/${d.id}`, token, "PATCH", { place: "Pho Hoa" });
+    const edit = calls.at(-1)!;
+    expect(edit.body.content).toBe("<@gavin> spent $20.00 at Pho Hoa\ngavin earned 初席 First Seat.");
   });
 
   it("renames and removes from any server, once the page's link is gone", async () => {

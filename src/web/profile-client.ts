@@ -2,6 +2,8 @@
 // same rules apply: no template literals, and never a closing script tag.
 // The stats are already in the page, so for those it only chooses what shows.
 // Your logs are the one thing here that writes.
+import { CEREMONY_SCRIPT } from "./ceremony";
+
 export const PROFILE_SCRIPT = String.raw`
 (() => {
   "use strict";
@@ -87,6 +89,20 @@ export const PROFILE_SCRIPT = String.raw`
     row.append(form);
     input.select();
   }
+
+${CEREMONY_SCRIPT}
+  const stamps = JSON.parse(document.getElementById("stamps-ceremony").textContent);
+  stampCeremony({
+    seeHref: stamps.see,
+    held: () => false,
+    seen: (key) =>
+      fetch(stamps.seen, {
+        method: "POST",
+        cache: "no-store",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ keys: [key] }),
+      }).catch(() => null),
+  }).update(stamps.unseen);
 
   page.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;

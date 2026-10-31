@@ -1,16 +1,21 @@
 import { Hono, type Context } from "hono";
 import type { APIInteraction } from "discord-api-types/v10";
-import { getBillSnapshot, listLogs } from "./db/bills";
-import { hasBillHere, personProfile, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
+import { getBill, getBillSnapshot, listLogs } from "./db/bills";
+import { stampRows, stampsHeld, unseenStamps } from "./db/stamps";
+import { hasBillHere, personProfile, personSummary, serverBoards, type BoardName, type BoardSpan } from "./db/stats";
 import { handleInteraction } from "./discord/interactions";
+import { MAX_NAME } from "./discord/handlers/profile";
+import { clip } from "./discord/notices";
+import { guildName } from "./discord/rest";
 import { verifyRequest } from "./discord/verify";
 import type { Env } from "./env";
 import { api } from "./web/api";
 import { logsApi } from "./web/logs";
 import { renderBillGone, renderBillNotFound, renderLinkRefused, renderPage } from "./web/page";
-import { renderBoards, renderBoardsRefused, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, type Viewer } from "./web/profile";
+import { STAMP_FONT, STAMP_FONT_PATH } from "./web/fonts";
+import { renderBoards, renderBoardsRefused, renderNoBills, renderPersonRefused, renderProfile, renderProfileRefused, renderStamps, type Viewer } from "./web/profile";
 import { pageData } from "./web/state";
-import { checkMemberProof, readToken, readViewerToken } from "./web/token";
+import { checkMemberProof, mintViewerToken, readToken, readViewerToken } from "./web/token";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -65,6 +70,32 @@ app.get("/b/:billId", async (c) => {
   return page(renderPage(bill, result, input.items, participants, grant.participantId, extras), 200);
 });
 
+app.get(STAMP_FONT_PATH, () => {
+  const bytes = Uint8Array.from(atob(STAMP_FONT), (char) => char.charCodeAt(0));
+  return new Response(bytes, { headers: { "content-type": "font/woff2", "cache-control": "public, max-age=604800" } });
+});
+
+// The "See your stamps" link on a bill page's Ceremony. A bill link can't
+// open a profile page, so it trades itself for a viewer link to the same person.
+app.get("/b/:billId/stamps", async (c) => {
+  const billId = c.req.param("billId");
+  const nowMs = Date.now();
+  const grant = await readToken(c.req.query("t") ?? "", c.env.TOKEN_SIGNING_KEY, nowMs);
+  if (!grant || grant.billId !== billId) return page(renderLinkRefused(), 403);
+  const bill = await getBill(c.env.DB, billId);
+  if (!bill) return page(renderBillNotFound(), 404);
+  const server = await guildName(bill.guildId, c.env);
+  const token = await mintViewerToken(bill.guildId, grant.participantId, server && clip(server, MAX_NAME), c.env.TOKEN_SIGNING_KEY, nowMs);
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: `/g/${encodeURIComponent(bill.guildId)}/stamps?t=${token}`,
+      "referrer-policy": "no-referrer",
+      "cache-control": "no-store",
+    },
+  });
+});
+
 // The page's script talks to these with the same token, as a bearer header.
 app.route("/b", api);
 
@@ -81,6 +112,8 @@ async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
   return {
     ...grant,
     token,
+    proof: c.req.query("m") ?? null,
+    unseen: await unseenStamps(c.env.DB, grant.guildId, grant.viewerId),
     place: {
       board: (BOARDS.includes(board) ? board : "hosted") as BoardName,
       span: (c.req.query("span") === "all" ? "all" : "month") as BoardSpan,
@@ -94,8 +127,7 @@ async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
 // /profile @name just vouched for.
 async function mayOpen(c: Context<{ Bindings: Env }>, viewer: Viewer, person: string): Promise<boolean> {
   if (person === viewer.viewerId) return true;
-  const proof = c.req.query("m");
-  if (proof && (await checkMemberProof(proof, viewer.token, person, c.env.TOKEN_SIGNING_KEY))) return true;
+  if (viewer.proof && (await checkMemberProof(viewer.proof, viewer.token, person, c.env.TOKEN_SIGNING_KEY))) return true;
   return hasBillHere(c.env.DB, viewer.guildId, person);
 }
 
@@ -107,12 +139,25 @@ async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) 
   if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
   const profile = await personProfile(c.env.DB, viewer.guildId, person, nowMs);
   if (!profile) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
-  const logs = person === viewer.viewerId ? await listLogs(c.env.DB, person) : [];
-  return page(renderProfile(profile, viewer, nowMs, logs), 200);
+  const [logs, stamps] = await Promise.all([person === viewer.viewerId ? listLogs(c.env.DB, person) : [], stampsHeld(c.env.DB, viewer.guildId, person)]);
+  return page(renderProfile(profile, viewer, nowMs, logs, stamps), 200);
+}
+
+async function stampsPage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) => string): Promise<Response> {
+  const viewer = await viewerOf(c);
+  if (!viewer) return page(renderProfileRefused(), 403);
+  const person = who(viewer);
+  if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
+  const summary = await personSummary(c.env.DB, viewer.guildId, person);
+  if (!summary) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
+  return page(renderStamps({ ...summary, id: person }, await stampRows(c.env.DB, viewer.guildId, person), viewer, Date.now()), 200);
 }
 
 app.get("/g/:guildId", (c) => profilePage(c, (viewer) => viewer.viewerId));
 app.get("/g/:guildId/u/:userId", (c) => profilePage(c, () => c.req.param("userId")!));
+
+app.get("/g/:guildId/stamps", (c) => stampsPage(c, (viewer) => viewer.viewerId));
+app.get("/g/:guildId/u/:userId/stamps", (c) => stampsPage(c, () => c.req.param("userId")!));
 
 app.get("/g/:guildId/boards", async (c) => {
   const viewer = await viewerOf(c);

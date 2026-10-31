@@ -114,7 +114,10 @@ describe("/profile", () => {
 
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBe(EPHEMERAL);
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times.");
+    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times, 0 of 10 stamps.");
+    await db.prepare("INSERT INTO stamps (guild_id, user_id, key, earned_at) VALUES ('guild-1', 'gavin', 'host', '2026-10-01')").run();
+    expect((await send(profileBody())).data.content).toContain("1 of 10 stamps.");
+    await db.prepare("DELETE FROM stamps").run();
     const [link, board, post] = reply.data.components[0].components;
     expect(link.label).toBe("Open profile");
     expect(link.url).toMatch(/\/g\/guild-1\?t=[\w-]+\.[\w-]+$/);
@@ -128,7 +131,7 @@ describe("/profile", () => {
     const reply = await send(profileBody({ id: "marcus" }));
     const { url } = reply.data.components[0].components[0];
 
-    expect(reply.data.content).toBe("**Marcus**: 1 outing, $15.00 spent, hosted 0 times.");
+    expect(reply.data.content).toBe("**Marcus**: 1 outing, $15.00 spent, hosted 0 times, 0 of 10 stamps.");
     expect(url).toContain("/g/guild-1/u/marcus?t=");
     const grant = await readViewerToken(new URL(url).searchParams.get("t")!, "k", Date.now());
     expect(grant).toEqual({ guildId: GUILD, viewerId: "gavin", guildName: "Friday Table" });
@@ -138,7 +141,7 @@ describe("/profile", () => {
     await twoBills();
     await seedOuting(db, { id: "b3", guild: "guild-2", people: [["marcus", "Marc the Belayer"]], alongside: ["theo", "Theo"], items: [["Eggs", 900, ["marcus"]]] });
     const reply = await send(profileBody({ id: "marcus", nick: "Some Other Nick" }));
-    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted once.");
+    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted once, 0 of 10 stamps.");
   });
 
   it("still answers when Discord will not say the server's name", async () => {
@@ -190,7 +193,7 @@ describe("/profile", () => {
       items: [["Eggs", 900, ["theo"]]],
     });
     const reply = await send(profileBody({ id: "theo", nick: "Theo" }));
-    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted once.");
+    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted once, 0 of 10 stamps.");
 
     const url = new URL(reply.data.components[0].components[0].url);
     expect(await checkMemberProof(url.searchParams.get("m")!, url.searchParams.get("t")!, "theo", "k")).toBe(true);
@@ -239,14 +242,14 @@ describe("Post it here", () => {
     const reply = await send(postBody("gavin"));
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBeUndefined();
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times.");
+    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times, 0 of 10 stamps.");
     expect(reply.data.allowed_mentions).toEqual({ parse: [] });
   });
 
   it("works out the line again at the tap", async () => {
     await twoBills();
     await db.prepare("UPDATE bills SET status = 'deleted' WHERE id = 'b2'").run();
-    expect((await send(postBody("gavin"))).data.content).toBe("**Gavin**: 1 outing, $20.00 spent, hosted once.");
+    expect((await send(postBody("gavin"))).data.content).toBe("**Gavin**: 1 outing, $20.00 spent, hosted once, 0 of 10 stamps.");
   });
 
   it("answers privately when nothing is left to post", async () => {

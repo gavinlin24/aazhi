@@ -33,7 +33,7 @@ function sharedWithSomeone(person: string, bill: string): string {
   return `EXISTS (SELECT 1 FROM shares x WHERE x.bill_id = ${bill}.id AND x.participant_id <> ${person}.id AND x.owed_cents > 0)`;
 }
 
-function confirmedMember(person: string, bill: string): string {
+export function confirmedMember(person: string, bill: string): string {
   return `${person}.kind = 'member' AND ${bill}.status = 'confirmed' AND ${hasShare(person, bill)} AND (${sharedWithSomeone(person, bill)} OR ${bill}.kind = 'log')`;
 }
 
