@@ -3,6 +3,8 @@ import type { Addon, Cents } from "./money/types";
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
 export function formatCents(cents: Cents): string {
   const abs = Math.abs(cents);
   const remainder = abs % 100;
@@ -22,6 +24,11 @@ export function formatDate(isoDate: string | null): string | null {
   if (!match) return null;
   const month = MONTHS[Number(match[2]) - 1];
   return month ? `${month} ${Number(match[3])}, ${match[1]}` : null;
+}
+
+// Takes a "2026-10" month key, as the stats use.
+export function monthName(month: string): string {
+  return MONTH_NAMES[Number(month.slice(5, 7)) - 1] ?? month;
 }
 
 // "10/28", for a Venmo note, where the year only takes up room.

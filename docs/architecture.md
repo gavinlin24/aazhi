@@ -236,7 +236,7 @@ migration drops them.
 logs of the people on that split and deletes their posts, because the split
 now holds their real share. Anyone not on the split keeps their log.
 
-Logs add to Spent, Unique visits and the favorite place, but not Hosted or
+Logs add to Spent, Places and the favorite place, but not Hosted or
 Fronted, because nobody was hosted. **Your logs** on your own `/profile` lets
 you rename or remove them after the page's 30-minute link has run out
 (`src/web/logs.ts`).
@@ -244,9 +244,11 @@ you rename or remove them after the page's 30-minute link has run out
 ## Profiles and boards
 
 `/profile` answers privately with one line and an **Open profile** link.
-`/profile @someone` does the same for them. The pages show a person's months
-as a mountain range, a few tiles, and three boards: Hosted, Spent and Unique
-visits. Nothing here writes to the database. `src/db/stats.ts` holds every rule.
+`/profile @someone` does the same for them. `/leaderboard` answers privately
+with the top of Hosted for the month, an **Open leaderboard** link and **Post it
+here**. The pages show a person's months as a mountain range, a few tiles, and
+three boards: Hosted, Spent and Places. Nothing here writes to the database.
+`src/db/stats.ts` holds every rule.
 
 **Numbers count every server.** Eating out is one life, so a profile adds up
 every confirmed bill a person is on, wherever it was made: spent, outings, the
@@ -297,7 +299,7 @@ Bills from before the key have none, because the printed time was never stored.
 **The link belongs to the viewer.** A viewer token holds the server and the
 viewer, not the person viewed, so one link can walk the whole server. It lasts
 30 minutes, like a bill link. Its fields differ from a bill token's, so neither
-can be read as the other. It also carries the server's name for the Boards
+can be read as the other. It also carries the server's name for the Leaderboard
 header, because Discord leaves that out of interactions. The name is clipped to
 40 characters to stay under Discord's 512-character limit on button links. If
 the lookup fails, the page leaves the name out.
@@ -314,7 +316,7 @@ button is close to Discord's limit, and it expires with the token it signs.
 | Outings | Confirmed bills that count for you | Drafts, reopened, deleted and replaced bills |
 | Hosted | Bills that count for you and that you paid | Bills you paid with a $0 share of your own |
 | Spent | Your own share at confirm, paid or not | Forgiven shares and guests |
-| Unique visits | Distinct places, after folding | Bills with no place name |
+| Places | Distinct places, after folding | Bills with no place name |
 
 A bill counts for you only if your share is above $0 and someone else's is too.
 This applies to every stat, including Went with and You and Marcus. Tapping Open
@@ -348,7 +350,8 @@ bill was made. Otherwise a misread year would move the bill to another month.
 **Boards.** Ties share a rank and the next rank skips: 1, 1, 3. The Month board
 shows the current month, or last month until this month has a bill, so the 1st
 is never empty. All six lists come down in one page and the tabs only choose
-which one shows.
+which one shows. The links carry the open board and span, so the Leaderboard tab
+and the Back to leaderboard chip return to the same list.
 
 **The Range page.** The axis starts at the person's first month, up to the last
 12. A quiet month is a low swell and not a gap, so the ridge never breaks.

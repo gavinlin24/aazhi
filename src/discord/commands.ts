@@ -49,7 +49,7 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
     ...guildOnly,
     name: "log",
     type: ApplicationCommandType.ChatInput,
-    description: "Log your own meal from a photo of the receipt",
+    description: "Log your own meal from a receipt or screenshot",
     options: [
       {
         type: ApplicationCommandOptionType.Attachment,
@@ -99,5 +99,11 @@ export const commands: RESTPutAPIApplicationCommandsJSONBody = [
         description: "Whose profile to open",
       },
     ],
+  },
+  {
+    ...guildOnly,
+    name: "leaderboard",
+    type: ApplicationCommandType.ChatInput,
+    description: "See who's on top in this server",
   },
 ];

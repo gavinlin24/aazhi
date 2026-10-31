@@ -26,8 +26,9 @@ looks fake, it tells only you and logs nothing.
 
 Run `/profile` to see your months, your favorite place and who you go out with.
 `/profile @someone` shows theirs. Your numbers count every server you eat with.
-The boards rank the people in this server by Hosted, Spent and Unique visits,
-using those same totals. Bills stay in the server they were made in.
+Run `/leaderboard` to see who's on top in this server. It ranks people by Hosted,
+Spent and Places, using those same totals. Bills stay in the server they were
+made in.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg">

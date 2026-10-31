@@ -6,6 +6,7 @@ import {
 } from "discord-api-types/v10";
 import type { Env } from "../env";
 import { debtsCommand } from "./handlers/debts";
+import { leaderboardCommand, postLeaderboard } from "./handlers/leaderboard";
 import { logCommand } from "./handlers/log";
 import { postProfile, profileCommand } from "./handlers/profile";
 import { retired, voteOver } from "./handlers/retired";
@@ -31,6 +32,7 @@ export const commandHandlers: Record<string, InteractionHandler> = {
   log: logCommand,
   debts: debtsCommand,
   profile: profileCommand,
+  leaderboard: leaderboardCommand,
 };
 // Everything else a bill needs is done on the page now. The prefixes of the
 // buttons and forms that used to do it stay mapped, so a tap on a message
@@ -54,6 +56,7 @@ export const componentHandlers: Record<string, InteractionHandler> = {
   "open:": openSplit,
   "roster:": pickRoster,
   "profile-post:": postProfile,
+  "leaderboard-post": postLeaderboard,
   // Old posts keep their Real and Fake buttons, so a tap still gets an answer.
   "logvote:": voteOver,
   ...Object.fromEntries(RETIRED.map((prefix) => [prefix, retired(prefix)])),

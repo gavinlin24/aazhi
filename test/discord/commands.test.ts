@@ -24,6 +24,18 @@ describe("application command definitions", () => {
     ]);
   });
 
+  it("defines /leaderboard as a guild command with no options", () => {
+    const board = commands.find((c) => c.name === "leaderboard") as RESTPostAPIChatInputApplicationCommandsJSONBody;
+    expect(board.description).toBe("See who's on top in this server");
+    expect(board.contexts).toEqual([InteractionContextType.Guild]);
+    expect(board.options).toBeUndefined();
+  });
+
+  it("says /log takes a screenshot too", () => {
+    const log = commands.find((c) => c.name === "log") as RESTPostAPIChatInputApplicationCommandsJSONBody;
+    expect(log.description).toBe("Log your own meal from a receipt or screenshot");
+  });
+
   it("has no option for naming diners", () => {
     const split = findSplit();
 

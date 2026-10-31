@@ -123,6 +123,13 @@ export const PROFILE_SCRIPT = String.raw`
     });
     page.querySelectorAll("[data-tab]").forEach((tab) => tab.classList.toggle("on", tab.dataset.tab === board));
     page.querySelectorAll("[data-to]").forEach((tab) => tab.classList.toggle("on", tab.dataset.to === span));
+    // These tabs were drawn for the board the page opened on.
+    page.querySelectorAll("[data-keep]").forEach((tab) => {
+      const link = new URL(tab.href);
+      link.searchParams.set("board", board);
+      link.searchParams.set("span", span);
+      tab.href = link;
+    });
     const address = new URL(location.href);
     address.searchParams.set("board", board);
     address.searchParams.set("span", span);
