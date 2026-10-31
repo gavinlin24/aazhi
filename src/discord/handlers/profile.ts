@@ -8,6 +8,7 @@ import {
   type APIInteraction,
   type APIUser,
 } from "discord-api-types/v10";
+import { STAMPS, stampsHeld } from "../../db/stamps";
 import { personSummary, type Summary } from "../../db/stats";
 import { formatCents } from "../../format";
 import { mintMemberProof, mintViewerToken } from "../../web/token";
@@ -42,10 +43,10 @@ function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-function profileLine(person: Summary): string {
+function profileLine(person: Summary, stamps: number): string {
   const hosted = person.hosted === 1 ? "once" : `${person.hosted} times`;
   const name = escapeMarkdown(clip(person.name, MAX_NAME));
-  return `**${name}**: ${plural(person.outings, "outing")}, ${formatCents(person.spentCents)} spent, hosted ${hosted}.`;
+  return `**${name}**: ${plural(person.outings, "outing")}, ${formatCents(person.spentCents)} spent, hosted ${hosted}, ${stamps} of ${STAMPS.length} stamps.`;
 }
 
 function profileUrl(origin: string, guildId: string, person: string, viewer: string, token: string, proof: string | null): string {
@@ -82,7 +83,8 @@ export const profileCommand: InteractionHandler = async (body, env, _ctx, origin
   const server = await guildName(guildId, env);
   const token = await mintViewerToken(guildId, who.id, server && clip(server, MAX_NAME), env.TOKEN_SIGNING_KEY, Date.now());
   const proof = person === who.id ? null : await mintMemberProof(token, person, env.TOKEN_SIGNING_KEY);
-  return privately(profileLine(summary), [
+  const stamps = await stampsHeld(env.DB, guildId, person);
+  return privately(profileLine(summary, stamps.size), [
     {
       type: ComponentType.ActionRow,
       components: [
@@ -100,10 +102,12 @@ export const profileCommand: InteractionHandler = async (body, env, _ctx, origin
 export const postProfile: InteractionHandler = async (body, env) => {
   const guildId = body.guild_id;
   if (body.type !== InteractionType.MessageComponent || !guildId) return privately("That action is not supported.");
-  const summary = await personSummary(env.DB, guildId, body.data.custom_id.slice(POST_PREFIX.length));
+  const person = body.data.custom_id.slice(POST_PREFIX.length);
+  const summary = await personSummary(env.DB, guildId, person);
   if (!summary) return privately("There are no bills to show for them any more.");
+  const stamps = await stampsHeld(env.DB, guildId, person);
   return Response.json({
     type: InteractionResponseType.ChannelMessageWithSource,
-    data: { content: profileLine(summary), allowed_mentions: { parse: [] } },
+    data: { content: profileLine(summary, stamps.size), allowed_mentions: { parse: [] } },
   });
 };

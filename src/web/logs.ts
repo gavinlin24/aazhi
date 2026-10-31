@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { deleteBill, discardLog, getBill, setLogPlace, type BillRow } from "../db/bills";
+import { markStampsSeen } from "../db/stamps";
 import { onePlace, removeLogPost, renameLogPost } from "../discord/log-post";
 import type { Env } from "../env";
 import { readViewerToken } from "./token";
@@ -42,6 +43,17 @@ function answer(body: unknown, status = 200): Response {
 }
 
 export const logsApi = new Hono<{ Bindings: Env }>();
+
+// The Ceremony on a profile page, which holds a viewer token and no bill.
+logsApi.post("/:guildId/stamps/seen", async (c) => {
+  const match = /^Bearer ([^\s]+)$/.exec(c.req.header("authorization") ?? "");
+  const grant = match ? await readViewerToken(match[1]!, c.env.TOKEN_SIGNING_KEY, Date.now()) : null;
+  if (!grant || grant.guildId !== c.req.param("guildId")) return answer({ error: NOT_YOURS }, 403);
+  const body = await c.req.json<{ keys?: unknown }>().catch(() => null);
+  const keys = Array.isArray(body?.keys) ? body.keys.filter((key): key is string => typeof key === "string") : [];
+  await markStampsSeen(c.env.DB, grant.guildId, grant.viewerId, keys);
+  return answer({ seen: true });
+});
 
 logsApi.patch("/:guildId/logs/:billId", async (c) => {
   const bill = await ownedLog(c);

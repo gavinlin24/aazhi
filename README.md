@@ -26,6 +26,11 @@ looks fake, it tells only you and logs nothing.
 
 Run `/profile` to see your months, your favorite place and who you go out with.
 `/profile @someone` shows theirs. Your numbers count every server you eat with.
+Stamps are what you earn for eating out together. Your profile shows them for the
+server you're in, and tapping the card shows all ten and how far along you are.
+A new one plays on the next page you open. Logs earn only First Seat, Regular,
+Traveler and Hundred Flavors.
+
 Run `/leaderboard` to see who's on top in this server. It ranks people by Hosted,
 Spent and Places, using those same totals. Bills stay in the server they were
 made in.

@@ -15,7 +15,8 @@ credentials are in [setup.md](setup.md). Technology choices are in [stack.md](st
 - **Claude Sonnet** (Anthropic API): for `/log` only, decides whether the
   receipt photo is real (`src/extract/fake-check.ts`).
 - **Split page**: HTML and a JSON API served by the same Worker at `/b/<bill id>`.
-- **Profile pages**: read-only HTML from the same Worker at `/g/<server id>`.
+- **Profile pages**: HTML from the same Worker at `/g/<server id>`, which only
+  ever write your logs and which stamps you've seen.
 
 ```mermaid
 flowchart TB
@@ -272,6 +273,30 @@ nothing from other servers.
   same whether or not that person has bills elsewhere, so a link can't be walked
   to arbitrary accounts.
 
+**Stamps stay in their server.** Unlike the numbers, a stamp is one person in one
+server, so the card carries the server's name. There are ten, listed in
+`src/db/stamps.ts`, and each rule reads the rows the stats already count.
+
+- **Earning.** A stamp is checked after each confirm, payment, marked payment and
+  forgiveness, for the people that write could move. Each check reads the rows
+  from scratch, so a check that failed is made up at that person's next bill. A
+  failure never fails the write it follows.
+- **Logs.** A log earns First Seat, Regular, Traveler and Hundred Flavors and
+  nothing else, the same line the stats draw between an outing and hosting.
+- **Never taken back.** Undoing a payment, reopening a bill or removing a log
+  leaves a stamp where it is. Nothing deletes from `stamps`.
+- **Backfill.** `migrations/0012_stamps.sql` gives people what they already earned,
+  dated when they crossed the line and marked seen. It folds names by ASCII only,
+  so it can be a stamp short or over against the Worker's rules for names that
+  differ by an accent. The Worker's check makes up a shortfall at the next bill.
+- **The Ceremony.** A stamp with no `seen_at` plays once, one at a time, on
+  whichever page the person opens next. It waits for a stamp press to finish, an
+  open sheet, and on a bill for someone who still owes to pay. It's marked seen
+  when the sheet appears, so a dropped connection shows it twice rather than never.
+- **The post.** A stamp only ever adds a line to a post already going out, and a
+  log's line survives a rename. The first Confirm of a split posts nothing, so
+  nothing is said about what it earned.
+
 **One receipt, one credit.** Numbers add up across servers, so a receipt split
 twice would count one outing twice. A receipt is credited by at most one
 confirmed bill, anywhere, same server included.
@@ -358,7 +383,9 @@ and the Back to leaderboard chip return to the same list.
 
 **Fonts.** The rank numerals 一 二 三 are a separate face in the profile styles.
 The bill page inlines its fonts on every load and has a size budget, so it does
-not carry glyphs it never shows.
+not carry glyphs it never shows. The stamps are the exception to inlining: a file
+at `/fonts/stamps.woff2`, which the profile styles name and the Ceremony fetches on
+a bill page only when it has a stamp to show.
 
 ## Deployment
 

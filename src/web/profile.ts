@@ -1,9 +1,10 @@
 import type { LoggedRow } from "../db/bills";
-import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profile, Ranked } from "../db/stats";
+import { earnedFirst, STAMPS, type StampRow, type UnseenStamp } from "../db/stamps";
+import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profile, Ranked, Summary } from "../db/stats";
 import { RECEIPT_TIME_ZONE, receiptStamp } from "../extract/receipt-time";
 import { formatCents, monthName } from "../format";
-import { RANK_FACE } from "./fonts";
-import { escapeHtml, hills, hueOf, icon, initialOf, notice, shell, sprite } from "./page";
+import { RANK_FACE, STAMP_FACE } from "./fonts";
+import { escapeHtml, hills, hueOf, icon, initialOf, notice, scriptJson, shell, sprite } from "./page";
 import { PROFILE_SCRIPT } from "./profile-client";
 
 // The token is the viewer, so every link on these pages carries it. The
@@ -17,6 +18,10 @@ export interface Viewer {
   // return to it from any page, with no per-viewer state on the server.
   place: BoardPlace;
   fromBoard: boolean;
+  // Proof that opened someone else's page, which their stamps need as well.
+  proof: string | null;
+  // The viewer's own stamps waiting for the Ceremony, on whatever page this is.
+  unseen: UnseenStamp[];
 }
 
 export interface BoardPlace {
@@ -38,6 +43,16 @@ function selfUrl(v: Viewer): string {
 
 function personUrl(v: Viewer, id: string): string {
   return id === v.viewerId ? selfUrl(v) : `${base(v)}/u/${encodeURIComponent(id)}?t=${v.token}${placeQuery(v.place)}`;
+}
+
+function friendQuery(v: Viewer): string {
+  return `${v.proof ? `&m=${encodeURIComponent(v.proof)}` : ""}${v.fromBoard ? "&from=leaderboard" : ""}`;
+}
+
+function stampsUrl(v: Viewer, id: string = v.viewerId): string {
+  return id === v.viewerId
+    ? `${base(v)}/stamps?t=${v.token}${placeQuery(v.place)}`
+    : `${base(v)}/u/${encodeURIComponent(id)}/stamps?t=${v.token}${placeQuery(v.place)}${friendQuery(v)}`;
 }
 
 function boardsUrl(v: Viewer, { board, span }: BoardPlace = v.place): string {
@@ -185,6 +200,62 @@ function pairCard(p: Profile, pair: Companion | undefined): string {
   return `<section class="card pair-card"><p class="card-h">You and ${name}</p><div class="figures">${figure(pair.outings, `${pair.outings === 1 ? "outing" : "outings"} together`)}${figure(pair.personHosted, `${p.name.length > LONG_NAME ? "they" : name} hosted`)}${figure(pair.theyHosted, "you hosted")}</div></section>`;
 }
 
+function serverName(v: Viewer): string {
+  return v.guildName ? escapeHtml(v.guildName) : "This server";
+}
+
+function stampFace(glyph: string, earned: boolean): string {
+  return `<span class="stamp-face ${earned ? "is-on" : "is-off"}" lang="zh" aria-hidden="true">${glyph}</span>`;
+}
+
+// One link, not ten: the single thing to do here is open the Stamps page, and a
+// screen reader gets the count rather than ten characters.
+function stampsCard(v: Viewer, id: string, held: Map<string, string>): string {
+  const rows = earnedFirst(STAMPS.map((stamp) => ({ ...stamp, earned: held.has(stamp.key) })));
+  const count = `${held.size} of ${STAMPS.length}`;
+  return `<a class="card stamps-card" href="${escapeHtml(stampsUrl(v, id))}" aria-label="Stamps, ${count}. See them all."><p class="card-h">Stamps<span class="sub">${count}</span></p><div class="stamps-grid">${rows.map((row) => stampFace(row.glyph, row.earned)).join("")}</div><p class="stamps-foot">${serverName(v)}. Tap to see them all.</p></a>`;
+}
+
+function earnedOn(iso: string, nowMs: number): string {
+  const when = new Date(iso);
+  const year = (at: Date | number) => new Intl.DateTimeFormat("en-US", { timeZone: RECEIPT_TIME_ZONE, year: "numeric" }).format(at);
+  const thisYear = year(when) === year(nowMs);
+  return `Earned ${new Intl.DateTimeFormat("en-US", { timeZone: RECEIPT_TIME_ZONE, month: "short", day: "numeric", year: thisYear ? undefined : "numeric" }).format(when)}`;
+}
+
+function stampStatus(row: StampRow, nowMs: number): string {
+  if (row.earnedAt) return earnedOn(row.earnedAt, nowMs);
+  if (row.shows === "count") return `${Math.min(row.progress, row.goal)} of ${row.goal}`;
+  return row.shows === "best" && row.progress > 0 ? `Best so far: ${row.progress}` : "Not yet";
+}
+
+function stampRow(row: StampRow, nowMs: number): string {
+  const status = `<span class="s${row.earnedAt ? " on" : ""}">${stampStatus(row, nowMs)}</span>`;
+  return `<li>${stampFace(row.glyph, row.earnedAt !== null)}<div><p class="t"><b>${row.name}</b>${status}</p><span class="l">${escapeHtml(row.rule)}</span></div></li>`;
+}
+
+export function renderStamps(person: Summary, rows: StampRow[], v: Viewer, nowMs: number): string {
+  const self = person.id === v.viewerId;
+  const title = self ? "Stamps" : `${escapeHtml(person.name)}'s stamps`;
+  const earned = rows.filter((row) => row.earnedAt !== null).length;
+  const back = self ? selfUrl(v) : `${personUrl(v, person.id)}${friendQuery(v)}`;
+  const main = `${sprite()}
+<main class="page" id="profile">
+${head(v, title, self ? "you" : null, `${serverName(v)} <span class="dot">·</span> ${earned} of ${STAMPS.length}`, !self)}
+<a class="chip-back" href="${escapeHtml(back)}">${icon("back")}Back to ${self ? "you" : escapeHtml(person.name)}</a>
+<section class="card"><ul class="stamp-list">${rows.map((row) => stampRow(row, nowMs)).join("")}</ul></section>
+</main>
+${ceremonyData(v, true)}
+<script>${PROFILE_SCRIPT}</script>`;
+  return shell(`${self ? "Stamps" : `${person.name}'s stamps`} · AAzhi`, main, PROFILE_STYLES);
+}
+
+// The Stamps page leaves out the link, being where that link goes.
+function ceremonyData(v: Viewer, onStamps = false): string {
+  const data = { unseen: v.unseen, see: onStamps ? undefined : stampsUrl(v), seen: `${base(v)}/stamps/seen` };
+  return `<script type="application/json" id="stamps-ceremony">${scriptJson(data)}</script>`;
+}
+
 function tile(art: string, value: string, label: string): string {
   return `<div class="tile2">${art}<span class="t-val">${value}</span><span class="t-lbl">${label}</span></div>`;
 }
@@ -229,7 +300,7 @@ function logsCard(logs: LoggedRow[], v: Viewer, nowMs: number): string {
   return `<section class="card logs" data-logs="${escapeHtml(v.guildId)}"><p class="card-h">Your logs<span class="sub">Only you see this</span></p><ul>${rows.join("")}</ul></section>`;
 }
 
-export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: LoggedRow[] = []): string {
+export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: LoggedRow[], stamps: Map<string, string>): string {
   const self = p.id === v.viewerId;
   const title = `${avatar(p.id, p.name, 30, self)}${escapeHtml(p.name)}`;
   const back = v.fromBoard
@@ -240,10 +311,12 @@ export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: Logged
 ${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
+${stampsCard(v, p.id, stamps)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
 ${tiles(p, v)}
 ${self ? logsCard(logs, v, nowMs) : ""}
 </main>
+${ceremonyData(v)}
 <script>${PROFILE_SCRIPT}</script>`;
   return shell(`${p.name} · AAzhi`, main, PROFILE_STYLES);
 }
@@ -335,6 +408,7 @@ ${BOARD_TABS.map(([b]) => `<p class="foot" data-foot="${b}"${b === shown.board ?
 <p class="foot">Totals include meals in other servers.</p>
 <p class="foot">Tap a name to open that profile.</p>
 </main>
+${ceremonyData(v)}
 <script>${PROFILE_SCRIPT}</script>`;
   return shell("Leaderboard · AAzhi", main, PROFILE_STYLES);
 }
@@ -342,7 +416,7 @@ ${BOARD_TABS.map(([b]) => `<p class="foot" data-foot="${b}"${b === shown.board ?
 // Only these pages use these rules, so they stay out of the bill page. The
 // values come from the approved board; the names avoid the bill page's own
 // .row and .seg, which mean something else there.
-const PROFILE_STYLES = `${RANK_FACE}
+const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .head h1 { display: flex; align-items: center; gap: 9px; }
 .head.is-long h1 { grid-column: 1 / -1; grid-row: 2; }
 .head.is-long .status { grid-column: 2; grid-row: 3; }
@@ -399,6 +473,20 @@ const PROFILE_STYLES = `${RANK_FACE}
 .log-form { display: flex; flex: 1 1 100%; gap: 8px; }
 .log-form input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 1.5px solid var(--azurite); border-radius: var(--radius); background: var(--paper); color: var(--ink); font: inherit; font-size: 17px; }
 .log-msg { flex: 1 1 100%; color: var(--warn); font-size: 14px; }
+.stamps-card { display: block; color: inherit; text-decoration: none; }
+.stamps-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; padding: 12px var(--edge) 13px; }
+.stamps-grid .stamp-face.is-on:nth-child(2n) { transform: rotate(2deg); }
+.stamps-foot { padding: 0 var(--edge) 12px; color: var(--muted); font-size: 14px; }
+.stamp-list { list-style: none; margin: 0; padding: 0; }
+.stamp-list li { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; padding: 9px var(--edge); border-bottom: 1px solid var(--rule); }
+.stamp-list li:last-child { border-bottom: 0; }
+.stamp-list li:nth-child(2n) .stamp-face.is-on { transform: rotate(2deg); }
+.stamp-list .stamp-face { width: 44px; font-size: 17px; }
+.stamp-list .t { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.stamp-list b { font-size: 16px; font-weight: 600; }
+.stamp-list .s { flex: none; color: var(--muted); font-size: 14px; }
+.stamp-list .s.on { color: var(--ink); }
+.stamp-list .l { display: block; color: var(--muted); font-size: 14px; }
 .pair-none { padding: 10px var(--edge) 14px; color: var(--muted); font-size: 15px; }
 .figures { display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 4px 9px; text-align: center; }
 .figures > div { display: flex; flex-direction: column; min-width: 0; }

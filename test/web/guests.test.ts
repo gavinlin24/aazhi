@@ -508,7 +508,7 @@ describe("a guest another member added", () => {
     expect(new URL(state.pay.webUrl).searchParams.get("amount")).toBe(plain(together));
 
     expect((await payment("dani", together)).status).toBe(200);
-    expect(lastPost()).toBe(`Dani paid Gavin ${formatCents(together)} for ${SAIGON_KITCHEN}, and is all paid up.`);
+    expect(lastPost()?.split("\n")[0]).toBe(`Dani paid Gavin ${formatCents(together)} for ${SAIGON_KITCHEN}, and is all paid up.`);
     expect((await listSettlements(db, BILL)).every((s) => s.participant === "dani")).toBe(true);
     // Clear is the pair's: both rows settle when Dani's payments cover both.
     expect(await settledAt("dani")).not.toBeNull();
@@ -627,7 +627,7 @@ describe("a guest the payer added", () => {
 
     expect((await standing(kim))!.owedCents).toBe(0);
     expect(cardRows(await renderedCard()).filter((r) => r.includes("Kim"))).toEqual([`Kim (guest) · ~~${kimOwes}~~ forgiven`]);
-    expect(channelPosts().map((p) => p.body.content)).toEqual([`Gavin forgave Kim's ${kimOwes} for ${SAIGON_KITCHEN}, so Kim owes nothing.`]);
+    expect(channelPosts().map((p) => p.body.content)).toEqual([`Gavin forgave Kim's ${kimOwes} for ${SAIGON_KITCHEN}, so Kim owes nothing.\nGavin earned 宽 Magnanimous.`]);
   });
 
   it("is marked paid by the payer, as the guest paying the payer", async () => {
