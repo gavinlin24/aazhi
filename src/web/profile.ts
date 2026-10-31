@@ -4,7 +4,7 @@ import type { BoardName, Boards, BoardSpan, Companion, MonthSpend, Named, Profil
 import { RECEIPT_TIME_ZONE, receiptStamp } from "../extract/receipt-time";
 import { formatCents, monthName } from "../format";
 import { RANK_FACE, STAMP_FACE } from "./fonts";
-import { escapeHtml, hills, hueOf, icon, initialOf, notice, scriptJson, shell, sprite } from "./page";
+import { emptyState, escapeHtml, hills, hueOf, icon, initialOf, notice, scriptJson, shell, sprite } from "./page";
 import { PROFILE_SCRIPT } from "./profile-client";
 
 // The token is the viewer, so every link on these pages carries it. The
@@ -86,8 +86,8 @@ function tabs(v: Viewer, on: Tab): string {
   return `<span class="status"><span class="tabs nav">${tab("You", selfUrl(v), on === "you")}${tab("Leaderboard", boardsUrl(v), on === "leaderboard")}</span></span>`;
 }
 
-function head(v: Viewer, title: string, on: Tab, meta: string, long = false): string {
-  return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}<p class="meta">${meta}</p></header>`;
+function head(v: Viewer, title: string, on: Tab, meta: string | null, long = false): string {
+  return `<header class="head${long ? " is-long" : ""}">${hills(true)}<h1>${title}</h1>${tabs(v, on)}${meta ? `<p class="meta">${meta}</p>` : ""}</header>`;
 }
 
 
@@ -195,7 +195,7 @@ ${range(p.months, top)}
 // `pair` is the viewer seen from the profile being read, so theyHosted is the viewer.
 function pairCard(p: Profile, pair: Companion | undefined): string {
   const name = escapeHtml(p.name);
-  if (!pair) return `<section class="card pair-card"><p class="card-h">You and ${name}</p><p class="pair-none">No outings together yet.</p></section>`;
+  if (!pair) return `<section class="card pair-card"><p class="card-h">You and ${name}</p>${emptyState("No outings together yet.")}</section>`;
   const figure = (value: number, label: string) => `<div><span class="fig">${value}</span><span class="fl">${label}</span></div>`;
   return `<section class="card pair-card"><p class="card-h">You and ${name}</p><div class="figures">${figure(pair.outings, `${pair.outings === 1 ? "outing" : "outings"} together`)}${figure(pair.personHosted, `${p.name.length > LONG_NAME ? "they" : name} hosted`)}${figure(pair.theyHosted, "you hosted")}</div></section>`;
 }
@@ -308,7 +308,7 @@ export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: Logged
     : `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, self ? "you" : null, `Every server <span class="dot">·</span> since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
+${head(v, title, self ? "you" : null, `Since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
 ${self ? "" : back}
 ${rangeCard(p, nowMs)}
 ${stampsCard(v, p.id, stamps)}
@@ -321,14 +321,13 @@ ${ceremonyData(v)}
   return shell(`${p.name} · AAzhi`, main, PROFILE_STYLES);
 }
 
-// Reached by the You tab or a stale link, never from the reply, which gives
-// no button in this case. It means no bills anywhere.
+// It means no bills anywhere, so it names no server.
 export function renderNoBills(v: Viewer, self: boolean): string {
   const line = self ? "You have no bills yet." : "No bills yet.";
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, "Profile", self ? "you" : null, "Every server")}
-<section class="card pair-card"><p class="pair-none">${line}</p></section>
+${head(v, "Profile", self ? "you" : null, null)}
+<section class="card is-empty">${emptyState(line)}</section>
 </main>`;
   return shell("Profile · AAzhi", main, PROFILE_STYLES);
 }
@@ -346,11 +345,6 @@ export function renderBoardsRefused(): string {
 }
 
 const NUMERALS = ["一", "二", "三"];
-const FOOTS: Record<BoardName, string> = {
-  hosted: "Hosted means you paid the bill and at least one other person came.",
-  spent: "Spent is your own share, counted when the bill is confirmed.",
-  visits: "Each different place counts once.",
-};
 const BOARD_TABS: [BoardName, string][] = [
   ["hosted", "Hosted"],
   ["spent", "Spent"],
@@ -387,7 +381,7 @@ function boardList(boards: Boards, place: BoardPlace, heading: string, v: Viewer
   const list =
     rows.length > 0
       ? `<ol class="ranks">${rows.map((row) => rankRow(row, place, v)).join("")}</ol>`
-      : `<p class="pair-none">${span === "month" ? `Nobody is on this board for ${heading} yet.` : "Nobody is on this board yet."}</p>`;
+      : emptyState(span === "month" ? `Nobody is on this board for ${heading} yet.` : "Nobody is on this board yet.");
   const spans = SPAN_TABS.map(([s, label]) => boardTab("to", s, label, s === span, boardsUrl(v, { board, span: s }))).join("");
   return `<div data-list="${board}:${span}"${shown ? "" : " hidden"}><p class="card-h">${heading}<span class="tabs span">${spans}</span></p>${list}</div>`;
 }
@@ -404,9 +398,6 @@ export function renderBoards(boards: Boards, v: Viewer): string {
 ${head(v, "Leaderboard", "leaderboard", v.guildName ? escapeHtml(v.guildName) : "This server", true)}
 <div class="tabs wide">${BOARD_TABS.map(([b, label]) => boardTab("tab", b, label, b === shown.board, boardsUrl(v, { board: b, span: shown.span }))).join("")}</div>
 <section class="card board">${lists.join("")}</section>
-${BOARD_TABS.map(([b]) => `<p class="foot" data-foot="${b}"${b === shown.board ? "" : " hidden"}>${FOOTS[b]}</p>`).join("")}
-<p class="foot">Totals include meals in other servers.</p>
-<p class="foot">Tap a name to open that profile.</p>
 </main>
 ${ceremonyData(v)}
 <script>${PROFILE_SCRIPT}</script>`;
@@ -487,7 +478,7 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .stamp-list .s { flex: none; color: var(--muted); font-size: 14px; }
 .stamp-list .s.on { color: var(--ink); }
 .stamp-list .l { display: block; color: var(--muted); font-size: 14px; }
-.pair-none { padding: 10px var(--edge) 14px; color: var(--muted); font-size: 15px; }
+.card .empty-lines { gap: 10px; padding: 22px 16px; }
 .figures { display: grid; grid-template-columns: repeat(3, 1fr); padding: 6px 4px 9px; text-align: center; }
 .figures > div { display: flex; flex-direction: column; min-width: 0; }
 .figures > div + div { border-left: 1px solid var(--rule); }
@@ -518,9 +509,6 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .nm-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .you { flex: none; margin-left: 7px; color: var(--muted); font-size: 14px; }
 .num { font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums lining-nums; }
-.foot { margin: 12px 4px 0; color: var(--muted); font-size: 14px; text-align: center; }
-.foot + .foot { margin-top: 4px; }
-.foot[hidden] { display: none; }
 [data-list][hidden] { display: none; }
 @media (prefers-color-scheme: dark) {
   .range .far { opacity: .8; }

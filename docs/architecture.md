@@ -244,16 +244,16 @@ you rename or remove them after the page's 30-minute link has run out
 
 ## Profiles and boards
 
-`/profile` answers privately with one line and an **Open profile** link.
-`/profile @someone` does the same for them. `/leaderboard` answers privately
-with the top of Hosted for the month, an **Open leaderboard** link and **Post it
-here**. The pages show a person's months as a mountain range, a few tiles, and
+`/profile` answers privately with only an **Open profile** link.
+`/profile @someone` does the same for them, even if they have no bills.
+`/leaderboard` answers privately with only an **Open leaderboard** link. The
+link belongs to one viewer, so neither reply can be posted. The pages show a person's months as a mountain range, a few tiles, and
 three boards: Hosted, Spent and Places. Nothing here writes to the database.
 `src/db/stats.ts` holds every rule.
 
 **Numbers count every server.** Eating out is one life, so a profile adds up
 every confirmed bill a person is on, wherever it was made: spent, outings, the
-Range, tiles, hosted and fronted. "No bills" means none anywhere, and the reply
+Range, tiles, hosted and fronted. "No bills" means none anywhere, and the page
 names no server. The per-server view is the monthly recap the bot will post in
 the server, not these pages. Bills themselves stay separate: a bill page shows
 nothing from other servers.

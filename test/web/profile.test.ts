@@ -133,9 +133,9 @@ describe("the profile page", () => {
     expect(html).not.toMatch(/seal-strip|seal-card/);
   });
 
-  it("says it counts every server, and names none of them", async () => {
+  it("gives only the start date, and names no server", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken()}`)).text();
-    expect(await textOf(html, ".meta")).toMatch(/^Every server · since [A-Z]/);
+    expect(await textOf(html, ".meta")).toMatch(/^Since [A-Z]/);
     expect(await textOf(html, ".head")).not.toContain("Friday Table");
   });
 
@@ -191,7 +191,8 @@ describe("the profile page", () => {
   it("says no bills only when a proven link finds none anywhere", async () => {
     const token = await viewerToken();
     const html = await (await get(`/g/guild-1/u/priya?t=${token}&m=${await mintMemberProof(token, "priya", KEY)}`)).text();
-    expect(await textOf(html, ".pair-none")).toBe("No bills yet.");
+    expect(await textOf(html, ".empty-lines p")).toBe("No bills yet.");
+    expect(await select(html, ".boat")).toHaveLength(1);
     expect(html).not.toContain("server yet");
   });
 
@@ -239,7 +240,8 @@ describe("the profile page", () => {
 
   it("tells a viewer with no bills so, and still lets them reach the leaderboard", async () => {
     const html = await (await get(`/g/guild-1?t=${await viewerToken("noor")}`)).text();
-    expect(await textOf(html, ".pair-none")).toBe("You have no bills yet.");
+    expect(await textOf(html, ".empty-lines p")).toBe("You have no bills yet.");
+    expect(await select(html, ".boat")).toHaveLength(1);
     expect((await select(html, ".tabs a")).map((a) => a.text)).toEqual(["You", "Leaderboard"]);
   });
 });
@@ -372,14 +374,15 @@ describe("the boards page", () => {
     expect((await select(html, '[data-list="hosted:all"] .rank-row .nm')).map((n) => n.text).join()).toContain("Gavin");
     await db.prepare("DELETE FROM bills").run();
     const empty = await (await get(`/g/guild-1/boards?t=${await viewerToken()}`)).text();
-    expect(await textOf(empty, '[data-list="hosted:all"] .pair-none')).toBe("Nobody is on this board yet.");
+    expect(await textOf(empty, '[data-list="hosted:all"] .empty-lines p')).toBe("Nobody is on this board yet.");
+    expect(await select(empty, '[data-list="hosted:all"] .boat')).toHaveLength(1);
   });
 
-  it("lists this server's people with their whole totals, and says so", async () => {
+  it("lists this server's people with their whole totals, under no footer", async () => {
     const html = await (await get(`/g/guild-1/boards?t=${await viewerToken()}&board=spent`)).text();
     expect(html).toContain("$129.00");
     expect(html).not.toMatch(/Belayer|Theo/);
-    expect((await select(html, ".foot")).map((f) => f.text)).toContain("Totals include meals in other servers.");
+    expect(await select(html, ".foot")).toEqual([]);
   });
 
   it("calls the third board Places", async () => {

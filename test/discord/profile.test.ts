@@ -70,20 +70,6 @@ function profileBody(target?: UserOption, guildId = GUILD) {
   };
 }
 
-function postBody(person: string) {
-  return {
-    id: "i-2",
-    application_id: "app-1",
-    type: 3,
-    token: "interaction-token",
-    version: 1,
-    channel_id: "chan-1",
-    guild_id: GUILD,
-    member: { user: { id: "gavin", username: "gavin", global_name: "Gavin" }, nick: null, roles: [], permissions: "0" },
-    data: { custom_id: `profile-post:${person}`, component_type: 2 },
-  };
-}
-
 async function send(body: unknown): Promise<any> {
   await ready;
   const ctx = createExecutionContext();
@@ -108,22 +94,18 @@ describe("/profile", () => {
     expect(profile.options).toEqual([{ type: 6, name: "user", description: expect.any(String) }]);
   });
 
-  it("answers privately with one line, Open profile, Leaderboard and Post it here", async () => {
+  it("answers privately with only the Open profile link", async () => {
     await twoBills();
     const reply = await send(profileBody());
 
     expect(reply.type).toBe(4);
     expect(reply.data.flags).toBe(EPHEMERAL);
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times, 0 of 10 stamps.");
-    await db.prepare("INSERT INTO stamps (guild_id, user_id, key, earned_at) VALUES ('guild-1', 'gavin', 'host', '2026-10-01')").run();
-    expect((await send(profileBody())).data.content).toContain("1 of 10 stamps.");
-    await db.prepare("DELETE FROM stamps").run();
-    const [link, board, post] = reply.data.components[0].components;
-    expect(link.label).toBe("Open profile");
-    expect(link.url).toMatch(/\/g\/guild-1\?t=[\w-]+\.[\w-]+$/);
-    expect(board.label).toBe("Leaderboard");
-    expect(board.url).toMatch(/\/g\/guild-1\/boards\?t=[\w-]+\.[\w-]+$/);
-    expect(post).toMatchObject({ label: "Post it here", custom_id: "profile-post:gavin" });
+    expect(reply.data.content).toBeUndefined();
+    expect(reply.data.components).toHaveLength(1);
+    const buttons = reply.data.components[0].components;
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].label).toBe("Open profile");
+    expect(buttons[0].url).toMatch(/\/g\/guild-1\?t=[\w-]+\.[\w-]+$/);
   });
 
   it("puts the viewer in the token, not the person viewed", async () => {
@@ -131,17 +113,9 @@ describe("/profile", () => {
     const reply = await send(profileBody({ id: "marcus" }));
     const { url } = reply.data.components[0].components[0];
 
-    expect(reply.data.content).toBe("**Marcus**: 1 outing, $15.00 spent, hosted 0 times, 0 of 10 stamps.");
     expect(url).toContain("/g/guild-1/u/marcus?t=");
     const grant = await readViewerToken(new URL(url).searchParams.get("t")!, "k", Date.now());
     expect(grant).toEqual({ guildId: GUILD, viewerId: "gavin", guildName: "Friday Table" });
-  });
-
-  it("uses the name from this server's bills rather than the option's or another server's", async () => {
-    await twoBills();
-    await seedOuting(db, { id: "b3", guild: "guild-2", people: [["marcus", "Marc the Belayer"]], alongside: ["theo", "Theo"], items: [["Eggs", 900, ["marcus"]]] });
-    const reply = await send(profileBody({ id: "marcus", nick: "Some Other Nick" }));
-    expect(reply.data.content).toBe("**Marcus**: 2 outings, $24.00 spent, hosted once, 0 of 10 stamps.");
   });
 
   it("still answers when Discord will not say the server's name", async () => {
@@ -159,29 +133,25 @@ describe("/profile", () => {
     const reply = await send(profileBody({ id: "1234567890123456789" }));
     await seedOuting(db, { id: "b3", guild: "guild-2", people: [["1234567890123456789", "Theo"]], alongside: ["marcus", "Marcus"], items: [["Eggs", 900, ["1234567890123456789"]]] });
     const longest = await send(profileBody({ id: "1234567890123456789" }));
-    expect(reply.data.components).toBeUndefined();
     const { url } = longest.data.components[0].components[0];
     expect(url).toContain("&m=");
     expect(url.length).toBeLessThan(512);
   });
 
-  it("escapes Markdown in a name", async () => {
-    await seedOuting(db, { id: "b1", people: [["marcus", "m_a*rcus"]], alongside: ["gavin", "Gavin"], items: [["Pho", 2000, ["marcus"]]] });
-    const reply = await send(profileBody({ id: "marcus" }));
-    expect(reply.data.content).toContain("**m\\_a\\*rcus**");
-  });
-
-  it("says you have no bills, with no button", async () => {
+  it("links you with no bills, and the page says so", async () => {
     const reply = await send(profileBody());
-    expect(reply.data).toMatchObject({ content: "You have no bills yet.", flags: EPHEMERAL });
-    expect(reply.data.components).toBeUndefined();
-    expect(lookups).toEqual([]);
+    expect(reply.data.flags).toBe(EPHEMERAL);
+    const url = new URL(reply.data.components[0].components[0].url);
+    const page = await (await app.request(url.pathname + url.search, {}, env())).text();
+    expect(page).toContain("You have no bills yet.");
   });
 
-  it("says someone has no bills, with no button", async () => {
+  it("links someone with no bills, and the page opens for them", async () => {
     const reply = await send(profileBody({ id: "priya", nick: "Priya" }));
-    expect(reply.data.content).toBe("Priya has no bills yet.");
-    expect(reply.data.components).toBeUndefined();
+    const url = new URL(reply.data.components[0].components[0].url);
+    const page = await app.request(url.pathname + url.search, {}, env());
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("No bills yet.");
   });
 
   it("takes naming someone as proof they're here, even with bills only in another server", async () => {
@@ -193,8 +163,6 @@ describe("/profile", () => {
       items: [["Eggs", 900, ["theo"]]],
     });
     const reply = await send(profileBody({ id: "theo", nick: "Theo" }));
-    expect(reply.data.content).toBe("**Theo Elsewhere**: 1 outing, $9.00 spent, hosted once, 0 of 10 stamps.");
-
     const url = new URL(reply.data.components[0].components[0].url);
     expect(await checkMemberProof(url.searchParams.get("m")!, url.searchParams.get("t")!, "theo", "k")).toBe(true);
     const page = await app.request(url.pathname + url.search, {}, env());
@@ -214,16 +182,6 @@ describe("/profile", () => {
     expect((await app.request(`/g/${GUILD}/u/theo?t=${token}`, {}, env())).status).toBe(403);
   });
 
-  it("counts only drafts as no bills", async () => {
-    await seedOuting(db, { id: "b1", people: [["gavin", "Gavin"]], alongside: ["priya", "Priya"], items: [["Pho", 2000, ["gavin"]]], draft: true });
-    expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
-  });
-
-  it("counts a bill with nobody else on it as no bills", async () => {
-    await seedOuting(db, { id: "b1", older: true, people: [["gavin", "Gavin"]], items: [["Pho", 2000, ["gavin"]]] });
-    expect((await send(profileBody())).data.content).toBe("You have no bills yet.");
-  });
-
   it("turns a bot away", async () => {
     const reply = await send(profileBody({ id: "bot-1", bot: true }));
     expect(reply.data.content).toBe("Bots can't be on a bill.");
@@ -236,24 +194,9 @@ describe("/profile", () => {
   });
 });
 
-describe("Post it here", () => {
-  it("posts the same line in public without pinging anyone", async () => {
-    await twoBills();
-    const reply = await send(postBody("gavin"));
-    expect(reply.type).toBe(4);
-    expect(reply.data.flags).toBeUndefined();
-    expect(reply.data.content).toBe("**Gavin**: 2 outings, $38.00 spent, hosted 2 times, 0 of 10 stamps.");
-    expect(reply.data.allowed_mentions).toEqual({ parse: [] });
-  });
-
-  it("works out the line again at the tap", async () => {
-    await twoBills();
-    await db.prepare("UPDATE bills SET status = 'deleted' WHERE id = 'b2'").run();
-    expect((await send(postBody("gavin"))).data.content).toBe("**Gavin**: 1 outing, $20.00 spent, hosted once, 0 of 10 stamps.");
-  });
-
-  it("answers privately when nothing is left to post", async () => {
-    const reply = await send(postBody("gavin"));
-    expect(reply.data.flags).toBe(EPHEMERAL);
+describe("the old Post it here button", () => {
+  it("gets an explanation", async () => {
+    const tap = { id: "i-2", application_id: "app-1", type: 3, token: "t", version: 1, channel_id: "chan-1", guild_id: GUILD, data: { custom_id: "profile-post:gavin", component_type: 2 } };
+    expect((await send(tap)).data).toMatchObject({ content: "That action is not supported.", flags: EPHEMERAL });
   });
 });
