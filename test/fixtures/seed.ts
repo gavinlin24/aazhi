@@ -35,6 +35,7 @@ export async function seedSaigon(db: D1Database, billId: string, options: SeedOp
     discountCents: 0,
     taxCents: SAIGON.taxCents,
     tipCents: SAIGON.tipCents,
+    tipSplit: "items",
     printedTotalCents: 27382,
     status: "draft",
     ...options.bill,

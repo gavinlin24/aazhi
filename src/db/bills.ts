@@ -175,14 +175,18 @@ export class ReceiptAlreadySplitError extends Error {
 // sort themselves out at Confirm. Nor does a log: a split of the same receipt
 // takes over from the logs of the people on it. A null key equals nothing, so a
 // receipt without one always saves.
+//
+// Even is written here rather than set as the column default, so that a bill the
+// old Worker makes during a deploy stays by items, which is what it shows and
+// confirms.
 export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
-  const { receiptKey = null, kind = "split", billTime = null, ...bill } = b;
+  const { receiptKey = null, kind = "split", billTime = null, tipSplit = "even", ...bill } = b;
   const createdAt = new Date().toISOString();
   const { meta } = await db
     .prepare(
       `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
-         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+         tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time, tip_split)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
        WHERE NOT EXISTS (SELECT 1 FROM bills WHERE receipt_key = ?14 AND kind = 'split' AND status = 'confirmed')`,
     )
     .bind(
@@ -202,10 +206,11 @@ export async function createBill(db: D1Database, b: NewBill): Promise<BillRow> {
       receiptKey,
       kind,
       billTime,
+      tipSplit,
     )
     .run();
   if (meta.changes === 0) throw new ReceiptAlreadySplitError();
-  return { ...bill, tipSplit: "items", billTime, kind, revision: 1, createdAt, confirmedAt: null };
+  return { ...bill, tipSplit, billTime, kind, revision: 1, createdAt, confirmedAt: null };
 }
 
 export async function getBill(db: D1Database, id: string): Promise<BillRow | null> {

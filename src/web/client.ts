@@ -571,9 +571,7 @@ export const CLIENT_SCRIPT = String.raw`
     // Tax is charged on what's left after the discount, so that is the base
     // a diner would check their local rate against.
     field("tax", "tax", s.taxCents, "Tax", withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents));
-    // Mirrors tipLabel in page.ts.
-    const tipShown = withPercent("Tip", s.tipCents, r.billSubtotalCents);
-    field("tip", "tip", s.tipCents, "Tip", mode === "all" && s.tipSplit === "even" && s.tipCents > 0 ? tipShown + ", evenly" : tipShown);
+    field("tip", "tip", s.tipCents, "Tip", withPercent("Tip", s.tipCents, r.billSubtotalCents));
     row("total", [r.distributableCents], "grand", () => [el("dt", null, "Total"), el("dd", { "data-total": "total" }, money(r.distributableCents))]);
     if (r.unclaimedCents !== 0) {
       row("unclaimed", [r.unclaimedCents], "short", () => [

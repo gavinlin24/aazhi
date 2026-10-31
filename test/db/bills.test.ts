@@ -53,7 +53,7 @@ function newBill(id: string, overrides: Partial<NewBill> = {}): NewBill {
 async function seedSaigon(billId: string) {
   await createBill(
     db,
-    newBill(billId, { place: "Saigon Kitchen", taxCents: SAIGON.taxCents, tipCents: SAIGON.tipCents }),
+    newBill(billId, { place: "Saigon Kitchen", taxCents: SAIGON.taxCents, tipCents: SAIGON.tipCents, tipSplit: "items" }),
   );
   // Insertion order differs from the sorted order the engine input uses, so
   // the test proves toSplitInput normalises rather than echoing storage.
@@ -552,5 +552,58 @@ describe("removeMember", () => {
 
     await expect(reassignPayer(db, "b-roster", "bystander")).rejects.toBeInstanceOf(NotOnRosterError);
     expect((await getBill(db, "b-roster"))!.payerId).toBe("gavin");
+  });
+});
+
+describe("the tip split on a new bill and across migration 0013", () => {
+  // The INSERT the Worker on main sends, which knows nothing of tip_split. It
+  // keeps running between the migration and the deploy, so this copy stays frozen.
+  async function insertAsOldWorker(id: string): Promise<void> {
+    await db
+      .prepare(
+        `INSERT INTO bills (id, guild_id, channel_id, message_id, payer_id, place, bill_date, discount_cents,
+           tax_cents, tip_cents, printed_total_cents, status, created_at, receipt_key, kind, bill_time)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+         WHERE NOT EXISTS (SELECT 1 FROM bills WHERE receipt_key = ?14 AND kind = 'split' AND status = 'confirmed')`,
+      )
+      .bind(id, "guild-1", "chan-1", null, "gavin", null, null, 0, 0, 500, null, "draft", new Date().toISOString(), null, "split", null)
+      .run();
+  }
+
+  async function storedSplit(id: string): Promise<string | undefined> {
+    return (await db.prepare("SELECT tip_split FROM bills WHERE id = ?").bind(id).first<{ tip_split: string }>())?.tip_split;
+  }
+
+  async function rerunMigration(): Promise<void> {
+    await db.prepare("ALTER TABLE bills DROP COLUMN tip_split").run();
+    const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0013"))!;
+    for (const query of migration.queries) await db.prepare(query).run();
+  }
+
+  it("starts a new bill evenly, and stores what it returns", async () => {
+    const created = await createBill(db, newBill("b-new-tip"));
+
+    expect(created.tipSplit).toBe("even");
+    expect(await storedSplit("b-new-tip")).toBe("even");
+  });
+
+  it("keeps every existing bill by items, to the cent", async () => {
+    await seedSaigon("b-existing");
+    const before = splitBill(await toSplitInput(db, "b-existing"));
+
+    await rerunMigration();
+
+    expect(await storedSplit("b-existing")).toBe("items");
+    expect(splitBill(await toSplitInput(db, "b-existing"))).toEqual(before);
+  });
+
+  it("lets the old Worker create a by-items bill before the new one lands", async () => {
+    await rerunMigration();
+
+    await insertAsOldWorker("b-gap");
+    await createBill(db, newBill("b-after"));
+
+    expect(await storedSplit("b-gap")).toBe("items");
+    expect(await storedSplit("b-after")).toBe("even");
   });
 });

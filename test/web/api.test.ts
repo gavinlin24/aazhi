@@ -428,9 +428,8 @@ describe("tax, tip and the printed total", () => {
     expect(reply.body.result.shares.reduce((n: number, s: { tipCents: number }) => n + s.tipCents, 0)).toBe(5030);
   });
 
-  it("starts by items, and refuses anything else or anyone but the payer", async () => {
+  it("refuses anything else or anyone but the payer", async () => {
     await seedSaigon(db, BILL);
-    expect((await getBill(db, BILL))!.tipSplit).toBe("items");
 
     for (const tipSplit of ["evenly", "", null, true, 1]) {
       expect((await patch("gavin", { tipSplit })).status, String(tipSplit)).toBe(400);

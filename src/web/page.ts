@@ -1496,13 +1496,6 @@ function withPercent(label: string, part: Cents, subtotal: Cents): string {
   return subtotal > 0 ? `${label} (${((part * 100) / subtotal).toFixed(1)}%)` : label;
 }
 
-// The word is for the payer alone, to see what they chose without opening the
-// tip. Everyone else just sees their amounts.
-function tipLabel(s: BillState): string {
-  const label = withPercent("Tip", s.tipCents, s.result.billSubtotalCents);
-  return s.editable === "all" && s.tipSplit === "even" && s.tipCents > 0 ? `${label}, evenly` : label;
-}
-
 // The payer's editable amounts are their own buttons, so the row reads as
 // plain figures to everyone else and as figures to fix to the one who paid.
 function amount(v: View, field: string, key: string, cents: Cents | null, label: string): string {
@@ -1537,7 +1530,7 @@ function totals(v: View): string {
     `<div class="trow" data-field-row="tax"><dt>${withPercent("Tax", s.taxCents, r.billSubtotalCents - s.discountCents)}</dt><dd>${amount(v, "tax", "tax", s.taxCents, "Tax")}</dd></div>`,
   );
   rows.push(
-    `<div class="trow" data-field-row="tip"><dt>${tipLabel(s)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
+    `<div class="trow" data-field-row="tip"><dt>${withPercent("Tip", s.tipCents, r.billSubtotalCents)}</dt><dd>${amount(v, "tip", "tip", s.tipCents, "Tip")}</dd></div>`,
     `<div class="trow grand"><dt>Total</dt><dd data-total="total">${formatCents(r.distributableCents)}</dd></div>`,
   );
   if (r.unclaimedCents !== 0) {
