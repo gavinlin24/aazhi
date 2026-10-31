@@ -273,9 +273,10 @@ nothing from other servers.
   same whether or not that person has bills elsewhere, so a link can't be walked
   to arbitrary accounts.
 
-**Stamps stay in their server.** Unlike the numbers, a stamp is one person in one
-server, so the card carries the server's name. There are ten, listed in
-`src/db/stamps.ts`, and each rule reads the rows the stats already count.
+**Stamps count every server.** Like the numbers, a stamp belongs to a person, not
+a server. Someone holds each one once, and progress adds up every server, so the
+card names no server. There are ten, listed in `src/db/stamps.ts`, and each rule
+reads the rows the stats already count.
 
 - **Earning.** A stamp is checked after each confirm, payment, marked payment and
   forgiveness, for the people that write could move. Each check reads the rows
@@ -289,10 +290,16 @@ server, so the card carries the server's name. There are ten, listed in
   dated when they crossed the line and marked seen. It folds names by ASCII only,
   so it can be a stamp short or over against the Worker's rules for names that
   differ by an accent. The Worker's check makes up a shortfall at the next bill.
+  `migrations/0013_global_stamps.sql` then merges them to one row per person and
+  stamp, keeping the earliest date and the first time any server showed it. It
+  gives what people reach only once servers add up, also marked seen. The
+  `guild_id` column stays, unused, because the old Worker needs it until the new
+  one lands.
 - **The Ceremony.** A stamp with no `seen_at` plays once, one at a time, on
-  whichever page the person opens next. It waits for a stamp press to finish, an
+  whichever page the person opens next, in any server. It waits for a stamp press to finish, an
   open sheet, and on a bill for someone who still owes to pay. It's marked seen
   when the sheet appears, so a dropped connection shows it twice rather than never.
+  A page holding one back drops it once another page has shown it.
 - **The post.** A stamp only ever adds a line to a post already going out, and a
   log's line survives a rename. The first Confirm of a split posts nothing, so
   nothing is said about what it earned.
@@ -376,7 +383,7 @@ bill was made. Otherwise a misread year would move the bill to another month.
 shows the current month, or last month until this month has a bill, so the 1st
 is never empty. All six lists come down in one page and the tabs only choose
 which one shows. The links carry the open board and span, so the Leaderboard tab
-and the Back to leaderboard chip return to the same list.
+returns to the same list.
 
 **The Range page.** The axis starts at the person's first month, up to the last
 12. A quiet month is a low swell and not a gap, so the ridge never breaks.
