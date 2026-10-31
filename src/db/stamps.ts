@@ -30,7 +30,7 @@ export interface Stamp {
 
 // In the order the card and the Stamps page show them.
 export const STAMPS: readonly Stamp[] = [
-  { key: "first-seat", glyph: "初席", name: "First Seat", rule: "Your first outing in this server.", line: "You went on your first outing here.", goal: 1, shows: "once" },
+  { key: "first-seat", glyph: "初席", name: "First Seat", rule: "Your first outing.", line: "You went on your first outing.", goal: 1, shows: "once" },
   { key: "regular", glyph: "常", name: "Regular", rule: "Go to one place 3 times.", line: "You went to one place 3 times.", goal: 3, shows: "count" },
   { key: "word-kept", glyph: "诺", name: "Word Kept", rule: "Pay your share 10 times.", line: "You paid your share 10 times.", goal: 10, shows: "count" },
   { key: "host", glyph: "东道", name: "Host", rule: "Host 5 times.", line: "You hosted 5 times.", goal: 5, shows: "count" },
@@ -87,9 +87,8 @@ function tally(key: string, counts: Map<string, number>): void {
   if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
-// Unlike every stat in stats.ts this stays in one server: First Seat means
-// nothing across them. The rows are the ones stats.ts counts as being there. Only
-// First Seat, Regular, Traveler and Hundred Flavors take a log, the same split
+// Going out is one life, so like every stat in stats.ts this counts every
+// server, from the rows stats.ts counts as being there. Only First Seat, Regular, Traveler and Hundred Flavors take a log, the same split
 // the stats make when they count a log as an outing and never as hosting.
 function tallied(outings: OutingRow[], claims: ClaimRow[], paid: number): Tally {
   const splits = outings.filter((o) => o.kind === "split");
@@ -108,17 +107,17 @@ function tallied(outings: OutingRow[], claims: ClaimRow[], paid: number): Tally 
   };
 }
 
-async function talliesOf(db: D1Database, guildId: string, people: ParticipantId[]): Promise<Map<ParticipantId, Tally>> {
+async function talliesOf(db: D1Database, people: ParticipantId[]): Promise<Map<ParticipantId, Tally>> {
   const who = JSON.stringify(people);
-  const here = `b.guild_id = ?1 AND p.id IN (SELECT value FROM json_each(?2)) AND ${confirmedMember("p", "b")}`;
+  const theirs = `p.id IN (SELECT value FROM json_each(?1)) AND ${confirmedMember("p", "b")}`;
   const [outings, claims, paid] = await db.batch<unknown>([
     db
       .prepare(
         `SELECT p.id AS person, b.kind, b.place, b.payer_id,
            (SELECT COUNT(*) FROM shares t WHERE t.bill_id = b.id AND t.owed_cents > 0) AS at_table
-         FROM participants p JOIN bills b ON b.id = p.bill_id WHERE ${here}`,
+         FROM participants p JOIN bills b ON b.id = p.bill_id WHERE ${theirs}`,
       )
-      .bind(guildId, who),
+      .bind(who),
     // Money-off lines aren't something anyone tried or shared.
     db
       .prepare(
@@ -127,9 +126,9 @@ async function talliesOf(db: D1Database, guildId: string, people: ParticipantId[
          FROM participants p JOIN bills b ON b.id = p.bill_id
          JOIN bill_items i ON i.bill_id = b.id
          JOIN item_claims c ON c.bill_item_id = i.id AND c.participant_id = p.id
-         WHERE ${here} AND i.cents > 0`,
+         WHERE ${theirs} AND i.cents > 0`,
       )
-      .bind(guildId, who),
+      .bind(who),
     // Counted from settlements, not shares.settled_at: a $0 share and a forgiven
     // one are "settled" with nothing paid. Only a payment the person recorded
     // themselves is keeping their word.
@@ -137,11 +136,11 @@ async function talliesOf(db: D1Database, guildId: string, people: ParticipantId[
       .prepare(
         `SELECT s.participant_id AS person, COUNT(DISTINCT s.bill_id) AS paid
          FROM settlements s JOIN bills b ON b.id = s.bill_id
-         WHERE b.guild_id = ?1 AND s.participant_id IN (SELECT value FROM json_each(?2))
+         WHERE s.participant_id IN (SELECT value FROM json_each(?1))
            AND b.status = 'confirmed' AND b.kind = 'split' AND s.recorded_by = s.participant_id
          GROUP BY s.participant_id`,
       )
-      .bind(guildId, who),
+      .bind(who),
   ]);
   const paidBy = new Map((paid!.results as { person: string; paid: number }[]).map((row) => [row.person, row.paid]));
   return new Map(
@@ -163,10 +162,10 @@ async function booksClean(db: D1Database, billId: string): Promise<boolean> {
   return owing.length >= CLEAN_BOOKS_AT && owing.every((row) => row.settledCents >= row.owedCents);
 }
 
-async function heldBy(db: D1Database, guildId: string, people: ParticipantId[]): Promise<Set<string>> {
+async function heldBy(db: D1Database, people: ParticipantId[]): Promise<Set<string>> {
   const { results } = await db
-    .prepare(`SELECT user_id, key FROM stamps WHERE guild_id = ?1 AND user_id IN (SELECT value FROM json_each(?2))`)
-    .bind(guildId, JSON.stringify(people))
+    .prepare(`SELECT user_id, key FROM stamps WHERE user_id IN (SELECT value FROM json_each(?1))`)
+    .bind(JSON.stringify(people))
     .all<{ user_id: string; key: string }>();
   return new Set(results.map((row) => `${row.user_id}:${row.key}`));
 }
@@ -176,14 +175,14 @@ async function heldBy(db: D1Database, guildId: string, people: ParticipantId[]):
 // missed lands here too. Resolves to what is new, which is what a post announces.
 export async function earnStamps(
   db: D1Database,
-  bill: Pick<BillRow, "id" | "guildId" | "payerId">,
+  bill: Pick<BillRow, "id" | "payerId">,
   people: ParticipantId[],
   options: { forgave?: boolean } = {},
 ): Promise<Earned[]> {
   const everyone = [...new Set([...people, bill.payerId])];
   const [tallies, held, clean] = await Promise.all([
-    talliesOf(db, bill.guildId, everyone),
-    heldBy(db, bill.guildId, everyone),
+    talliesOf(db, everyone),
+    heldBy(db, everyone),
     booksClean(db, bill.id),
   ]);
   const met: Earned[] = [];
@@ -199,17 +198,17 @@ export async function earnStamps(
   // RETURNING hands back only rows really written, so two taps landing together
   // can't both announce one stamp.
   const insert = db.prepare(
-    `INSERT INTO stamps (guild_id, user_id, key, earned_at, bill_id) VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO stamps (user_id, key, earned_at, bill_id) VALUES (?, ?, ?, ?)
      ON CONFLICT DO NOTHING RETURNING user_id, key`,
   );
-  const written = await db.batch<{ user_id: string; key: StampKey }>(fresh.map((m) => insert.bind(bill.guildId, m.who, m.key, now, bill.id)));
+  const written = await db.batch<{ user_id: string; key: StampKey }>(fresh.map((m) => insert.bind(m.who, m.key, now, bill.id)));
   return written.flatMap((r) => r.results.map((row) => ({ who: row.user_id, key: row.key })));
 }
 
-export async function stampsHeld(db: D1Database, guildId: string, who: ParticipantId): Promise<Map<string, string>> {
+export async function stampsHeld(db: D1Database, who: ParticipantId): Promise<Map<string, string>> {
   const { results } = await db
-    .prepare("SELECT key, earned_at FROM stamps WHERE guild_id = ? AND user_id = ?")
-    .bind(guildId, who)
+    .prepare("SELECT key, earned_at FROM stamps WHERE user_id = ?")
+    .bind(who)
     .all<{ key: string; earned_at: string }>();
   return new Map(results.map((row) => [row.key, row.earned_at]));
 }
@@ -219,17 +218,17 @@ export function earnedFirst<T extends { key: string; earned: boolean }>(rows: T[
   return [...rows.filter((r) => r.earned), ...rows.filter((r) => !r.earned)];
 }
 
-export async function stampRows(db: D1Database, guildId: string, who: ParticipantId): Promise<StampRow[]> {
-  const [held, tallies] = await Promise.all([stampsHeld(db, guildId, who), talliesOf(db, guildId, [who])]);
+export async function stampRows(db: D1Database, who: ParticipantId): Promise<StampRow[]> {
+  const [held, tallies] = await Promise.all([stampsHeld(db, who), talliesOf(db, [who])]);
   const counts = tallies.get(who) ?? {};
   const rows = STAMPS.map((stamp) => ({ ...stamp, earned: held.has(stamp.key), earnedAt: held.get(stamp.key) ?? null, progress: counts[stamp.key] ?? 0 }));
   return earnedFirst(rows).map(({ earned: _earned, ...row }) => row);
 }
 
-export async function unseenStamps(db: D1Database, guildId: string, who: ParticipantId): Promise<UnseenStamp[]> {
+export async function unseenStamps(db: D1Database, who: ParticipantId): Promise<UnseenStamp[]> {
   const { results } = await db
-    .prepare("SELECT key FROM stamps WHERE user_id = ? AND guild_id = ? AND seen_at IS NULL ORDER BY earned_at, key")
-    .bind(who, guildId)
+    .prepare("SELECT key FROM stamps WHERE user_id = ? AND seen_at IS NULL ORDER BY earned_at, key")
+    .bind(who)
     .all<{ key: string }>();
   return results.flatMap(({ key }) => {
     const stamp = stampOf(key);
@@ -237,13 +236,13 @@ export async function unseenStamps(db: D1Database, guildId: string, who: Partici
   });
 }
 
-export async function markStampsSeen(db: D1Database, guildId: string, who: ParticipantId, keys: string[]): Promise<void> {
+export async function markStampsSeen(db: D1Database, who: ParticipantId, keys: string[]): Promise<void> {
   await db
     .prepare(
       `UPDATE stamps SET seen_at = ?1
-       WHERE guild_id = ?2 AND user_id = ?3 AND seen_at IS NULL AND key IN (SELECT value FROM json_each(?4))`,
+       WHERE user_id = ?2 AND seen_at IS NULL AND key IN (SELECT value FROM json_each(?3))`,
     )
-    .bind(new Date().toISOString(), guildId, who, JSON.stringify(keys))
+    .bind(new Date().toISOString(), who, JSON.stringify(keys))
     .run();
 }
 

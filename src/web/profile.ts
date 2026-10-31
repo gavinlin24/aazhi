@@ -17,7 +17,6 @@ export interface Viewer {
   // The board last open. It rides on every link so the Leaderboard tab can
   // return to it from any page, with no per-viewer state on the server.
   place: BoardPlace;
-  fromBoard: boolean;
   // Proof that opened someone else's page, which their stamps need as well.
   proof: string | null;
   // The viewer's own stamps waiting for the Ceremony, on whatever page this is.
@@ -46,7 +45,7 @@ function personUrl(v: Viewer, id: string): string {
 }
 
 function friendQuery(v: Viewer): string {
-  return `${v.proof ? `&m=${encodeURIComponent(v.proof)}` : ""}${v.fromBoard ? "&from=leaderboard" : ""}`;
+  return v.proof ? `&m=${encodeURIComponent(v.proof)}` : "";
 }
 
 function stampsUrl(v: Viewer, id: string = v.viewerId): string {
@@ -184,7 +183,7 @@ function rangeCard(p: Profile, nowMs: number): string {
   // Latest wins a tie: the same reading the favorite tile uses.
   const top = p.months.reduce((best, m, i) => (m.cents >= p.months[best]!.cents ? i : best), 0);
   const busy = p.months.filter((m) => m.outings > 0).length;
-  const sub = `${plural(p.outings, "outing")}${busy > 1 ? `. ${monthName(p.months[top]!.month)} was the big one.` : " so far."}`;
+  const sub = `${plural(p.outings, "outing")}${busy > 1 ? "." : " so far."}`;
   return `<section class="card range-card" data-default="${escapeHtml(sub)}">
 <div class="range-top"><p class="hero-cap">spent since ${since(p.firstMonth, nowMs)}</p><p class="hero-amt money">${formatCents(p.spentCents)}</p><p class="hero-sub">${escapeHtml(sub)}</p></div>
 ${range(p.months, top)}
@@ -200,10 +199,6 @@ function pairCard(p: Profile, pair: Companion | undefined): string {
   return `<section class="card pair-card"><p class="card-h">You and ${name}</p><div class="figures">${figure(pair.outings, `${pair.outings === 1 ? "outing" : "outings"} together`)}${figure(pair.personHosted, `${p.name.length > LONG_NAME ? "they" : name} hosted`)}${figure(pair.theyHosted, "you hosted")}</div></section>`;
 }
 
-function serverName(v: Viewer): string {
-  return v.guildName ? escapeHtml(v.guildName) : "This server";
-}
-
 function stampFace(glyph: string, earned: boolean): string {
   return `<span class="stamp-face ${earned ? "is-on" : "is-off"}" lang="zh" aria-hidden="true">${glyph}</span>`;
 }
@@ -213,7 +208,7 @@ function stampFace(glyph: string, earned: boolean): string {
 function stampsCard(v: Viewer, id: string, held: Map<string, string>): string {
   const rows = earnedFirst(STAMPS.map((stamp) => ({ ...stamp, earned: held.has(stamp.key) })));
   const count = `${held.size} of ${STAMPS.length}`;
-  return `<a class="card stamps-card" href="${escapeHtml(stampsUrl(v, id))}" aria-label="Stamps, ${count}. See them all."><p class="card-h">Stamps<span class="sub">${count}</span></p><div class="stamps-grid">${rows.map((row) => stampFace(row.glyph, row.earned)).join("")}</div><p class="stamps-foot">${serverName(v)}. Tap to see them all.</p></a>`;
+  return `<a class="card stamps-card" href="${escapeHtml(stampsUrl(v, id))}" aria-label="Stamps, ${count}. See them all."><p class="card-h">Stamps<span class="sub">${count}</span>${icon("chev", "go-ic")}</p><div class="stamps-grid">${rows.map((row) => stampFace(row.glyph, row.earned)).join("")}</div></a>`;
 }
 
 function earnedOn(iso: string, nowMs: number): string {
@@ -241,7 +236,7 @@ export function renderStamps(person: Summary, rows: StampRow[], v: Viewer, nowMs
   const back = self ? selfUrl(v) : `${personUrl(v, person.id)}${friendQuery(v)}`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, self ? "you" : null, `${serverName(v)} <span class="dot">·</span> ${earned} of ${STAMPS.length}`, !self)}
+${head(v, title, self ? "you" : null, `${earned} of ${STAMPS.length}`, !self)}
 <a class="chip-back" href="${escapeHtml(back)}">${icon("back")}Back to ${self ? "you" : escapeHtml(person.name)}</a>
 <section class="card"><ul class="stamp-list">${rows.map((row) => stampRow(row, nowMs)).join("")}</ul></section>
 </main>
@@ -276,10 +271,10 @@ function tiles(p: Profile, v: Viewer): string {
   return `<div class="tiles">
 ${namedTile(icon("bowl"), p.favorite, "No place yet", (c) => `favorite, ${plural(c, "visit")}`, "favorite")}
 ${namedTile(icon("dish"), p.dish, "Nothing yet", (c) => `ordered ${times(c)}`, "most ordered")}
-${companionTile(v, p.companions[0])}
+${companionTile(v, p.companions.find((c) => c.id !== v.viewerId) ?? p.companions[0])}
 ${tile(icon("coin", "coin"), `Hosted ${p.hosted === 1 ? "once" : times(p.hosted)}`, `fronted, <span class="money">${formatCents(p.frontedCents)}</span>`)}
 ${tile(icon("receipt"), `<span class="money">${formatCents(p.biggest.cents)}</span>`, biggest)}
-${tile(icon("pin"), plural(p.places, "place"), "unique visits")}
+${tile(icon("pin"), plural(p.places, "place"), "visited")}
 </div>`;
 }
 
@@ -303,13 +298,9 @@ function logsCard(logs: LoggedRow[], v: Viewer, nowMs: number): string {
 export function renderProfile(p: Profile, v: Viewer, nowMs: number, logs: LoggedRow[], stamps: Map<string, string>): string {
   const self = p.id === v.viewerId;
   const title = `${avatar(p.id, p.name, 30, self)}${escapeHtml(p.name)}`;
-  const back = v.fromBoard
-    ? `<a class="chip-back" href="${escapeHtml(boardsUrl(v))}">${icon("back")}Back to leaderboard</a>`
-    : `<a class="chip-back" href="${escapeHtml(selfUrl(v))}">${icon("back")}Back to you</a>`;
   const main = `${sprite()}
 <main class="page" id="profile">
-${head(v, title, self ? "you" : null, `Since ${since(p.firstMonth, nowMs)}`, headerWidth(p.name) > HEADER_ROOM)}
-${self ? "" : back}
+${head(v, title, self ? "you" : null, null, headerWidth(p.name) > HEADER_ROOM)}
 ${rangeCard(p, nowMs)}
 ${stampsCard(v, p.id, stamps)}
 ${self ? "" : pairCard(p, p.companions.find((c) => c.id === v.viewerId))}
@@ -364,9 +355,8 @@ function rankMark(rank: number): string {
 function rankRow(row: Ranked, place: BoardPlace, v: Viewer): string {
   const self = row.id === v.viewerId;
   const value = place.board === "spent" ? formatCents(row.value) : String(row.value);
-  // Each list is drawn ahead of the tabs, so a row carries its own board. Your
-  // own page has no back chip, so only a friend's link says where it came from.
-  const href = `${personUrl({ ...v, place }, row.id)}${self ? "" : "&from=leaderboard"}`;
+  // Each list is drawn ahead of the tabs, so a row carries its own board.
+  const href = personUrl({ ...v, place }, row.id);
   return `<li${self ? ' class="is-me"' : ""}><a class="rank-row" href="${escapeHtml(href)}">${rankMark(row.rank)}${avatar(row.id, row.name, 30, self)}<span class="nm"><span class="nm-t">${escapeHtml(row.name)}</span>${self ? '<span class="you">you</span>' : ""}</span><span class="num">${value}</span>${icon("chev", "go-ic")}</a></li>`;
 }
 
@@ -425,7 +415,6 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 /* The approved 34px pills, with a hit area that reaches the 44px the rest of the app uses. */
 .tabs.wide a, .tabs.span a { position: relative; }
 .tabs.wide a::after, .tabs.span a::after { content: ""; position: absolute; inset: -5px 0; }
-.dot { margin: 0 6px; }
 .meta { gap: 0; }
 .card + .tiles, .tiles + .card, .card + .card { margin-top: 12px; }
 .chip-back { display: inline-flex; align-items: center; gap: 2px; min-height: 34px; margin: 0 0 12px; padding: 0 14px 0 8px; border: 1px solid var(--rule-strong); border-radius: 17px; background: var(--card); color: var(--ink); font-size: 15px; text-decoration: none; }
@@ -467,7 +456,7 @@ const PROFILE_STYLES = `${RANK_FACE}${STAMP_FACE}
 .stamps-card { display: block; color: inherit; text-decoration: none; }
 .stamps-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; padding: 12px var(--edge) 13px; }
 .stamps-grid .stamp-face.is-on:nth-child(2n) { transform: rotate(2deg); }
-.stamps-foot { padding: 0 var(--edge) 12px; color: var(--muted); font-size: 14px; }
+.stamps-card .go-ic { flex: none; width: 16px; height: 16px; margin-left: -3px; color: var(--muted); }
 .stamp-list { list-style: none; margin: 0; padding: 0; }
 .stamp-list li { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; padding: 9px var(--edge); border-bottom: 1px solid var(--rule); }
 .stamp-list li:last-child { border-bottom: 0; }

@@ -7,6 +7,7 @@ import { seedOuting, type Outing } from "../fixtures/outings";
 const db = env.DB;
 const GAVIN: [string, string] = ["gavin", "Gavin"];
 const MARCUS: [string, string] = ["marcus", "Marcus"];
+const ELSEWHERE = { guild: "guild-2", channel: "chan-2" };
 
 let serial = 0;
 
@@ -40,7 +41,7 @@ async function earn(id: string, people = ["gavin", "marcus"], options?: { forgav
   return earnStamps(db, (await getBill(db, id))!, people, options);
 }
 
-const keysOf = async (who = "gavin", guild = "guild-1") => [...(await stampsHeld(db, guild, who)).keys()].sort();
+const keysOf = async (who = "gavin") => [...(await stampsHeld(db, who)).keys()].sort();
 
 async function pay(id: string, who: string, cents: number, recordedBy = who): Promise<void> {
   await db
@@ -49,13 +50,30 @@ async function pay(id: string, who: string, cents: number, recordedBy = who): Pr
     .run();
 }
 
-// The migration's statements after the table and index, which is all of the
-// backfill, against whatever rows the test has laid down.
+const queriesOf = (name: string) => env.TEST_MIGRATIONS.find((m) => m.name.startsWith(name))!.queries;
+const isSchema = (query: string) => /^\s*(--[^\n]*\n\s*)*CREATE (TABLE|INDEX)/.test(query);
+
+async function run(queries: string[]): Promise<void> {
+  for (const query of queries) await db.prepare(query).run();
+}
+
+// Puts the table back the way 0012 left it, so a test can lay down rows from
+// before 0014 and then run it.
+async function perServerTable(): Promise<void> {
+  await db.prepare("DROP TABLE stamps").run();
+  await run(queriesOf("0012").filter(isSchema));
+}
+
+const mergeToOnePerPerson = () => run(queriesOf("0014"));
+
+// What a deploy does to the rows the test has laid down: the per-server backfill
+// that already ran in production, then the merge.
 async function runBackfill(): Promise<void> {
-  const migration = env.TEST_MIGRATIONS.find((m) => m.name.startsWith("0012"))!;
-  const backfill = migration.queries.filter((q) => !/^\s*(--[^\n]*\n\s*)*CREATE (TABLE|INDEX)/.test(q));
+  await perServerTable();
+  const backfill = queriesOf("0012").filter((q) => !isSchema(q));
   expect(backfill.length).toBeGreaterThan(10);
-  for (const query of backfill) await db.prepare(query).run();
+  await run(backfill);
+  await mergeToOnePerPerson();
 }
 
 beforeEach(async () => {
@@ -103,7 +121,7 @@ describe("earning a stamp", () => {
     const items: Outing["items"] = [...seven.map(([id]): [string, number, string[]] => [`Dish ${id}`, 500, [id]]), ["Pho", 500, ["gavin"]]];
     await earn(await outing({ people: [GAVIN, ...seven], items, alongside: undefined }));
     expect(await keysOf()).not.toContain("full-table");
-    expect((await stampRows(db, "guild-1", "gavin")).find((r) => r.key === "full-table")!.progress).toBe(7);
+    expect((await stampRows(db, "gavin")).find((r) => r.key === "full-table")!.progress).toBe(7);
 
     await earn(await outing({ people: [GAVIN, ...seven], items, alongside: undefined, guest: { name: "Sam", addedBy: "p0", item: ["Rice", 500] } }));
     expect(await keysOf()).toContain("full-table");
@@ -176,17 +194,20 @@ describe("earning a stamp", () => {
     for (let i = 0; i < 6; i += 1) last = await log("Same Spot");
     await earn(last, ["gavin"]);
     expect(await keysOf()).not.toContain("host");
-    expect((await stampRows(db, "guild-1", "gavin")).find((r) => r.key === "host")!.progress).toBe(0);
+    expect((await stampRows(db, "gavin")).find((r) => r.key === "host")!.progress).toBe(0);
   });
 
-  it("keeps each server to itself", async () => {
+  it("adds every server up", async () => {
+    await outing({ place: "Saigon Kitchen" });
+    await outing({ place: "Saigon Kitchen", ...ELSEWHERE });
+    expect((await stampRows(db, "gavin")).find((r) => r.key === "regular")!.progress).toBe(2);
+    expect(await earn(await outing({ place: "Saigon Kitchen" }))).toContainEqual({ who: "gavin", key: "regular" });
+  });
+
+  it("gives a stamp once, whichever server it comes up in next", async () => {
     await earn(await outing());
-    await earn(await outing({ guild: "guild-2", channel: "chan-2", place: "Elsewhere" }));
-    expect((await stampsHeld(db, "guild-2", "gavin")).has("first-seat")).toBe(true);
-    await db.prepare("DELETE FROM stamps WHERE guild_id = 'guild-2'").run();
-    expect(await earn(await outing({ guild: "guild-2", channel: "chan-2", place: "Elsewhere" }))).toContainEqual({ who: "gavin", key: "first-seat" });
-    const rows = await stampRows(db, "guild-2", "gavin");
-    expect(rows.find((r) => r.key === "regular")!.progress).toBe(2);
+    expect(await earn(await outing(ELSEWHERE))).toEqual([]);
+    expect(await keysOf()).toEqual(["first-seat"]);
   });
 
   it("never takes a stamp back", async () => {
@@ -207,17 +228,23 @@ describe("the Ceremony's queue", () => {
   it("holds what's new in order, until it's been seen", async () => {
     const id = await outing();
     await earn(id);
-    expect((await unseenStamps(db, "guild-1", "gavin")).map((s) => s.name)).toEqual(["First Seat"]);
-    await markStampsSeen(db, "guild-1", "gavin", ["first-seat"]);
-    expect(await unseenStamps(db, "guild-1", "gavin")).toEqual([]);
+    expect((await unseenStamps(db, "gavin")).map((s) => s.name)).toEqual(["First Seat"]);
+    await markStampsSeen(db, "gavin", ["first-seat"]);
+    expect(await unseenStamps(db, "gavin")).toEqual([]);
   });
 
-  it("is one person's and one server's", async () => {
+  it("is one person's", async () => {
     await earn(await outing());
-    await markStampsSeen(db, "guild-2", "gavin", ["first-seat"]);
-    await markStampsSeen(db, "guild-1", "marcus", ["first-seat"]);
-    expect(await unseenStamps(db, "guild-1", "gavin")).toHaveLength(1);
-    expect(await unseenStamps(db, "guild-1", "marcus")).toEqual([]);
+    await markStampsSeen(db, "marcus", ["first-seat"]);
+    expect(await unseenStamps(db, "gavin")).toHaveLength(1);
+    expect(await unseenStamps(db, "marcus")).toEqual([]);
+  });
+
+  it("stays seen when the next bill is in another server", async () => {
+    await earn(await outing());
+    await markStampsSeen(db, "gavin", ["first-seat"]);
+    await earn(await outing(ELSEWHERE));
+    expect(await unseenStamps(db, "gavin")).toEqual([]);
   });
 
   it("remembers which bill earned a stamp, for that bill's post", async () => {
@@ -232,9 +259,11 @@ describe("the backfill", () => {
   // would have given. The two have to agree, or a deploy hands out the wrong set.
   async function history(): Promise<string[]> {
     const ids: string[] = [];
-    for (let i = 0; i < 11; i += 1) ids.push(await outing({ place: i < 3 ? "Saigon Kitchen" : `Place ${i}` }));
+    // Every other outing is in another server, so no one server reaches the
+    // counted stamps. Only 0014 can give those.
+    for (let i = 0; i < 11; i += 1) ids.push(await outing({ place: i < 3 ? "Saigon Kitchen" : `Place ${i}`, ...(i % 2 ? ELSEWHERE : {}) }));
     for (const [i, id] of ids.entries()) if (i < 10) await pay(id, "marcus", 100);
-    ids.push(await outing({ guild: "guild-2", channel: "chan-2", place: "Crag Cafe" }));
+    ids.push(await outing({ ...ELSEWHERE, place: "Crag Cafe" }));
 
     const crowd: [string, string][] = Array.from({ length: 7 }, (_, i) => [`p${i}`, `P${i}`]);
     const items: Outing["items"] = Array.from({ length: 12 }, (_, i) => [`Plate ${i}`, 800, ["gavin", `p${i % 7}`]]);
@@ -254,8 +283,8 @@ describe("the backfill", () => {
 
   const rowsOf = async () => {
     const { results } = await db
-      .prepare("SELECT guild_id, user_id, key FROM stamps ORDER BY guild_id, user_id, key")
-      .all<{ guild_id: string; user_id: string; key: string }>();
+      .prepare("SELECT user_id, key FROM stamps ORDER BY user_id, key")
+      .all<{ user_id: string; key: string }>();
     return results;
   };
 
@@ -289,7 +318,7 @@ describe("the backfill", () => {
     await outing({ place: "One" });
     await outing({ place: "Two" });
     await runBackfill();
-    const held = await stampsHeld(db, "guild-1", "gavin");
+    const held = await stampsHeld(db, "gavin");
     expect(held.get("first-seat")).toBe("2026-01-01T12:00:01.000Z");
     expect(held.get("regular")).toBe("2026-01-03T12:00:03.000Z");
   });
@@ -303,7 +332,81 @@ describe("the backfill", () => {
 
   it("leaves the tables as it found them", async () => {
     await runBackfill();
-    const { results } = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'view'").all();
+    const { results } = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'view' OR name = 'stamps_held'").all();
     expect(results).toEqual([]);
+  });
+
+  it("gives what only the servers together reach, dated at the crossing and seen", async () => {
+    await outing({ place: "Saigon Kitchen" });
+    await outing({ place: "Saigon Kitchen" });
+    const third = await outing({ ...ELSEWHERE, place: "Saigon Kitchen" });
+    await db.prepare("UPDATE bills SET confirmed_at = '2026-03-01T00:00:00.000Z' WHERE id = ?").bind(third).run();
+    await runBackfill();
+    const row = await db.prepare("SELECT earned_at, seen_at, bill_id FROM stamps WHERE user_id = 'gavin' AND key = 'regular'").first<{ earned_at: string; seen_at: string | null; bill_id: string | null }>();
+    expect(row!.earned_at).toBe("2026-03-01T00:00:00.000Z");
+    expect(row!.seen_at).not.toBeNull();
+    expect(row!.bill_id).toBeNull();
+  });
+});
+
+describe("merging to one row per person", () => {
+  async function row(guild: string, who: string, key: string, earnedAt: string, seenAt: string | null, bill: string | null = null): Promise<void> {
+    await db
+      .prepare("INSERT INTO stamps (guild_id, user_id, key, earned_at, seen_at, bill_id) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(guild, who, key, earnedAt, seenAt, bill)
+      .run();
+  }
+
+  const heldRows = async () =>
+    (await db.prepare("SELECT user_id, key, earned_at, seen_at, bill_id FROM stamps ORDER BY user_id, key").all()).results;
+
+  it("keeps the earliest date and the bill that earned it", async () => {
+    await perServerTable();
+    await row("guild-2", "gavin", "host", "2026-05-01T00:00:00.000Z", "2026-05-02T00:00:00.000Z", "later");
+    await row("guild-1", "gavin", "host", "2026-03-01T00:00:00.000Z", "2026-03-02T00:00:00.000Z", "first");
+    await mergeToOnePerPerson();
+    expect(await heldRows()).toEqual([{ user_id: "gavin", key: "host", earned_at: "2026-03-01T00:00:00.000Z", seen_at: "2026-03-02T00:00:00.000Z", bill_id: "first" }]);
+  });
+
+  it("counts a stamp as seen if any server showed it", async () => {
+    await perServerTable();
+    await row("guild-1", "gavin", "host", "2026-03-01T00:00:00.000Z", null);
+    await row("guild-2", "gavin", "host", "2026-05-01T00:00:00.000Z", "2026-05-02T00:00:00.000Z");
+    await mergeToOnePerPerson();
+    expect(await unseenStamps(db, "gavin")).toEqual([]);
+  });
+
+  it("still plays a Ceremony no server has shown, once", async () => {
+    await perServerTable();
+    await row("guild-1", "gavin", "host", "2026-03-01T00:00:00.000Z", null);
+    await row("guild-2", "gavin", "host", "2026-05-01T00:00:00.000Z", null);
+    await mergeToOnePerPerson();
+    expect((await unseenStamps(db, "gavin")).map((s) => s.key)).toEqual(["host"]);
+  });
+
+  it("leaves other people and other stamps alone", async () => {
+    await perServerTable();
+    await row("guild-1", "gavin", "host", "2026-03-01T00:00:00.000Z", "2026-03-02T00:00:00.000Z");
+    await row("guild-1", "gavin", "regular", "2026-03-03T00:00:00.000Z", "2026-03-04T00:00:00.000Z");
+    await row("guild-1", "marcus", "host", "2026-03-05T00:00:00.000Z", "2026-03-06T00:00:00.000Z");
+    await mergeToOnePerPerson();
+    expect((await heldRows()).map((r) => `${r.user_id}:${r.key}`)).toEqual(["gavin:host", "gavin:regular", "marcus:host"]);
+  });
+
+  // The old Worker serves until the new one lands, and every page it draws reads
+  // unseen stamps. These are its statements, as main has them.
+  it("keeps working for the old Worker", async () => {
+    await perServerTable();
+    await row("guild-1", "gavin", "host", "2026-03-01T00:00:00.000Z", null);
+    await mergeToOnePerPerson();
+    const unseen = await db.prepare("SELECT key FROM stamps WHERE user_id = ? AND guild_id = ? AND seen_at IS NULL ORDER BY earned_at, key").bind("gavin", "guild-1").all();
+    expect(unseen.results).toEqual([{ key: "host" }]);
+    expect((await db.prepare("SELECT key, earned_at FROM stamps WHERE guild_id = ? AND user_id = ?").bind("guild-2", "gavin").all()).results).toEqual([]);
+    const insert = db.prepare("INSERT INTO stamps (guild_id, user_id, key, earned_at, bill_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING RETURNING user_id, key");
+    expect((await insert.bind("guild-2", "gavin", "host", "2026-06-01T00:00:00.000Z", "b").all()).results).toEqual([]);
+    expect((await insert.bind("guild-2", "gavin", "regular", "2026-06-01T00:00:00.000Z", "b").all()).results).toEqual([{ user_id: "gavin", key: "regular" }]);
+    const seen = db.prepare("UPDATE stamps SET seen_at = ?1 WHERE guild_id = ?2 AND user_id = ?3 AND seen_at IS NULL AND key IN (SELECT value FROM json_each(?4))");
+    await seen.bind("2026-06-02T00:00:00.000Z", "guild-1", "gavin", JSON.stringify(["host"])).run();
+    expect((await unseenStamps(db, "gavin")).map((s) => s.key)).toEqual(["regular"]);
   });
 });

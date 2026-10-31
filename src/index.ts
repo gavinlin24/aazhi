@@ -113,12 +113,11 @@ async function viewerOf(c: Context<{ Bindings: Env }>): Promise<Viewer | null> {
     ...grant,
     token,
     proof: c.req.query("m") ?? null,
-    unseen: await unseenStamps(c.env.DB, grant.guildId, grant.viewerId),
+    unseen: await unseenStamps(c.env.DB, grant.viewerId),
     place: {
       board: (BOARDS.includes(board) ? board : "hosted") as BoardName,
       span: (c.req.query("span") === "all" ? "all" : "month") as BoardSpan,
     },
-    fromBoard: c.req.query("from") === "leaderboard",
   };
 }
 
@@ -139,7 +138,7 @@ async function profilePage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) 
   if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
   const profile = await personProfile(c.env.DB, viewer.guildId, person, nowMs);
   if (!profile) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
-  const [logs, stamps] = await Promise.all([person === viewer.viewerId ? listLogs(c.env.DB, person) : [], stampsHeld(c.env.DB, viewer.guildId, person)]);
+  const [logs, stamps] = await Promise.all([person === viewer.viewerId ? listLogs(c.env.DB, person) : [], stampsHeld(c.env.DB, person)]);
   return page(renderProfile(profile, viewer, nowMs, logs, stamps), 200);
 }
 
@@ -150,7 +149,7 @@ async function stampsPage(c: Context<{ Bindings: Env }>, who: (viewer: Viewer) =
   if (!(await mayOpen(c, viewer, person))) return page(renderPersonRefused(), 403);
   const summary = await personSummary(c.env.DB, viewer.guildId, person);
   if (!summary) return page(renderNoBills(viewer, person === viewer.viewerId), 200);
-  return page(renderStamps({ ...summary, id: person }, await stampRows(c.env.DB, viewer.guildId, person), viewer, Date.now()), 200);
+  return page(renderStamps({ ...summary, id: person }, await stampRows(c.env.DB, person), viewer, Date.now()), 200);
 }
 
 app.get("/g/:guildId", (c) => profilePage(c, (viewer) => viewer.viewerId));

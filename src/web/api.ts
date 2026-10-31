@@ -303,9 +303,7 @@ api.post(
   route(async (c, grant) => {
     const body = await readBody(c);
     expectKeys(body, ["keys"]);
-    const bill = await getBill(c.env.DB, grant.billId);
-    if (!bill) return refuse(404, NOT_FOUND);
-    await markStampsSeen(c.env.DB, bill.guildId, grant.participantId, stampKeys(body.keys));
+    await markStampsSeen(c.env.DB, grant.participantId, stampKeys(body.keys));
     return reply({ seen: true });
   }),
 );

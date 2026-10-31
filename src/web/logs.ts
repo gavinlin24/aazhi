@@ -51,7 +51,7 @@ logsApi.post("/:guildId/stamps/seen", async (c) => {
   if (!grant || grant.guildId !== c.req.param("guildId")) return answer({ error: NOT_YOURS }, 403);
   const body = await c.req.json<{ keys?: unknown }>().catch(() => null);
   const keys = Array.isArray(body?.keys) ? body.keys.filter((key): key is string => typeof key === "string") : [];
-  await markStampsSeen(c.env.DB, grant.guildId, grant.viewerId, keys);
+  await markStampsSeen(c.env.DB, grant.viewerId, keys);
   return answer({ seen: true });
 });
 
