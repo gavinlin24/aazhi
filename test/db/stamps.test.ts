@@ -58,13 +58,13 @@ async function run(queries: string[]): Promise<void> {
 }
 
 // Puts the table back the way 0012 left it, so a test can lay down rows from
-// before 0013 and then run it.
+// before 0014 and then run it.
 async function perServerTable(): Promise<void> {
   await db.prepare("DROP TABLE stamps").run();
   await run(queriesOf("0012").filter(isSchema));
 }
 
-const mergeToOnePerPerson = () => run(queriesOf("0013"));
+const mergeToOnePerPerson = () => run(queriesOf("0014"));
 
 // What a deploy does to the rows the test has laid down: the per-server backfill
 // that already ran in production, then the merge.
@@ -260,7 +260,7 @@ describe("the backfill", () => {
   async function history(): Promise<string[]> {
     const ids: string[] = [];
     // Every other outing is in another server, so no one server reaches the
-    // counted stamps. Only 0013 can give those.
+    // counted stamps. Only 0014 can give those.
     for (let i = 0; i < 11; i += 1) ids.push(await outing({ place: i < 3 ? "Saigon Kitchen" : `Place ${i}`, ...(i % 2 ? ELSEWHERE : {}) }));
     for (const [i, id] of ids.entries()) if (i < 10) await pay(id, "marcus", 100);
     ids.push(await outing({ ...ELSEWHERE, place: "Crag Cafe" }));

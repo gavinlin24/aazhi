@@ -295,7 +295,7 @@ reads the rows the stats already count.
   dated when they crossed the line and marked seen. It folds names by ASCII only,
   so it can be a stamp short or over against the Worker's rules for names that
   differ by an accent. The Worker's check makes up a shortfall at the next bill.
-  `migrations/0013_global_stamps.sql` then merges them to one row per person and
+  `migrations/0014_global_stamps.sql` then merges them to one row per person and
   stamp, keeping the earliest date and the first time any server showed it. It
   gives what people reach only once servers add up, also marked seen. The
   `guild_id` column stays, unused, because the old Worker needs it until the new
