@@ -7,7 +7,7 @@ import type { Env } from "../../src/env";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
 import app from "../../src/index";
 import { mintToken, mintViewerToken } from "../../src/web/token";
-import { BAKERY, BAR_TAB, BOBA_SHOP, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
+import { BAKERY, BAR_TAB, BOBA_SHOP, DESSERT_SHOP, FOOD_TRUCK, JUICE_BAR, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
 
 const db = workerEnv.DB;
@@ -291,7 +291,7 @@ describe("/log", () => {
   ])("refuses a receipt from %s and counts nothing", async (_, input) => {
     read = input;
     await run(slashLog());
-    expect(lastReply().content).toBe("I can only log receipts from restaurants, cafes, bars, boba shops and bakeries.");
+    expect(lastReply().content).toBe("I can only log receipts from places that serve food or drinks.");
     expect(lastReply().components).toBeUndefined();
     expect(await billCount()).toBe(0);
     expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
@@ -301,6 +301,9 @@ describe("/log", () => {
     ["bar", BAR_TAB],
     ["boba shop", BOBA_SHOP],
     ["bakery", BAKERY],
+    ["juice bar", JUICE_BAR],
+    ["dessert shop", DESSERT_SHOP],
+    ["food truck", FOOD_TRUCK],
   ])("logs a receipt from a %s like a meal", async (_, input) => {
     read = { ...input, bill_date: LUNCH.bill_date, printed_time: LUNCH.printed_time };
     await logged();

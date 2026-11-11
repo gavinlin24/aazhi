@@ -26,7 +26,7 @@ const CANT_POST = "I can't post in this channel, so I can't log here. Run /log i
 const NO_TOTAL = "Not logged. I can't find a total on this receipt.";
 const LOOKS_FAKE = "This receipt looks fake, so I didn't log it.";
 const NOT_CHECKED = "I couldn't check this receipt, so try again.";
-const READ_REFUSED = { ...READ_FAILED, "wrong-place": "I can only log receipts from restaurants, cafes, bars, boba shops and bakeries." };
+const READ_REFUSED = { ...READ_FAILED, "wrong-place": "I can only log receipts from places that serve food or drinks." };
 const STANDING: Record<ReceiptStanding, string> = {
   split: ALREADY_SPLIT,
   mine: "You already logged this receipt.",

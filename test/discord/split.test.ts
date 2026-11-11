@@ -19,7 +19,7 @@ import { personSummary, serverBoards } from "../../src/db/stats";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
 import { editBillMessage, editOriginal, ephemeral } from "../../src/discord/rest";
 import { PATTY_SHACK } from "../fixtures/modifiers";
-import { PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
+import { DESSERT_SHOP, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
 import { SAIGON } from "../fixtures/saigon";
 import { openDraftInChannel } from "../fixtures/seed";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
@@ -484,6 +484,14 @@ describe("/split", () => {
     expect(text).toContain("Line items do not add up to total!");
   });
 
+  it("splits a dessert shop receipt like a meal", async () => {
+    anthropic = () => toolUse(DESSERT_SHOP);
+
+    await run(slashSplit());
+
+    expect(await openDraftInChannel(db, "chan-1")).toMatchObject({ place: "MAKKEE RH", printedTotalCents: 1299 });
+  });
+
   it("asks for the total when the receipt's printed total could not be read", async () => {
     anthropic = () => toolUse(saigonToolInput({ printed_total: null }));
 
@@ -499,8 +507,8 @@ describe("/split", () => {
     ["not-a-receipt", () => toolUse({ ...saigonToolInput(), is_receipt: false }), /couldn't read a receipt in that photo/i],
     ["unreadable", () => toolUse({ ...saigonToolInput(), readable: false }), /sharper.*flat|flat.*sharper/i],
     ["model-error", () => new Response("overloaded", { status: 529 }), /try again/i],
-    ["pharmacy", () => toolUse(PHARMACY_WIPES), /^I can only split receipts from restaurants, cafes, bars, boba shops and bakeries\.$/],
-    ["big-box store", () => toolUse(SUPERSTORE_SINUS_RINSE), /^I can only split receipts from restaurants, cafes, bars, boba shops and bakeries\.$/],
+    ["pharmacy", () => toolUse(PHARMACY_WIPES), /^I can only split receipts from places that serve food or drinks\.$/],
+    ["big-box store", () => toolUse(SUPERSTORE_SINUS_RINSE), /^I can only split receipts from places that serve food or drinks\.$/],
   ] as const)("on a %s read, says so plainly and creates no bill", async (_reason, reply, message) => {
     await seedDraft("old", { payerId: "gavin" });
     anthropic = reply;

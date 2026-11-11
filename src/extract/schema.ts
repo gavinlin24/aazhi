@@ -25,10 +25,10 @@ export const EXTRACT_TOOL_NAME = "record_receipt";
 const PRICE = { type: "string", description: 'Decimal amount exactly as printed, no currency symbol or thousands separator, e.g. "19.50" or "-8.00".' };
 const NULLABLE_PRICE = { type: ["string", "null"], description: PRICE.description + " null if it is not printed or not legible." };
 
-// aazhi counts outings to the kinds of place accepted below, and no others. The
+// aazhi counts outings to places that serve food or drinks, and no others. The
 // model names the kind of place from a list rather than answering yes or no,
-// so a juice bar or a food truck has a box of its own and isn't stretched
-// into one that is accepted.
+// so a grocery store, which sells food too, has a box of its own and isn't
+// stretched into one that is accepted.
 const PLACE_KINDS = [
   "restaurant",
   "cafe",
@@ -44,7 +44,16 @@ const PLACE_KINDS = [
   "other_store",
   "other",
 ] as const;
-const ACCEPTED_PLACE_KINDS: readonly string[] = ["restaurant", "cafe", "bar", "boba_or_tea_shop", "bakery"];
+const ACCEPTED_PLACE_KINDS: readonly string[] = [
+  "restaurant",
+  "cafe",
+  "bar",
+  "boba_or_tea_shop",
+  "bakery",
+  "juice_or_smoothie_shop",
+  "dessert_shop",
+  "food_truck",
+];
 
 export const EXTRACT_TOOL = {
   name: EXTRACT_TOOL_NAME,

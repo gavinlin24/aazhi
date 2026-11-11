@@ -3,7 +3,7 @@ import { extractReceipt, reconciles, type Extraction } from "../../src/extract/c
 import type { ReadPermit } from "../../src/extract/read-limit";
 import { EXTRACT_PROMPT, EXTRACT_TOOL, EXTRACT_TOOL_NAME, parseToolInput } from "../../src/extract/schema";
 import { LA_PALMA, MENSHO, PATTY_SHACK } from "../fixtures/modifiers";
-import { BAKERY, BAR_TAB, BOBA_SHOP, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
+import { BAKERY, BAR_TAB, BOBA_SHOP, DESSERT_SHOP, FOOD_TRUCK, JUICE_BAR, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
 import { SAIGON } from "../fixtures/saigon";
 
 const SAIGON_EXTRACTION: Extraction = {
@@ -283,10 +283,8 @@ describe("extractReceipt", () => {
   it.each([
     ["a pharmacy", PHARMACY_WIPES],
     ["a big-box store", SUPERSTORE_SINUS_RINSE],
-    ["a juice bar", withOverrides({ place_kind: "juice_or_smoothie_shop" })],
-    ["a dessert shop", withOverrides({ place_kind: "dessert_shop" })],
-    ["a food truck", withOverrides({ place_kind: "food_truck" })],
     ["a grocery store", withOverrides({ place_kind: "grocery_or_market" })],
+    ["a convenience store", withOverrides({ place_kind: "convenience_store" })],
   ])("refuses a clean read of a receipt from %s", async (_, input) => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(input));
 
@@ -300,6 +298,9 @@ describe("extractReceipt", () => {
     ["bar", BAR_TAB],
     ["boba shop", BOBA_SHOP],
     ["bakery", BAKERY],
+    ["juice bar", JUICE_BAR],
+    ["dessert shop", DESSERT_SHOP],
+    ["food truck", FOOD_TRUCK],
   ])("takes a receipt from a %s", async (_, input) => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(input));
 

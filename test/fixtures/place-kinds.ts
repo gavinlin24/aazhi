@@ -73,3 +73,49 @@ export const BAKERY = {
   tax: "0.00",
   printed_total: "9.00",
 };
+
+// Like a dessert split confirmed in production before this check existed.
+export const DESSERT_SHOP = {
+  is_receipt: true,
+  readable: true,
+  place_kind: "dessert_shop",
+  place: "MAKKEE RH",
+  bill_date: "2026-10-30",
+  printed_time: "9:51 PM",
+  items: [{ label: "Mango Snow Black Sticky Rice", price: "12.99", modifiers: [], confidence: 0.95 }],
+  discount: null,
+  tax: "0.00",
+  printed_total: "12.99",
+};
+
+export const JUICE_BAR = {
+  is_receipt: true,
+  readable: true,
+  place_kind: "juice_or_smoothie_shop",
+  place: "Green Press Juicery",
+  bill_date: "2026-10-30",
+  printed_time: "11:15 AM",
+  items: [
+    { label: "Acai Bowl", price: "12.50", modifiers: [], confidence: 0.95 },
+    { label: "Green Machine Smoothie 24oz", price: "9.25", modifiers: [], confidence: 0.95 },
+  ],
+  discount: null,
+  tax: "0.00",
+  printed_total: "21.75",
+};
+
+export const FOOD_TRUCK = {
+  is_receipt: true,
+  readable: true,
+  place_kind: "food_truck",
+  place: "El Sol Taco Truck",
+  bill_date: "2026-10-30",
+  printed_time: "7:40 PM",
+  items: [
+    { label: "4 Al Pastor Tacos", price: "10.00", modifiers: [], confidence: 0.95 },
+    { label: "Horchata L", price: "4.00", modifiers: [], confidence: 0.95 },
+  ],
+  discount: null,
+  tax: "1.33",
+  printed_total: "15.33",
+};
