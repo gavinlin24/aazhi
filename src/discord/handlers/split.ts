@@ -8,7 +8,7 @@ import {
 } from "discord-api-types/v10";
 import { addParticipant, createBill, insertItems, ReceiptAlreadySplitError, setBillMessage, supersedeOlderDrafts } from "../../db/bills";
 import type { Env } from "../../env";
-import { extractReceipt, type Extraction } from "../../extract/claude";
+import { extractReceipt, type Extraction, type ExtractionResult } from "../../extract/claude";
 import { grantRead, type ReadPermit } from "../../extract/read-limit";
 import { receiptKey } from "../../extract/receipt-key";
 import type { InteractionHandler } from "../interactions";
@@ -42,8 +42,9 @@ const NO_PHOTO =
 
 export const NOT_IN_SERVER = "Bills belong to a server channel, so run this in one.";
 
-export const READ_FAILED: Record<"not-a-receipt" | "unreadable" | "model-error", string> = {
+export const READ_FAILED: Record<Extract<ExtractionResult, { ok: false }>["reason"], string> = {
   "not-a-receipt": "I couldn't read a receipt in that photo. Try again with a photo of the itemised receipt.",
+  "not-a-restaurant": "This receipt isn't from a restaurant or cafe, so I can't split it.",
   unreadable:
     "I can see a receipt but couldn't make out the prices. Try a sharper photo, taken flat in good light " +
     "with the whole receipt in frame.",

@@ -7,6 +7,7 @@ import type { Env } from "../../src/env";
 import { EXTRACT_TOOL_NAME } from "../../src/extract/schema";
 import app from "../../src/index";
 import { mintToken, mintViewerToken } from "../../src/web/token";
+import { BAR_TAB, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/non-restaurant";
 import { generateKeypair, signedRequest, testEnv, type TestKeypair } from "./helpers";
 
 const db = workerEnv.DB;
@@ -22,6 +23,7 @@ const VIEW_SEND = (1n << 10n) | (1n << 11n);
 const LUNCH = {
   is_receipt: true,
   readable: true,
+  place_kind: "restaurant",
   place: "Saigon Kitchen",
   bill_date: "2026-10-29",
   printed_time: "6:12 PM",
@@ -281,6 +283,19 @@ describe("/log", () => {
     await run(slashLog());
     expect(lastReply().content).toContain("I couldn't read a receipt in that photo.");
     expect(await billCount()).toBe(0);
+  });
+
+  it.each([
+    ["a pharmacy", PHARMACY_WIPES],
+    ["a big-box store", SUPERSTORE_SINUS_RINSE],
+    ["a bar", BAR_TAB],
+  ])("refuses a receipt from %s and counts nothing", async (_, input) => {
+    read = input;
+    await run(slashLog());
+    expect(lastReply().content).toBe("This receipt isn't from a restaurant or cafe, so I didn't log it.");
+    expect(lastReply().components).toBeUndefined();
+    expect(await billCount()).toBe(0);
+    expect(await personSummary(db, "guild-1", "gavin")).toBeNull();
   });
 
   it("clears the same receipt's older draft, so one receipt leaves one draft", async () => {

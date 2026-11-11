@@ -26,6 +26,7 @@ const CANT_POST = "I can't post in this channel, so I can't log here. Run /log i
 const NO_TOTAL = "Not logged. I can't find a total on this receipt.";
 const LOOKS_FAKE = "This receipt looks fake, so I didn't log it.";
 const NOT_CHECKED = "I couldn't check this receipt, so try again.";
+const READ_REFUSED = { ...READ_FAILED, "not-a-restaurant": "This receipt isn't from a restaurant or cafe, so I didn't log it." };
 const STANDING: Record<ReceiptStanding, string> = {
   split: ALREADY_SPLIT,
   mine: "You already logged this receipt.",
@@ -95,7 +96,7 @@ async function readAndOffer(permit: ReadPermit, guildId: string, channelId: stri
   }
   const read = await reading.finally(() => clearTimeout(timer));
   if (!read.ok) {
-    await say(READ_FAILED[read.reason]);
+    await say(READ_REFUSED[read.reason]);
     return;
   }
 

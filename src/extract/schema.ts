@@ -16,7 +16,7 @@ export interface Extraction {
 
 export type ExtractionResult =
   | { ok: true; extraction: Extraction; reconciles: boolean; discrepancyCents: Cents | null }
-  | { ok: false; reason: "unreadable" | "not-a-receipt" | "model-error" };
+  | { ok: false; reason: "unreadable" | "not-a-receipt" | "not-a-restaurant" | "model-error" };
 
 export const EXTRACT_TOOL_NAME = "record_receipt";
 
@@ -24,6 +24,24 @@ export const EXTRACT_TOOL_NAME = "record_receipt";
 // and "19.50" has to become 1950 by string parsing, never by multiplication.
 const PRICE = { type: "string", description: 'Decimal amount exactly as printed, no currency symbol or thousands separator, e.g. "19.50" or "-8.00".' };
 const NULLABLE_PRICE = { type: ["string", "null"], description: PRICE.description + " null if it is not printed or not legible." };
+
+// aazhi counts restaurant and cafe outings only. The model names the kind of
+// place from a list rather than answering yes or no, so a bar or a boba shop
+// has a box of its own and isn't stretched into "restaurant" or "cafe".
+const PLACE_KINDS = [
+  "restaurant",
+  "cafe",
+  "bar",
+  "drinks_shop",
+  "bakery_or_dessert_shop",
+  "food_truck",
+  "grocery_or_market",
+  "convenience_store",
+  "pharmacy",
+  "other_store",
+  "other",
+] as const;
+const ACCEPTED_PLACE_KINDS: readonly string[] = ["restaurant", "cafe"];
 
 export const EXTRACT_TOOL = {
   name: EXTRACT_TOOL_NAME,
@@ -33,6 +51,12 @@ export const EXTRACT_TOOL = {
     properties: {
       is_receipt: { type: "boolean", description: "false if the image is not a receipt or bill at all." },
       readable: { type: "boolean", description: "false if it is a receipt but too blurry, cropped, or dark to read the amounts." },
+      place_kind: {
+        type: "string",
+        enum: PLACE_KINDS,
+        description:
+          "The kind of place that issued the receipt. restaurant: a place that serves meals, including fast food and sit-down chains. cafe: a coffee shop or cafe. drinks_shop: a boba, tea, juice or smoothie shop. other_store: any other shop, such as a big-box, department or hardware store.",
+      },
       place: { type: ["string", "null"], description: "Restaurant name, or null." },
       bill_date: { type: ["string", "null"], description: "Date on the receipt as YYYY-MM-DD, or null." },
       printed_time: {
@@ -78,7 +102,7 @@ export const EXTRACT_TOOL = {
       tax: NULLABLE_PRICE,
       printed_total: { ...NULLABLE_PRICE, description: "The grand total printed on the receipt, before any tip the customer adds by hand. If a tip is already printed and no total before it is printed, use the final total. " + NULLABLE_PRICE.description },
     },
-    required: ["is_receipt", "readable", "place", "bill_date", "printed_time", "items", "discount", "tax", "printed_total"],
+    required: ["is_receipt", "readable", "place_kind", "place", "bill_date", "printed_time", "items", "discount", "tax", "printed_total"],
   },
 } as const;
 
@@ -98,6 +122,7 @@ export const EXTRACT_PROMPT = [
   "Copy the time exactly as printed. Never guess a time. Use null if you can't read one.",
   "Give each item a confidence from 0 to 1 for how sure you are of its label and price.",
   "If the image is not a receipt set is_receipt to false. If it is one but you cannot read the amounts set readable to false.",
+  "Set place_kind from what the place is, judged by its name, its header and what it sells. Fast food and sit-down chains are restaurants.",
 ].join("\n");
 
 // `modifiersIncluded` is the same read with every priced modifier taken as
@@ -108,6 +133,7 @@ export const EXTRACT_PROMPT = [
 export type ParsedToolInput =
   | { kind: "extraction"; extraction: Extraction; modifiersIncluded?: Extraction }
   | { kind: "not-a-receipt" }
+  | { kind: "not-a-restaurant" }
   | { kind: "unreadable" }
   | { kind: "invalid" };
 
@@ -202,6 +228,9 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   if (!isRecord(input)) return { kind: "invalid" };
   if (typeof input.is_receipt !== "boolean" || typeof input.readable !== "boolean") return { kind: "invalid" };
   if (!input.is_receipt) return { kind: "not-a-receipt" };
+  // Before readable, so a blurry pharmacy receipt is told the real reason.
+  if (typeof input.place_kind !== "string" || !(PLACE_KINDS as readonly string[]).includes(input.place_kind)) return { kind: "invalid" };
+  if (!ACCEPTED_PLACE_KINDS.includes(input.place_kind)) return { kind: "not-a-restaurant" };
   if (!input.readable) return { kind: "unreadable" };
 
   const place = parseNullableString(input.place);
