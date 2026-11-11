@@ -56,6 +56,7 @@ describe("the printed time", () => {
     const parsed = parseToolInput({
       is_receipt: true,
       readable: true,
+      place_kind: "restaurant",
       place: null,
       bill_date: null,
       printed_time: "7:42 PM",

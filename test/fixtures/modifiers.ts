@@ -6,6 +6,7 @@
 export const PATTY_SHACK = {
   is_receipt: true,
   readable: true,
+  place_kind: "restaurant",
   place: "Patty Shack",
   bill_date: "2026-10-24",
   items: [
@@ -40,6 +41,7 @@ export const PATTY_SHACK = {
 export const LA_PALMA = {
   is_receipt: true,
   readable: true,
+  place_kind: "restaurant",
   place: "La Palma Taqueria",
   bill_date: "2026-10-25",
   items: [
@@ -68,6 +70,7 @@ export const LA_PALMA = {
 export const MENSHO = {
   is_receipt: true,
   readable: true,
+  place_kind: "restaurant",
   place: "Mensho Ramen Bar",
   bill_date: "2026-10-26",
   items: [
