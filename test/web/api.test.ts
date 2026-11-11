@@ -398,6 +398,24 @@ describe("tax, tip and the printed total", () => {
     expect(reply.body.result.distributableCents).toBe(32412);
   });
 
+  // An e-receipt that prints the tip can print only the total after it, and the
+  // read keeps that total. Once the payer enters the tip, the page's Total
+  // matches the receipt, so Confirm has to go through.
+  it("lets the payer confirm once their tip makes the lines reach a total that has the tip in it", async () => {
+    await seedSaigon(db, BILL, { bill: { tipCents: 0, printedTotalCents: 32412 } });
+
+    const untipped = await send("GET", `/b/${BILL}/state`, { as: "gavin" });
+    expect(untipped.body.reconciles).toEqual({ ok: false, discrepancyCents: -5030 });
+
+    const tipped = await patch("gavin", { tip: "50.30" });
+    expect(tipped.body.result.distributableCents).toBe(32412);
+    expect(tipped.body.reconciles).toEqual({ ok: true, discrepancyCents: null });
+
+    const confirmed = await send("POST", `/b/${BILL}/confirm`, { as: "gavin", body: { revision: await revision() } });
+    expect(confirmed.status).toBe(200);
+    expect((await getBill(db, BILL))!.status).toBe("confirmed");
+  });
+
   it("lets the payer split the tip evenly, and keeps the choice when the tip changes", async () => {
     await seedSaigon(db, BILL);
     const before = await revision();

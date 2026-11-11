@@ -142,6 +142,16 @@ describe("reconciles", () => {
     // The same discount missed by the read shows as the gap.
     expect(reconciles({ ...SAIGON_EXTRACTION, printedTotalCents: 27382 - 2515 })).toEqual({ ok: false, discrepancyCents: 2515 });
   });
+
+  it("adds up against a total printed with the tip in it once that tip is entered", () => {
+    const tipInTotal = { ...SAIGON_EXTRACTION, printedTotalCents: 27382 + 5030 };
+    expect(reconciles(tipInTotal)).toEqual({ ok: false, discrepancyCents: -5030 });
+    expect(reconciles({ ...tipInTotal, tipCents: 5030 })).toEqual({ ok: true, discrepancyCents: null });
+    // A tip that doesn't close the gap leaves the lines' own gap.
+    expect(reconciles({ ...tipInTotal, tipCents: 5000 })).toEqual({ ok: false, discrepancyCents: -5030 });
+    // A total printed before the tip still adds up with a tip entered.
+    expect(reconciles({ ...SAIGON_EXTRACTION, tipCents: 5030 })).toEqual({ ok: true, discrepancyCents: null });
+  });
 });
 
 describe("extractReceipt", () => {
