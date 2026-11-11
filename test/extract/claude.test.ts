@@ -312,16 +312,21 @@ describe("extractReceipt", () => {
     await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "wrong-place" });
   });
 
-  it.each([
-    ["missing", undefined],
-    ["not one of the listed kinds", "diner"],
-  ])("retries a read whose kind of place is %s", async (_, placeKind) => {
+  it("retries a read with no kind of place", async () => {
     fetchMock
-      .mockResolvedValueOnce(toolUseResponse(withOverrides({ place_kind: placeKind })))
+      .mockResolvedValueOnce(toolUseResponse(withOverrides({ place_kind: undefined })))
       .mockResolvedValueOnce(toolUseResponse(SAIGON_TOOL_INPUT));
 
     await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toMatchObject({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // What the real model sent for a hardware store receipt, in place of other_store.
+  it("refuses a kind of place the model made up, without a second read", async () => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ place_kind: "hardware_store" })));
+
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "wrong-place" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("asks the model what kind of place the receipt is from, with chains counted as restaurants", () => {

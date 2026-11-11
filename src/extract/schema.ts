@@ -125,7 +125,7 @@ export const EXTRACT_PROMPT = [
   "Copy the time exactly as printed. Never guess a time. Use null if you can't read one.",
   "Give each item a confidence from 0 to 1 for how sure you are of its label and price.",
   "If the image is not a receipt set is_receipt to false. If it is one but you cannot read the amounts set readable to false.",
-  "Set place_kind from what the place is, judged by its name, its header and what it sells. Fast food and sit-down chains are restaurants.",
+  "Set place_kind to one of its listed values, exactly as written, from what the place is, judged by its name, its header and what it sells. Fast food and sit-down chains are restaurants.",
 ].join("\n");
 
 // `modifiersIncluded` is the same read with every priced modifier taken as
@@ -231,8 +231,11 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   if (!isRecord(input)) return { kind: "invalid" };
   if (typeof input.is_receipt !== "boolean" || typeof input.readable !== "boolean") return { kind: "invalid" };
   if (!input.is_receipt) return { kind: "not-a-receipt" };
-  // Before readable, so a blurry pharmacy receipt is told the real reason.
-  if (typeof input.place_kind !== "string" || !(PLACE_KINDS as readonly string[]).includes(input.place_kind)) return { kind: "invalid" };
+  // Before readable, so a blurry pharmacy receipt is told the real reason. Off
+  // the list is a refusal, not a misread: live, the model answered
+  // "hardware_store" for a hardware store, never anything but an exact value
+  // for a place it accepts, and a retry only got another made-up kind.
+  if (typeof input.place_kind !== "string") return { kind: "invalid" };
   if (!ACCEPTED_PLACE_KINDS.includes(input.place_kind)) return { kind: "wrong-place" };
   if (!input.readable) return { kind: "unreadable" };
 
