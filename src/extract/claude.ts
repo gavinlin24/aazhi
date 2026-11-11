@@ -18,14 +18,18 @@ const MODEL = "claude-haiku-5-5";
 const MAX_TOKENS = 4096;
 
 // Takes only the amounts so a stored bill is checked by the same rule as a
-// fresh read.
+// fresh read. A receipt that prints the tip can print only the total after it,
+// and the read keeps that total, so a total the lines reach once the payer's
+// tip is counted adds up too. A fresh read has no tip yet. The gap reported is
+// the lines' own, before any tip.
 export function reconciles(
-  e: Pick<Extraction, "discountCents" | "taxCents" | "printedTotalCents"> & { items: { cents: Cents }[] },
+  e: Pick<Extraction, "discountCents" | "taxCents" | "printedTotalCents"> & { items: { cents: Cents }[]; tipCents?: Cents },
 ): { ok: boolean; discrepancyCents: Cents | null } {
   if (e.printedTotalCents === null) return { ok: false, discrepancyCents: null };
   const sum = e.items.reduce((total, item) => total + item.cents, 0) - e.discountCents + (e.taxCents ?? 0);
   const discrepancy = sum - e.printedTotalCents;
-  return discrepancy === 0 ? { ok: true, discrepancyCents: null } : { ok: false, discrepancyCents: discrepancy };
+  if (discrepancy === 0 || discrepancy + (e.tipCents ?? 0) === 0) return { ok: true, discrepancyCents: null };
+  return { ok: false, discrepancyCents: discrepancy };
 }
 
 type Attempt =

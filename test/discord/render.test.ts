@@ -193,6 +193,11 @@ describe("renderBill", () => {
     expect(text).not.toMatch(/⚠️|add up|receipt total/i);
   });
 
+  it("raises no problem when the printed total has the tip in it and the payer entered that tip", () => {
+    const tipInTotal = { ...bill, printedTotalCents: 27382 + 5030 };
+    expect(embedText(embedOf(render(tipInTotal, draftState)))).not.toMatch(/⚠️|add up|receipt total/i);
+  });
+
   it("leads with the receipt's total and says only that the lines do not add up", () => {
     // The model read Garlic noodles as $82.00; the receipt says $273.82.
     const misread: BillInput = {
