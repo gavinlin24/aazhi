@@ -44,7 +44,7 @@ export const NOT_IN_SERVER = "Bills belong to a server channel, so run this in o
 
 export const READ_FAILED: Record<Extract<ExtractionResult, { ok: false }>["reason"], string> = {
   "not-a-receipt": "I couldn't read a receipt in that photo. Try again with a photo of the itemised receipt.",
-  "not-a-restaurant": "This receipt isn't from a restaurant or cafe, so I can't split it.",
+  "wrong-place": "I can only split receipts from restaurants, cafes, bars, boba shops and bakeries.",
   unreadable:
     "I can see a receipt but couldn't make out the prices. Try a sharper photo, taken flat in good light " +
     "with the whole receipt in frame.",

@@ -3,7 +3,7 @@ import { extractReceipt, reconciles, type Extraction } from "../../src/extract/c
 import type { ReadPermit } from "../../src/extract/read-limit";
 import { EXTRACT_PROMPT, EXTRACT_TOOL, EXTRACT_TOOL_NAME, parseToolInput } from "../../src/extract/schema";
 import { LA_PALMA, MENSHO, PATTY_SHACK } from "../fixtures/modifiers";
-import { BAR_TAB, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/non-restaurant";
+import { BAKERY, BAR_TAB, BOBA_SHOP, PHARMACY_WIPES, SUPERSTORE_SINUS_RINSE } from "../fixtures/place-kinds";
 import { SAIGON } from "../fixtures/saigon";
 
 const SAIGON_EXTRACTION: Extraction = {
@@ -283,16 +283,25 @@ describe("extractReceipt", () => {
   it.each([
     ["a pharmacy", PHARMACY_WIPES],
     ["a big-box store", SUPERSTORE_SINUS_RINSE],
-    ["a bar", BAR_TAB],
+    ["a juice bar", withOverrides({ place_kind: "juice_or_smoothie_shop" })],
+    ["a dessert shop", withOverrides({ place_kind: "dessert_shop" })],
+    ["a food truck", withOverrides({ place_kind: "food_truck" })],
+    ["a grocery store", withOverrides({ place_kind: "grocery_or_market" })],
   ])("refuses a clean read of a receipt from %s", async (_, input) => {
     fetchMock.mockResolvedValueOnce(toolUseResponse(input));
 
-    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "not-a-restaurant" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "wrong-place" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["restaurant", "cafe"])("takes a receipt from a %s", async (placeKind) => {
-    fetchMock.mockResolvedValueOnce(toolUseResponse(withOverrides({ place_kind: placeKind })));
+  it.each([
+    ["restaurant", withOverrides({ place_kind: "restaurant" })],
+    ["cafe", withOverrides({ place_kind: "cafe" })],
+    ["bar", BAR_TAB],
+    ["boba shop", BOBA_SHOP],
+    ["bakery", BAKERY],
+  ])("takes a receipt from a %s", async (_, input) => {
+    fetchMock.mockResolvedValueOnce(toolUseResponse(input));
 
     await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toMatchObject({ ok: true, reconciles: true });
   });
@@ -300,7 +309,7 @@ describe("extractReceipt", () => {
   it("refuses a receipt from elsewhere without demanding the amounts", async () => {
     fetchMock.mockResolvedValueOnce(toolUseResponse({ is_receipt: true, readable: false, place_kind: "pharmacy" }));
 
-    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "not-a-restaurant" });
+    await expect(extractReceipt(permit(URL_ONE), "k")).resolves.toEqual({ ok: false, reason: "wrong-place" });
   });
 
   it.each([
@@ -317,7 +326,7 @@ describe("extractReceipt", () => {
 
   it("asks the model what kind of place the receipt is from, with chains counted as restaurants", () => {
     expect(EXTRACT_TOOL.input_schema.required).toContain("place_kind");
-    expect(EXTRACT_TOOL.input_schema.properties.place_kind.enum).toEqual(expect.arrayContaining(["restaurant", "cafe", "bar", "pharmacy"]));
+    expect(EXTRACT_TOOL.input_schema.properties.place_kind.enum).toEqual(expect.arrayContaining(["restaurant", "cafe", "bar", "boba_or_tea_shop", "bakery", "pharmacy"]));
     expect(EXTRACT_PROMPT).toMatch(/fast food.*restaurant/i);
   });
 

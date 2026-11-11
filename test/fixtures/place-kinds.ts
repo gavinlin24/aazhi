@@ -1,8 +1,7 @@
-// Receipts that are not from a restaurant or cafe. The first two are the reads
-// of two receipts that were logged and confirmed in production before aazhi
-// asked what kind of place a receipt came from, with the place_kind the model
-// is now asked for. Each one is otherwise a clean, reconciling read, so only
-// the kind of place can refuse it.
+// Clean, reconciling reads that differ in the kind of place, so only that can
+// refuse them. The first two are the reads of two receipts that were logged and
+// confirmed in production before aazhi asked what kind of place a receipt came
+// from, with the place_kind the model is now asked for.
 
 export const PHARMACY_WIPES = {
   is_receipt: true,
@@ -44,4 +43,33 @@ export const BAR_TAB = {
   discount: null,
   tax: "3.14",
   printed_total: "36.14",
+};
+
+export const BOBA_SHOP = {
+  is_receipt: true,
+  readable: true,
+  place_kind: "boba_or_tea_shop",
+  place: "TP TEA - Diamond Bar",
+  bill_date: "2026-10-30",
+  printed_time: "7:20 PM",
+  items: [{ label: "1x Yuzu Emerald Fruit Tea", price: "6.50", modifiers: [], confidence: 0.95 }],
+  discount: null,
+  tax: "0.45",
+  printed_total: "6.95",
+};
+
+export const BAKERY = {
+  is_receipt: true,
+  readable: true,
+  place_kind: "bakery",
+  place: "Golden Crust Bakery",
+  bill_date: "2026-10-30",
+  printed_time: "8:05 AM",
+  items: [
+    { label: "Almond Croissant", price: "4.75", modifiers: [], confidence: 0.95 },
+    { label: "Pain au Chocolat", price: "4.25", modifiers: [], confidence: 0.95 },
+  ],
+  discount: null,
+  tax: "0.00",
+  printed_total: "9.00",
 };

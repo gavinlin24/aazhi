@@ -16,7 +16,7 @@ export interface Extraction {
 
 export type ExtractionResult =
   | { ok: true; extraction: Extraction; reconciles: boolean; discrepancyCents: Cents | null }
-  | { ok: false; reason: "unreadable" | "not-a-receipt" | "not-a-restaurant" | "model-error" };
+  | { ok: false; reason: "unreadable" | "not-a-receipt" | "wrong-place" | "model-error" };
 
 export const EXTRACT_TOOL_NAME = "record_receipt";
 
@@ -25,15 +25,18 @@ export const EXTRACT_TOOL_NAME = "record_receipt";
 const PRICE = { type: "string", description: 'Decimal amount exactly as printed, no currency symbol or thousands separator, e.g. "19.50" or "-8.00".' };
 const NULLABLE_PRICE = { type: ["string", "null"], description: PRICE.description + " null if it is not printed or not legible." };
 
-// aazhi counts restaurant and cafe outings only. The model names the kind of
-// place from a list rather than answering yes or no, so a bar or a boba shop
-// has a box of its own and isn't stretched into "restaurant" or "cafe".
+// aazhi counts outings to the kinds of place accepted below, and no others. The
+// model names the kind of place from a list rather than answering yes or no,
+// so a juice bar or a food truck has a box of its own and isn't stretched
+// into one that is accepted.
 const PLACE_KINDS = [
   "restaurant",
   "cafe",
   "bar",
-  "drinks_shop",
-  "bakery_or_dessert_shop",
+  "boba_or_tea_shop",
+  "bakery",
+  "juice_or_smoothie_shop",
+  "dessert_shop",
   "food_truck",
   "grocery_or_market",
   "convenience_store",
@@ -41,7 +44,7 @@ const PLACE_KINDS = [
   "other_store",
   "other",
 ] as const;
-const ACCEPTED_PLACE_KINDS: readonly string[] = ["restaurant", "cafe"];
+const ACCEPTED_PLACE_KINDS: readonly string[] = ["restaurant", "cafe", "bar", "boba_or_tea_shop", "bakery"];
 
 export const EXTRACT_TOOL = {
   name: EXTRACT_TOOL_NAME,
@@ -55,7 +58,7 @@ export const EXTRACT_TOOL = {
         type: "string",
         enum: PLACE_KINDS,
         description:
-          "The kind of place that issued the receipt. restaurant: a place that serves meals, including fast food and sit-down chains. cafe: a coffee shop or cafe. drinks_shop: a boba, tea, juice or smoothie shop. other_store: any other shop, such as a big-box, department or hardware store.",
+          "The kind of place that issued the receipt. restaurant: a place that serves meals, including fast food and sit-down chains. cafe: a coffee shop or cafe. dessert_shop: ice cream, frozen yogurt or other desserts. other_store: any other shop, such as a big-box, department or hardware store.",
       },
       place: { type: ["string", "null"], description: "Restaurant name, or null." },
       bill_date: { type: ["string", "null"], description: "Date on the receipt as YYYY-MM-DD, or null." },
@@ -133,7 +136,7 @@ export const EXTRACT_PROMPT = [
 export type ParsedToolInput =
   | { kind: "extraction"; extraction: Extraction; modifiersIncluded?: Extraction }
   | { kind: "not-a-receipt" }
-  | { kind: "not-a-restaurant" }
+  | { kind: "wrong-place" }
   | { kind: "unreadable" }
   | { kind: "invalid" };
 
@@ -230,7 +233,7 @@ export function parseToolInput(input: unknown): ParsedToolInput {
   if (!input.is_receipt) return { kind: "not-a-receipt" };
   // Before readable, so a blurry pharmacy receipt is told the real reason.
   if (typeof input.place_kind !== "string" || !(PLACE_KINDS as readonly string[]).includes(input.place_kind)) return { kind: "invalid" };
-  if (!ACCEPTED_PLACE_KINDS.includes(input.place_kind)) return { kind: "not-a-restaurant" };
+  if (!ACCEPTED_PLACE_KINDS.includes(input.place_kind)) return { kind: "wrong-place" };
   if (!input.readable) return { kind: "unreadable" };
 
   const place = parseNullableString(input.place);
